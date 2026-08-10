@@ -1,0 +1,76 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Companion documents
+
+Read these before non-trivial work — they carry most of the context that isn't in the code:
+
+- **`codelead-product-spec.md`** / **`codelead-architecture-spec.md`** — the MVP target state (product behavior and data model/abstractions respectively). **These specs are the source of truth for what to build**, not the current code.
+
+## Documentation
+
+Detailed docs live in `docs/` — start at `docs/INDEX.md`, which maps every
+file (architecture overview, task workflow, agent adapters/communication) so you only load what you need.
+**Keep the docs current:**
+when a session changes architecture, workflow rules, or adapter behavior,
+update the affected doc and `docs/INDEX.md` in the same session.
+
+- **`/docs/INDEX.md`** - This is a index file of the documentation of the repo
+- **`/docs/adr/*`** - ADRs of the project - read only. Never update existing ADRs
+
+## Project state
+
+This is a **greenfield Phoenix scaffold with no commits yet** — `lib/` contains only generated boilerplate (endpoint, router, core components, `Repo`, `Mailer`). Essentially all of the domain described in the specs is unimplemented, and there are no Ecto schemas or migrations yet. When implementing, derive the delta from the specs rather than assuming existing structures.
+
+The app has never been deployed. It runs locally only, so prefer dropping and recreating the database (`mix ecto.reset`) over writing data migrations when the schema changes.
+
+## Commands
+
+```bash
+mix setup                     # deps + ecto.create/migrate/seed + assets setup & build
+docker compose up -d          # Postgres 16 on :5432 (postgres/postgres)
+mix phx.server                # dev server on localhost:4000
+iex -S mix phx.server         # same, with a shell
+
+mix test                      # auto-creates & migrates the test DB first (alias)
+mix test test/path/file_test.exs        # single file
+mix test test/path/file_test.exs:42     # single test by line
+
+mix precommit                 # compile --warnings-as-errors + deps.unlock --unused + format + test
+mix credo                     # not part of precommit — run separately
+mix ecto.reset                # drop + create + migrate + seed
+```
+
+`mix precommit` runs in `MIX_ENV=test` (set via `preferred_envs`). Run it when you're done with a change and fix anything it reports.
+
+Note that `docker-compose.yml` only declares `code_lead_dev`; the test database (`code_lead_test`) is created by the `mix test` alias against the same server.
+
+Toolchain is pinned in `.tool-versions` (Erlang 27.3.4.14, Elixir 1.18.4-otp-27). Secrets for local dev live in `.envrc` (gitignored, direnv).
+
+## Architecture to build toward
+
+CodeLead is a self-hosted, human-in-the-loop platform where a product owner directs a team of AI agents. The organizing principle: **humans own every handoff between workflow states.** Automation that bypasses a human decision point is a design failure. The single exception is Running→Review on success, which is a completion signal rather than a decision.
+
+**Workflow.** A Kanban board of four columns — Planning → Running → Review → Done — where `tasks.state` is the column and `tasks.run_state` (`:idle`/`:queued`/`:dispatched`/`:executing`/`:failed`) tracks execution inside Running. Every transition, its trigger, actor, and side effects are tabulated in the architecture spec §4; consult it rather than inferring. The subtlety worth internalizing: *request changes* (Review→Running) preserves the worktree, branch, and ACP session so commits accumulate, while *send back to Planning* discards all three because the spec it was built on is being rewritten.
+
+**Two independent axes** describe a task. `work_type` (`code`/`design`/`content`/`file`) filters which agents are selectable and picks the review renderer; `target` (`:repo`/`:folder`) decides where work lands and what Done does. They are deliberately decoupled — a `content` task can target a repo and go through the branch/PR flow.
+
+**Extension points are behaviours, each with exactly one MVP implementation:**
+
+- `CodeLead.AgentDriver` — `Acp` (drives a coding harness like Claude Code/Codex over the Agent Client Protocol: JSON-RPC 2.0 over stdio, bridged via Erlang Ports) and `LlmApi` (a single completion call, used for reviews and short content). Later: nothing new; the driver is independent of the executor.
+- `CodeLead.Executor` — `LocalSubprocess` (MVP) and `DockerContainer` (later). Provisions the worktree or task folder, spawns processes, tears down.
+- `CodeLead.Scheduler` — `PassThrough` (MVP: admit unless over budget, dispatch immediately) and `Windowed` (later: hold for subscription token-window resets). Bound to the task's *provider connection*, not global.
+
+Reviewers are deliberately **not** a separate abstraction — they are ordinary `agents` rows with `:review` in `roles`, run through the same `AgentDriver` in a read-only posture, fanned out concurrently on Review entry. Their verdicts are advisory and gate nothing.
+
+**Runtime shape.** One GenServer per active task run supervises the driver/port, normalizes the event stream, updates the task, and broadcasts over Phoenix.PubSub; LiveViews subscribe to board and task topics. `attention` is a field on the task, not per-user notification fan-out. Derive task state from protocol events, never from agent self-report. Prefer existing OTP patterns (GenServer, PubSub, Ports, Oban) over new abstractions.
+
+**Planned dependencies not yet in `mix.exs`:** Oban (background jobs, nightly cost rollups) and Cloak.Ecto (encrypted fields for provider credentials and the project env store, keyed by an instance `ENCRYPTION_KEY`).
+
+`:req` is the HTTP client — do not add HTTPoison, Tesla, or `:httpc`.
+
+## Further instructions
+
+@AGENTS.md
+@CODING_GUIDE.md
