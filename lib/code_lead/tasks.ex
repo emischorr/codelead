@@ -332,6 +332,29 @@ defmodule CodeLead.Tasks do
     |> Repo.update()
   end
 
+  @doc """
+  Persists the ACP session id reported by the driver, for later resume.
+  """
+  @spec put_acp_session(Task.t(), String.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def put_acp_session(%Task{} = task, session_id) do
+    task
+    |> Ecto.Changeset.change(acp_session_id: session_id)
+    |> Repo.update()
+  end
+
+  @doc """
+  Queued tasks across all projects, highest priority first — the
+  scheduler's work list.
+  """
+  @spec queued_tasks() :: [Task.t()]
+  def queued_tasks do
+    Repo.all(
+      from t in Task,
+        where: t.state == :running and t.run_state == :queued and is_nil(t.archived_at),
+        order_by: [desc: t.priority, asc: t.updated_at]
+    )
+  end
+
   ## Attention
 
   @spec set_attention(Task.t(), atom(), String.t() | nil) :: {:ok, Task.t()}

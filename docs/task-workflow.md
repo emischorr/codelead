@@ -38,20 +38,54 @@ Invalid from-states return `{:error, :invalid_state}`.
 - `:cancelled` exists in the state enum (per spec §3) but no MVP
   transition produces it — cancel returns to Planning per spec §4.
 
+## Two layers: Tasks (data) vs Runtime (side effects)
+
+`CodeLead.Tasks` holds the pure state machine. `CodeLead.Runtime` is
+the human-facing run control that adds the runtime side effects —
+dispatching agents through the scheduler, terminating processes,
+kicking the queue — and is what the future LiveView (and the IEx
+console) calls for those actions:
+
+| Action | Call |
+|---|---|
+| start a planned task | `Runtime.start_task(task)` |
+| cancel a run | `Runtime.cancel_task(task)` |
+| retry after failure | `Runtime.retry_task(task)` |
+| approve/deny a permission escalation | `Runtime.answer_permission(task, request_id, true/false)` |
+| re-attempt queued tasks | `Runtime.kick_queue()` |
+
+The scheduler (`CodeLead.Scheduler.PassThrough`) admits unless a
+budget limit is reached (`{:hold, :budget}`, via `Costs.check_budget/1`)
+or `max_concurrent_runs` live runners exist (`{:hold, :capacity}`);
+held tasks stay `run_state: :queued`. The queue is kicked after each
+run completes. Note: the capacity count has a benign single-node race
+under simultaneous dispatch. A crash of the runner process itself (not
+the agent — that is handled) can leave a task in `:executing` until a
+human cancels; runners are deliberately not restarted.
+
+Each active run is a `Runtime.TaskRunner` GenServer (DynamicSupervisor
++ Registry by task id). It provisions the context, starts the driver,
+persists the ACP session id, writes an `llm_api` executor's text
+output to `<context>/output.md` as the artifact, records usage on
+result, and broadcasts over PubSub:
+
+- `"task:<id>"` → `{:task_event, task_id, event}` (run_started,
+  message_chunk, tool_call, question, permission_request,
+  run_completed, run_failed, run_cancelled)
+- `"project:<id>"` → `{:board_changed, project_id, task_id}`
+
 ## Console usage (IEx)
 
 ```elixir
-alias CodeLead.{Tasks, Agents, Projects}
+alias CodeLead.{Tasks, Runtime, Planning}
 
 {:ok, task} = Tasks.create_task(project_id, %{title: "Add pricing page", work_type: :code})
 {:ok, task} = Tasks.set_executor(task, agent_id)
 :ok         = Tasks.set_reviewers(task, [reviewer_id])
-{:ok, task} = Tasks.move_to_running(task)   # queued; scheduler takes over (Step 10)
 
-# system side (simulated until the runtime exists):
-{:ok, task} = Tasks.begin_dispatch(task)
-{:ok, task} = Tasks.mark_executing(task, "sess-1")
-{:ok, task} = Tasks.complete_run(task)      # → review
+Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+{:ok, task} = Runtime.start_task(task)      # queued → dispatched → executing
+flush()                                      # watch the live event stream
 
 {:ok, task} = Tasks.request_changes(task, "please add tests")
 {:ok, task} = Tasks.approve(task)           # → done
