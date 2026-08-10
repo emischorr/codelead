@@ -10,10 +10,10 @@ defmodule CodeLead.Application do
     children = [
       CodeLeadWeb.Telemetry,
       CodeLead.Repo,
+      CodeLead.Vault,
+      {Oban, Application.fetch_env!(:code_lead, Oban)},
       {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: CodeLead.PubSub},
-      # Start a worker by calling: CodeLead.Worker.start_link(arg)
-      # {CodeLead.Worker, arg},
       # Start to serve requests, typically the last entry
       CodeLeadWeb.Endpoint
     ]

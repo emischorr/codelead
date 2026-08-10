@@ -20,6 +20,9 @@ config :code_lead, CodeLeadWeb.Endpoint,
   secret_key_base: "eoquc+H4NY2XdujxuJlxKvG7pb9jQqQygNV+PLvDt9pEiPm3Fw6SKEZ0DjeK44TF",
   server: false
 
+# Run Oban inline-on-demand only; no queues or plugins in test
+config :code_lead, Oban, testing: :manual
+
 # In test we don't send emails
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Test
 

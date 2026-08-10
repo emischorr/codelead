@@ -22,6 +22,13 @@ config :code_lead, CodeLeadWeb.Endpoint,
   pubsub_server: CodeLead.PubSub,
   live_view: [signing_salt: "7RIZkNdC"]
 
+# Background jobs. The cron plugin gains entries as workers are added
+# (nightly cost rollups live in the :rollups queue).
+config :code_lead, Oban,
+  engine: Oban.Engines.Basic,
+  repo: CodeLead.Repo,
+  queues: [rollups: 1]
+
 # Configure the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

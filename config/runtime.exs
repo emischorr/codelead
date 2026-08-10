@@ -23,6 +23,47 @@ end
 config :code_lead, CodeLeadWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Encryption key for Cloak (provider credentials, project env store).
+# Base64-encoded 32 bytes; generate with:
+#
+#     iex> 32 |> :crypto.strong_rand_bytes() |> Base.encode64()
+#
+# Dev/test fall back to a fixed key so the app boots without setup;
+# prod requires ENCRYPTION_KEY.
+encryption_key =
+  case {System.get_env("ENCRYPTION_KEY"), config_env()} do
+    {nil, :prod} ->
+      raise """
+      environment variable ENCRYPTION_KEY is missing.
+      Generate one with: 32 |> :crypto.strong_rand_bytes() |> Base.encode64()
+      """
+
+    {nil, _dev_or_test} ->
+      "3Jnb0hZiHIzHTOih7t2cTEPEpY98Tu1wvQkPfq/XwqE="
+
+    {key, _env} ->
+      key
+  end
+
+config :code_lead, CodeLead.Vault,
+  ciphers: [
+    default:
+      {Cloak.Ciphers.AES.GCM,
+       tag: "AES.GCM.V1", key: Base.decode64!(encryption_key), iv_length: 12}
+  ]
+
+# Root directory for CodeLead-managed working state: base clones,
+# per-task git worktrees, and task folders.
+default_workspace =
+  case config_env() do
+    :test -> Path.expand("tmp/test_workspace")
+    _dev_or_prod -> Path.expand("workspace")
+  end
+
+config :code_lead,
+  workspace_root: System.get_env("WORKSPACE_ROOT", default_workspace),
+  max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "2"))
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
