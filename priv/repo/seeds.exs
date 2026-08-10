@@ -1,11 +1,26 @@
-# Script for populating the database. You can run it as:
+# Seeds the organization singleton and an admin user. Idempotent —
+# safe to run repeatedly (mix ecto.setup / ecto.reset run it).
 #
 #     mix run priv/repo/seeds.exs
-#
-# Inside the script, you can read and write to any of your
-# repositories directly:
-#
-#     CodeLead.Repo.insert!(%CodeLead.SomeSchema{})
-#
-# We recommend using the bang functions (`insert!`, `update!`
-# and so on) as they will fail if something goes wrong.
+
+alias CodeLead.Accounts
+
+{:ok, organization} =
+  Accounts.ensure_organization(%{
+    name: "CodeLead",
+    settings: %{"setup_done" => true}
+  })
+
+admin =
+  case Accounts.get_user_by_email("admin@example.com") do
+    nil ->
+      {:ok, user} = Accounts.create_user(%{email: "admin@example.com", role: :admin})
+      user
+
+    user ->
+      user
+  end
+
+IO.puts(
+  "Seeded organization ##{organization.id} (#{organization.name}), admin ##{admin.id} (#{admin.email})"
+)
