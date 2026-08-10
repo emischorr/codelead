@@ -11,6 +11,7 @@ defmodule CodeLead.Application do
       CodeLeadWeb.Telemetry,
       CodeLead.Repo,
       CodeLead.Vault,
+      {Task.Supervisor, name: CodeLead.TaskSupervisor},
       {Oban, Application.fetch_env!(:code_lead, Oban)},
       {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: CodeLead.PubSub},

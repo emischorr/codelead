@@ -23,6 +23,9 @@ config :code_lead, CodeLeadWeb.Endpoint,
 # Run Oban inline-on-demand only; no queues or plugins in test
 config :code_lead, Oban, testing: :manual
 
+# LLM calls hit a Req.Test stub instead of the network
+config :code_lead, :llm_api_req_options, plug: {Req.Test, CodeLead.LlmApiStub}
+
 # In test we don't send emails
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Test
 

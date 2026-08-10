@@ -27,7 +27,18 @@ config :code_lead, CodeLeadWeb.Endpoint,
 config :code_lead, Oban,
   engine: Oban.Engines.Basic,
   repo: CodeLead.Repo,
-  queues: [rollups: 1]
+  queues: [rollups: 1],
+  plugins: [
+    {Oban.Plugins.Cron, crontab: [{"0 2 * * *", CodeLead.Costs.RollupWorker}]}
+  ]
+
+# Best-effort pricing (cents per million tokens) for cost_cents on
+# agent_runs. Token counts stay exact; unknown models cost 0.
+config :code_lead, :model_prices, %{
+  "claude-sonnet-5" => %{input_cents_per_mtok: 300, output_cents_per_mtok: 1500},
+  "claude-opus-5" => %{input_cents_per_mtok: 1500, output_cents_per_mtok: 7500},
+  "claude-haiku-4-5-20251001" => %{input_cents_per_mtok: 100, output_cents_per_mtok: 500}
+}
 
 # Configure the mailer
 #
