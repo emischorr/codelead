@@ -54,6 +54,7 @@ console) calls for those actions:
 | approve/deny a permission escalation | `Runtime.answer_permission(task, request_id, true/false)` |
 | request changes from Review | `Runtime.request_changes(task, feedback)` |
 | send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
+| approve → Done (finalize: commit/push/PR or artifact) | `Runtime.approve(task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
 
 The scheduler (`CodeLead.Scheduler.PassThrough`) admits unless a
@@ -89,8 +90,10 @@ Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
 {:ok, task} = Runtime.start_task(task)      # queued → dispatched → executing
 flush()                                      # watch the live event stream
 
-{:ok, task} = Tasks.request_changes(task, "please add tests")
-{:ok, task} = Tasks.approve(task)           # → done
+{:ok, task} = Runtime.request_changes(task, "please add tests")
+{:ok, task, outcome} = Runtime.approve(task)  # finalize → done
 Tasks.board(project_id)
 Tasks.steps(task.id)
 ```
+
+See [`console-api.md`](console-api.md) for the full walkthrough.

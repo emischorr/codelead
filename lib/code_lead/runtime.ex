@@ -79,6 +79,26 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
+  Review → Done: runs the system finalizer (commit remainder, push the
+  feature branch, PR/compare link — or mark the folder artifact
+  complete), then transitions. A finalizer failure keeps the task in
+  Review. Returns the outcome map alongside the task.
+  """
+  @spec approve(Task.t()) ::
+          {:ok, Task.t(), CodeLead.Finalizer.outcome()}
+          | {:error, term()}
+          | Tasks.transition_error()
+  def approve(%Task{state: :review} = task) do
+    with {:ok, outcome} <- CodeLead.Finalizer.finalize(task),
+         {:ok, task} <- Tasks.approve(task) do
+      Tasks.record_step(task.id, :commit, :system, "finalizer", outcome.note)
+      {:ok, task, outcome}
+    end
+  end
+
+  def approve(%Task{}), do: {:error, :invalid_state}
+
+  @doc """
   Attempts to dispatch every queued task (in priority order) that the
   scheduler admits. Called after each run completes and after
   human requeue actions.

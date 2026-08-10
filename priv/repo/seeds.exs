@@ -112,6 +112,32 @@ alias CodeLead.Tasks
 unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   {:ok, project} = Projects.create_project(%{name: "Demo Product"})
 
+  # A local git origin so the whole repo flow (worktree → commit →
+  # push → compare) works offline. Lives under the workspace root.
+  workspace = Application.fetch_env!(:code_lead, :workspace_root)
+  origin_path = Path.join([workspace, "demo", "demo-site.git"])
+
+  unless File.dir?(origin_path) do
+    seed_path = Path.join([workspace, "demo", "demo-site-seed"])
+    File.mkdir_p!(origin_path)
+    identity = ["-c", "user.name=CodeLead", "-c", "user.email=codelead@localhost"]
+    {_, 0} = System.cmd("git", ["init", "--bare", "--initial-branch=main", origin_path])
+    {_, 0} = System.cmd("git", ["init", "--initial-branch=main", seed_path])
+    File.write!(Path.join(seed_path, "README.md"), "# Demo Site\n\nSeeded by CodeLead.\n")
+    File.write!(Path.join(seed_path, "index.html"), "<html><body><h1>Demo</h1></body></html>\n")
+    {_, 0} = System.cmd("git", ["-C", seed_path, "add", "-A"])
+    {_, 0} = System.cmd("git", ["-C", seed_path] ++ identity ++ ["commit", "-m", "initial"])
+    {_, 0} = System.cmd("git", ["-C", seed_path, "push", "file://#{origin_path}", "main:main"])
+    File.rm_rf!(seed_path)
+  end
+
+  {:ok, _repository} =
+    Projects.link_repository(project.id, %{
+      name: "demo-site",
+      git_url: "file://#{origin_path}",
+      default_branch: "main"
+    })
+
   judy = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Judy (Frontend Coder)")
   auditor = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Security Auditor")
   copywriter = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
