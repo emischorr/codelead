@@ -320,6 +320,18 @@ defmodule CodeLead.Tasks do
 
   def fail_run(%Task{}, _detail), do: {:error, :invalid_state}
 
+  @doc """
+  Persists the provisioned execution context (worktree + branch) on the
+  task. Called by the executor during dispatch.
+  """
+  @spec set_execution_context(Task.t(), String.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def set_execution_context(%Task{} = task, worktree_path, branch_name) do
+    task
+    |> Ecto.Changeset.change(worktree_path: worktree_path, branch_name: branch_name)
+    |> Repo.update()
+  end
+
   ## Attention
 
   @spec set_attention(Task.t(), atom(), String.t() | nil) :: {:ok, Task.t()}

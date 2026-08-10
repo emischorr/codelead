@@ -1,0 +1,178 @@
+defmodule CodeLead.Executor.LocalSubprocessTest do
+  use CodeLead.DataCase, async: true
+
+  import CodeLead.AgentsFixtures
+  import CodeLead.GitHelpers
+  import CodeLead.ProjectsFixtures
+  import CodeLead.TasksFixtures
+
+  alias CodeLead.Executor.Context
+  alias CodeLead.Executor.LocalSubprocess
+  alias CodeLead.Git
+  alias CodeLead.Projects
+  alias CodeLead.Tasks
+
+  defp repo_task_setup do
+    project = project_fixture()
+    git_url = create_origin!()
+    repository = repository_fixture(project.id, %{git_url: git_url, default_branch: "main"})
+    executor = agent_fixture(%{roles: [:execute], work_type: :code})
+
+    task =
+      task_fixture(project.id, %{
+        title: "Add pricing page",
+        work_type: :code,
+        target: :repo,
+        repository_id: repository.id,
+        agent_id: executor.id
+      })
+
+    %{project: project, repository: repository, task: task, git_url: git_url}
+  end
+
+  describe "provision/1 for :repo targets" do
+    test "creates base clone, worktree, and feature branch; persists paths" do
+      %{task: task, repository: repository} = repo_task_setup()
+
+      assert {:ok, %Context{type: :worktree} = context} = LocalSubprocess.provision(task)
+
+      assert File.dir?(context.path)
+      assert File.exists?(Path.join(context.path, "README.md"))
+      assert context.branch_name == "codelead/task-#{task.id}-add-pricing-page"
+      assert context.base_branch == "main"
+
+      task = Tasks.get_task!(task.id)
+      assert task.worktree_path == context.path
+      assert task.branch_name == context.branch_name
+
+      repository = Projects.get_repository!(repository.id)
+      assert repository.base_clone_path == context.base_clone_path
+
+      {:ok, branch_output} = Git.git(context.path, ["branch", "--show-current"])
+      assert String.trim(branch_output) == context.branch_name
+    end
+
+    test "provisioning twice reuses the same worktree (multi-run)" do
+      %{task: task} = repo_task_setup()
+
+      assert {:ok, context1} = LocalSubprocess.provision(task)
+      File.write!(Path.join(context1.path, "new.txt"), "work in progress")
+
+      task = Tasks.get_task!(task.id)
+      assert {:ok, context2} = LocalSubprocess.provision(task)
+      assert context2.path == context1.path
+      assert File.exists?(Path.join(context2.path, "new.txt"))
+    end
+
+    test "project env is injected into the context" do
+      %{task: task, project: project} = repo_task_setup()
+      {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
+
+      assert {:ok, context} = LocalSubprocess.provision(task)
+      assert {"API_KEY", "s3cret"} in context.env
+    end
+  end
+
+  describe "provision/1 for :folder targets" do
+    test "creates the task folder" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+
+      assert {:ok, %Context{type: :folder} = context} = LocalSubprocess.provision(task)
+      assert File.dir?(context.path)
+      assert context.base_clone_path == nil
+    end
+  end
+
+  describe "spawn/3" do
+    test "runs a command inside the context with env injected" do
+      project = project_fixture()
+      {:ok, _} = Projects.put_env(project.id, "GREETING", "hello-from-env")
+      task = task_fixture(project.id, %{work_type: :file})
+
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      assert {:ok, port} =
+               LocalSubprocess.spawn(context, ["sh", "-c", "pwd; printf %s $GREETING"])
+
+      output = collect_port_output(port)
+      assert output =~ Path.basename(context.path)
+      assert output =~ "hello-from-env"
+    end
+
+    test "unknown executable returns an error" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :file})
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      assert {:error, {:executable_not_found, _}} =
+               LocalSubprocess.spawn(context, ["definitely-not-a-real-binary-xyz"])
+    end
+  end
+
+  describe "diff / commit / push round trip" do
+    test "worktree changes diff against the branch base and push to origin" do
+      %{task: task} = repo_task_setup()
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      # Fresh worktree: empty diff.
+      assert {:ok, ""} = Git.diff(context.path, context.base_branch)
+
+      File.write!(Path.join(context.path, "pricing.html"), "<h1>Pricing</h1>\n")
+      {:ok, diff} = Git.diff(context.path, context.base_branch)
+      assert diff =~ "pricing.html"
+      assert diff =~ "<h1>Pricing</h1>"
+
+      assert {:ok, _} = Git.commit_all(context.path, "Add pricing page")
+      assert :noop = Git.commit_all(context.path, "nothing to do")
+
+      # Committed work still diffs against the branch base.
+      {:ok, diff_after_commit} = Git.diff(context.path, context.base_branch)
+      assert diff_after_commit =~ "pricing.html"
+
+      assert {:ok, _} = Git.push(context.path, context.branch_name)
+      {:ok, branches} = Git.remote_branches(context.base_clone_path)
+      assert context.branch_name in branches
+    end
+  end
+
+  describe "teardown/2" do
+    test "keep: true leaves everything in place" do
+      %{task: task} = repo_task_setup()
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      assert :ok = LocalSubprocess.teardown(context, keep: true)
+      assert File.dir?(context.path)
+    end
+
+    test "keep: false removes worktree and deletes the branch" do
+      %{task: task} = repo_task_setup()
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      assert :ok = LocalSubprocess.teardown(context, keep: false)
+      refute File.dir?(context.path)
+
+      {:ok, branches} = Git.git(context.base_clone_path, ["branch", "--list"])
+      refute branches =~ context.branch_name
+    end
+
+    test "keep: false removes a task folder" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+      {:ok, context} = LocalSubprocess.provision(task)
+      File.write!(Path.join(context.path, "draft.md"), "# Draft")
+
+      assert :ok = LocalSubprocess.teardown(context, keep: false)
+      refute File.dir?(context.path)
+    end
+  end
+
+  defp collect_port_output(port, acc \\ "") do
+    receive do
+      {^port, {:data, data}} -> collect_port_output(port, acc <> data)
+      {^port, {:exit_status, _}} -> acc
+    after
+      5_000 -> flunk("port produced no output; got so far: #{inspect(acc)}")
+    end
+  end
+end
