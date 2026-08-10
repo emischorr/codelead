@@ -57,6 +57,9 @@ defmodule CodeLead.Executor.LocalSubprocess do
         {:error, {:executable_not_found, executable}}
 
       resolved ->
+        # stderr stays on the BEAM's stderr: for protocol traffic
+        # (JSON-RPC over stdout) merged stderr would corrupt frames.
+        # Pass :stderr_to_stdout via port_opts when merging is wanted.
         port =
           Port.open(
             {:spawn_executable, resolved},
@@ -64,7 +67,6 @@ defmodule CodeLead.Executor.LocalSubprocess do
               :binary,
               :exit_status,
               :hide,
-              :stderr_to_stdout,
               args: args,
               cd: path,
               env: charlist_env(env)

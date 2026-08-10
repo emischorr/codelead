@@ -18,4 +18,5 @@ Map of the repo's documentation. Design notes describe how things work
 
 ## ADRs
 
-- [`adr/README.md`](adr/README.md) — ADR conventions. No ADRs recorded yet.
+- [`adr/README.md`](adr/README.md) — ADR conventions.
+- [`adr/0001-acp-transport.md`](adr/0001-acp-transport.md) — hand-rolled JSON-RPC subset over Erlang Ports instead of ACPex 0.1.x.

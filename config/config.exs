@@ -32,6 +32,13 @@ config :code_lead, Oban,
     {Oban.Plugins.Cron, crontab: [{"0 2 * * *", CodeLead.Costs.RollupWorker}]}
   ]
 
+# Launch commands for ACP harnesses (resolved via PATH inside the
+# execution context). Overridable per environment.
+config :code_lead, :harnesses, %{
+  claude_code: ["claude-code-acp"],
+  codex: ["codex", "acp"]
+}
+
 # Best-effort pricing (cents per million tokens) for cost_cents on
 # agent_runs. Token counts stay exact; unknown models cost 0.
 config :code_lead, :model_prices, %{

@@ -44,6 +44,25 @@ defmodule CodeLead.Agents do
   @spec get_provider_by_name(String.t()) :: Provider.t() | nil
   def get_provider_by_name(name), do: Repo.get_by(Provider, name: name)
 
+  @doc """
+  Environment variables an ACP harness subprocess needs to authenticate
+  against the provider. Never log the result.
+  """
+  @spec provider_env(Provider.t()) :: [{String.t(), String.t()}]
+  def provider_env(%Provider{kind: :anthropic_api, config: config}) do
+    reject_missing([{"ANTHROPIC_API_KEY", config["api_key"]}])
+  end
+
+  def provider_env(%Provider{kind: :anthropic_subscription, config: config}) do
+    reject_missing([{"CLAUDE_CODE_OAUTH_TOKEN", config["oauth_token"]}])
+  end
+
+  def provider_env(%Provider{}), do: []
+
+  defp reject_missing(pairs) do
+    Enum.reject(pairs, fn {_key, value} -> value in [nil, ""] end)
+  end
+
   ## Agents
 
   @doc """

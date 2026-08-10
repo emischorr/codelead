@@ -18,6 +18,8 @@ defmodule CodeLead.AgentDriver do
       that needs a human decision (in-sandbox requests are auto-granted
       by the driver and never surface here)
     * `{:question, text}` — the agent asks the human something
+    * `{:session_started, session_id}` — an ACP session exists; the
+      runner persists it for later resume
     * `{:result, result}` — terminal event, exactly one per run
 
   and `result` is
@@ -62,6 +64,7 @@ defmodule CodeLead.AgentDriver do
           | {:tool_call, map()}
           | {:permission_request, map()}
           | {:question, String.t()}
+          | {:session_started, String.t()}
           | {:result, result()}
 
   @doc """
