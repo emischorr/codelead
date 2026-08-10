@@ -40,6 +40,32 @@ defmodule CodeLead.Tasks do
           | {:error, :executor_ineligible}
           | {:error, :missing_repository}
 
+  ## PubSub
+
+  @doc """
+  Subscribes to a project's board topic. Any task change in the project
+  arrives as `{:board_changed, project_id, task_id}`.
+  """
+  @spec subscribe_board(pos_integer()) :: :ok | {:error, term()}
+  def subscribe_board(project_id) do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, board_topic(project_id))
+  end
+
+  @doc """
+  Subscribes to a task's event topic. Runtime and review events arrive
+  as `{:task_event, task_id, event}`.
+  """
+  @spec subscribe_task(pos_integer()) :: :ok | {:error, term()}
+  def subscribe_task(task_id) do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, task_topic(task_id))
+  end
+
+  @spec board_topic(pos_integer()) :: String.t()
+  def board_topic(project_id), do: "project:#{project_id}"
+
+  @spec task_topic(pos_integer()) :: String.t()
+  def task_topic(task_id), do: "task:#{task_id}"
+
   ## Creation & editing
 
   @doc """
@@ -67,11 +93,11 @@ defmodule CodeLead.Tasks do
   """
   @spec update_task(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update_task(%Task{state: :planning} = task, attrs) do
-    task |> Task.planning_changeset(attrs) |> Repo.update()
+    task |> Task.planning_changeset(attrs) |> Repo.update() |> broadcast_board_change()
   end
 
   def update_task(%Task{} = task, attrs) do
-    task |> Task.details_changeset(attrs) |> Repo.update()
+    task |> Task.details_changeset(attrs) |> Repo.update() |> broadcast_board_change()
   end
 
   @doc """
@@ -236,13 +262,14 @@ defmodule CodeLead.Tasks do
     task
     |> Ecto.Changeset.change(archived_at: DateTime.utc_now(:second))
     |> Repo.update()
+    |> broadcast_board_change()
   end
 
   def archive(%Task{}), do: {:error, :invalid_state}
 
   @spec unarchive(Task.t()) :: {:ok, Task.t()}
   def unarchive(%Task{} = task) do
-    task |> Ecto.Changeset.change(archived_at: nil) |> Repo.update()
+    task |> Ecto.Changeset.change(archived_at: nil) |> Repo.update() |> broadcast_board_change()
   end
 
   @doc """
@@ -357,12 +384,13 @@ defmodule CodeLead.Tasks do
 
   ## Attention
 
-  @spec set_attention(Task.t(), atom(), String.t() | nil) :: {:ok, Task.t()}
-  def set_attention(%Task{} = task, type, detail) do
+  @spec set_attention(Task.t(), atom(), String.t() | nil, keyword()) :: {:ok, Task.t()}
+  def set_attention(%Task{} = task, type, detail, opts \\ []) do
     task
     |> Ecto.Changeset.change()
-    |> put_attention(%{type: type, detail: detail})
+    |> put_attention(%{type: type, detail: detail, ref: opts[:ref]})
     |> Repo.update()
+    |> broadcast_board_change()
   end
 
   @spec clear_attention(Task.t()) :: {:ok, Task.t()}
@@ -371,6 +399,7 @@ defmodule CodeLead.Tasks do
     |> Ecto.Changeset.change()
     |> put_attention(nil)
     |> Repo.update()
+    |> broadcast_board_change()
   end
 
   ## Audit trail
@@ -395,6 +424,23 @@ defmodule CodeLead.Tasks do
   @spec steps(pos_integer()) :: [TaskStep.t()]
   def steps(task_id) do
     Repo.all(from s in TaskStep, where: s.task_id == ^task_id, order_by: [asc: s.id])
+  end
+
+  @doc """
+  The latest finalizer commit note per task (e.g. the pushed-branch or
+  artifact summary shown on Done cards).
+  """
+  @spec commit_notes([pos_integer()]) :: %{pos_integer() => String.t()}
+  def commit_notes([]), do: %{}
+
+  def commit_notes(task_ids) do
+    Repo.all(
+      from s in TaskStep,
+        where: s.task_id in ^task_ids and s.kind == :commit,
+        order_by: [asc: s.id],
+        select: {s.task_id, s.summary}
+    )
+    |> Map.new()
   end
 
   ## Queries
@@ -450,9 +496,23 @@ defmodule CodeLead.Tasks do
 
     with {:ok, updated} <- Repo.update(changeset) do
       record_step(updated.id, :transition, actor, Atom.to_string(actor), summary)
-      {:ok, updated}
+      broadcast_board_change({:ok, updated})
     end
   end
+
+  # Notifies board and task subscribers after a successful write; passes
+  # errors through untouched so it can sit at the end of a pipeline.
+  defp broadcast_board_change({:ok, %Task{} = task} = result) do
+    Phoenix.PubSub.broadcast(
+      CodeLead.PubSub,
+      board_topic(task.project_id),
+      {:board_changed, task.project_id, task.id}
+    )
+
+    result
+  end
+
+  defp broadcast_board_change(other), do: other
 
   defp put_transition_attention(changeset, :unchanged), do: changeset
   defp put_transition_attention(changeset, attention), do: put_attention(changeset, attention)
@@ -461,11 +521,12 @@ defmodule CodeLead.Tasks do
     Ecto.Changeset.put_embed(changeset, :attention, nil)
   end
 
-  defp put_attention(changeset, %{type: type, detail: detail}) do
+  defp put_attention(changeset, %{type: type, detail: detail} = attrs) do
     attention =
       Attention.changeset(%Attention{}, %{
         type: type,
         detail: detail,
+        ref: Map.get(attrs, :ref),
         at: DateTime.utc_now(:second)
       })
 

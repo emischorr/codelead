@@ -28,10 +28,12 @@ note is the "how it works today" map.
 
 - `CodeLead.Runtime` — human-facing run control (start/cancel/retry,
   request_changes, send_back_to_planning, approve, permissions, queue
-  kick). The LiveView will call these.
+  kick). The LiveViews call these.
 - `CodeLead.Runtime.TaskRunner` — one GenServer per active run
   (DynamicSupervisor + Registry), consumes driver events, broadcasts
-  PubSub (`task:<id>`, `project:<id>`), records usage/audit.
+  task events on `task:<id>`, records usage/audit. Board
+  notifications (`project:<id>` → `:board_changed`) come from
+  `CodeLead.Tasks` on every task write.
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.

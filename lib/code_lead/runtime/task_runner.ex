@@ -6,9 +6,10 @@ defmodule CodeLead.Runtime.TaskRunner do
   trail), records usage, and drives the task's run-state transitions.
   Task state is derived from protocol events, never agent self-report.
 
-  PubSub: events go to `"task:<id>"` as `{:task_event, task_id, event}`;
-  board-affecting changes additionally go to `"project:<id>"` as
-  `{:board_changed, project_id, task_id}`.
+  PubSub: events go to `"task:<id>"` as `{:task_event, task_id, event}`.
+  Board notifications (`{:board_changed, project_id, task_id}` on
+  `"project:<id>"`) are broadcast by `CodeLead.Tasks` on every task
+  write, so this runner never broadcasts them itself.
   """
 
   use GenServer, restart: :temporary
@@ -78,7 +79,6 @@ defmodule CodeLead.Runtime.TaskRunner do
           Integer.to_string(agent.id)
         )
 
-      broadcast_board(task)
       broadcast_event(task, {:run_started, agent.name})
 
       {:noreply,
@@ -110,8 +110,7 @@ defmodule CodeLead.Runtime.TaskRunner do
       reply = state.driver.answer_permission(state.handle, request_id, granted?)
 
       if reply == :ok do
-        {:ok, task} = Tasks.clear_attention(Tasks.get_task!(state.task.id))
-        broadcast_board(task)
+        {:ok, _task} = Tasks.clear_attention(Tasks.get_task!(state.task.id))
       end
 
       {:reply, reply, state}
@@ -156,16 +155,16 @@ defmodule CodeLead.Runtime.TaskRunner do
   defp handle_agent_event({:question, text} = event, state) do
     {:ok, task} = Tasks.set_attention(Tasks.get_task!(state.task.id), :agent_question, text)
     broadcast_event(task, event)
-    broadcast_board(task)
     {:noreply, state}
   end
 
-  defp handle_agent_event({:permission_request, %{detail: detail}} = event, state) do
+  defp handle_agent_event({:permission_request, %{id: id, detail: detail}} = event, state) do
     {:ok, task} =
-      Tasks.set_attention(Tasks.get_task!(state.task.id), :permission_request, detail)
+      Tasks.set_attention(Tasks.get_task!(state.task.id), :permission_request, detail,
+        ref: to_string(id)
+      )
 
     broadcast_event(task, event)
-    broadcast_board(task)
     {:noreply, state}
   end
 
@@ -179,7 +178,6 @@ defmodule CodeLead.Runtime.TaskRunner do
         {:ok, task} = Tasks.complete_run(task)
         {:ok, task} = on_review_entry(task)
         broadcast_event(task, {:run_completed, result})
-        broadcast_board(task)
         kick_queue_async()
 
       :error ->
@@ -244,7 +242,6 @@ defmodule CodeLead.Runtime.TaskRunner do
         end
 
         broadcast_event(task, {:run_failed, detail})
-        broadcast_board(task)
 
       {:error, :invalid_state} ->
         :ok
@@ -258,16 +255,8 @@ defmodule CodeLead.Runtime.TaskRunner do
   defp broadcast_event(task, event) do
     Phoenix.PubSub.broadcast(
       CodeLead.PubSub,
-      "task:#{task.id}",
+      Tasks.task_topic(task.id),
       {:task_event, task.id, event}
-    )
-  end
-
-  defp broadcast_board(task) do
-    Phoenix.PubSub.broadcast(
-      CodeLead.PubSub,
-      "project:#{task.project_id}",
-      {:board_changed, task.project_id, task.id}
     )
   end
 end

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="CodeLead" suffix=" · Phoenix Framework">
+    <.live_title default="CodeLead" suffix=" · CodeLead">
       {assigns[:page_title]}
     </.live_title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
@@ -12,20 +12,25 @@
     </script>
     <script>
       (() => {
-        const setTheme = (theme) => {
-          if (theme === "system") {
-            localStorage.removeItem("phx:theme");
-            document.documentElement.removeAttribute("data-theme");
-          } else {
-            localStorage.setItem("phx:theme", theme);
-            document.documentElement.setAttribute("data-theme", theme);
-          }
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const applyTheme = (mode) => {
+          const resolved = mode === "system" ? (media.matches ? "dark" : "light") : mode;
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.setAttribute("data-theme-mode", mode);
         };
-        if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
-        }
+        const setTheme = (mode) => {
+          if (mode === "system") {
+            localStorage.removeItem("phx:theme");
+          } else {
+            localStorage.setItem("phx:theme", mode);
+          }
+          applyTheme(mode);
+        };
+        applyTheme(localStorage.getItem("phx:theme") || "system");
+        media.addEventListener("change", () => {
+          if (!localStorage.getItem("phx:theme")) applyTheme("system");
+        });
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
-        
         window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
       })();
     </script>

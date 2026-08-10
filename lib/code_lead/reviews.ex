@@ -46,6 +46,29 @@ defmodule CodeLead.Reviews do
   end
 
   @doc """
+  Latest-cycle verdicts per task in one query, for board-card summaries.
+  Pending reviews carry a nil verdict. Tasks without reviews are absent.
+  """
+  @spec verdicts_by_task([pos_integer()]) :: %{pos_integer() => [atom() | nil]}
+  def verdicts_by_task([]), do: %{}
+
+  def verdicts_by_task(task_ids) do
+    max_cycles =
+      from r in Review,
+        where: r.task_id in ^task_ids,
+        group_by: r.task_id,
+        select: %{task_id: r.task_id, cycle: max(r.cycle)}
+
+    Repo.all(
+      from r in Review,
+        join: m in subquery(max_cycles),
+        on: r.task_id == m.task_id and r.cycle == m.cycle,
+        select: {r.task_id, r.verdict}
+    )
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  @doc """
   Fans out the review cycle for a task entering Review. Runs
   asynchronously; with no reviewers selected, Review is human-only and
   attention is raised immediately. Returns the cycle number (0 when

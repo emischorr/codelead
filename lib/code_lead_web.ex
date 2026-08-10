@@ -86,6 +86,9 @@ defmodule CodeLeadWeb do
       import Phoenix.HTML
       # Core UI components
       import CodeLeadWeb.CoreComponents
+      import CodeLeadWeb.UIComponents
+
+      alias CodeLeadWeb.Format
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

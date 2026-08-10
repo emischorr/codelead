@@ -17,16 +17,18 @@ defmodule CodeLead.Tasks.Attention do
   embedded_schema do
     field :type, Ecto.Enum, values: @types
     field :detail, :string
+    field :ref, :string
     field :at, :utc_datetime
   end
 
   @doc """
-  Changeset for raising attention.
+  Changeset for raising attention. `ref` carries an opaque reference back
+  to the raiser (e.g. the pending permission request id).
   """
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(attention, attrs) do
     attention
-    |> cast(attrs, [:type, :detail, :at])
+    |> cast(attrs, [:type, :detail, :ref, :at])
     |> validate_required([:type, :at])
   end
 end

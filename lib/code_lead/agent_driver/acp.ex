@@ -104,12 +104,12 @@ defmodule CodeLead.AgentDriver.Acp do
   end
 
   def handle_call({:answer_permission, request_id, granted?}, _from, state) do
-    case Map.pop(state.pending_permissions, request_id) do
+    case Map.pop(state.pending_permissions, to_string(request_id)) do
       {nil, _pending} ->
         {:reply, {:error, :unknown_request}, state}
 
-      {options, pending} ->
-        Connection.respond(state.conn, request_id, permission_outcome(options, granted?))
+      {{original_id, options}, pending} ->
+        Connection.respond(state.conn, original_id, permission_outcome(options, granted?))
         {:reply, :ok, %{state | pending_permissions: pending}}
     end
   end
@@ -335,7 +335,10 @@ defmodule CodeLead.AgentDriver.Acp do
       detail = tool_call["title"] || tool_call["kind"] || "permission request"
       emit(state, {:permission_request, %{id: id, detail: detail}})
 
-      {:noreply, %{state | pending_permissions: Map.put(state.pending_permissions, id, options)}}
+      # Keyed by the stringified id so answers surviving a JSON or DB
+      # round-trip (always strings) still match integer JSON-RPC ids.
+      pending = Map.put(state.pending_permissions, to_string(id), {id, options})
+      {:noreply, %{state | pending_permissions: pending}}
     else
       Connection.respond(state.conn, id, permission_outcome(options, true))
       {:noreply, state}

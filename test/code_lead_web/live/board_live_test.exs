@@ -1,0 +1,123 @@
+defmodule CodeLeadWeb.BoardLiveTest do
+  use CodeLeadWeb.ConnCase, async: true
+
+  import Phoenix.LiveViewTest
+  import CodeLead.AgentsFixtures
+  import CodeLead.ProjectsFixtures
+  import CodeLead.TasksFixtures
+
+  alias CodeLead.Tasks
+
+  describe "rendering" do
+    test "shows all four columns with task cards", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "Board render task"})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      for column <- ~w(planning running review done) do
+        assert has_element?(view, "#board-column-#{column}")
+      end
+
+      assert has_element?(view, "#task-card-#{task.id}")
+      assert render(view) =~ "Board render task"
+    end
+
+    test "review and done cards show verdicts and commit notes", %{conn: conn} do
+      project = project_fixture()
+
+      review_task =
+        task_fixture(project.id)
+        |> put_context!(%{state: :review})
+
+      CodeLead.Repo.insert!(%CodeLead.Reviews.Review{
+        task_id: review_task.id,
+        cycle: 1,
+        verdict: :pass
+      })
+
+      done_task = task_fixture(project.id) |> put_context!(%{state: :done})
+      Tasks.record_step(done_task.id, :commit, :system, "finalizer", "pushed task-branch")
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert render(element(view, "#task-card-#{review_task.id}")) =~ "1 pass"
+      assert render(element(view, "#task-card-#{done_task.id}")) =~ "pushed task-branch"
+    end
+  end
+
+  describe "new-task modal" do
+    test "creates a task and returns to the board", %{conn: conn} do
+      project = project_fixture()
+      agent_fixture(%{roles: [:execute], work_type: :code})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board/new")
+
+      assert has_element?(view, "#new-task-form")
+
+      view
+      |> form("#new-task-form", task: %{title: "Created from modal", work_type: "code"})
+      |> render_submit()
+
+      assert_patch(view, ~p"/projects/#{project.id}/board")
+      assert render(view) =~ "Created from modal"
+    end
+
+    test "shows validation errors for a missing title", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board/new")
+
+      html =
+        view
+        |> form("#new-task-form", task: %{title: "", work_type: "code"})
+        |> render_submit()
+
+      assert html =~ "can&#39;t be blank"
+    end
+  end
+
+  describe "actions" do
+    test "start_task on a task without executor flashes an error", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{agent_id: nil})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      view
+      |> element("#task-card-#{task.id} button", "Start")
+      |> render_click()
+
+      assert render(view) =~ "Select an executor agent"
+    end
+
+    test "archive removes a done card from the board", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :done})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+      assert has_element?(view, "#task-card-#{task.id}")
+
+      view
+      |> element("#task-card-#{task.id} button", "Archive")
+      |> render_click()
+
+      refute has_element?(view, "#task-card-#{task.id}")
+    end
+  end
+
+  describe "PubSub" do
+    test "board refreshes when another session changes a task", %{conn: conn} do
+      project = project_fixture()
+      task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      # A change made elsewhere broadcasts; this board picks it up.
+      task = task_fixture(project.id, %{title: "Appeared via PubSub"})
+      send(view.pid, {:board_changed, project.id, task.id})
+
+      assert render(view) =~ "Appeared via PubSub"
+    end
+  end
+end

@@ -10,7 +10,7 @@ Map of the repo's documentation. Design notes describe how things work
 
 ## Getting started
 
-- [`console-api.md`](console-api.md) — the IEx walkthrough of the full workflow (no web UI yet).
+- [`console-api.md`](console-api.md) — the IEx walkthrough of the full workflow.
 
 ## Design notes
 
@@ -21,6 +21,7 @@ Map of the repo's documentation. Design notes describe how things work
 - [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations.
 - [`cost-tracking.md`](cost-tracking.md) — agent_runs, nightly rollups, pricing map, spend queries, budget gate.
 - [`reviews.md`](reviews.md) — reviewer fan-out, advisory verdicts, read-only ACP posture, rework loop.
+- [`web-ui.md`](web-ui.md) — the LiveView layer: board + task page, design tokens, component inventory, PubSub wiring.
 
 ## ADRs
 

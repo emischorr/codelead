@@ -9,6 +9,7 @@ defmodule CodeLead.Costs do
   import Ecto.Query
 
   alias CodeLead.Accounts
+  alias CodeLead.Agents.Agent
   alias CodeLead.Costs.AgentRun
   alias CodeLead.Costs.DailyMetric
   alias CodeLead.Repo
@@ -194,6 +195,68 @@ defmodule CodeLead.Costs do
         select: %{
           tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
           cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+        }
+    )
+  end
+
+  @doc """
+  Per-task cost for many tasks at once (one grouped query, for board
+  cards). Tasks without runs are absent from the result.
+  """
+  @spec spend_by_task([pos_integer()]) :: %{pos_integer() => spend()}
+  def spend_by_task([]), do: %{}
+
+  def spend_by_task(task_ids) do
+    Repo.all(
+      from r in AgentRun,
+        where: r.task_id in ^task_ids,
+        group_by: r.task_id,
+        select:
+          {r.task_id,
+           %{
+             tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+             cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+           }}
+    )
+    |> Map.new()
+  end
+
+  @doc """
+  Today's not-yet-rolled-up spend for a project, for the board header.
+  """
+  @spec project_spend_today(pos_integer()) :: spend()
+  def project_spend_today(project_id) do
+    Repo.one(
+      from r in AgentRun,
+        join: t in Task,
+        on: t.id == r.task_id,
+        where: t.project_id == ^project_id and r.started_at >= ^today_start(),
+        select: %{
+          tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+          cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+        }
+    )
+  end
+
+  @doc """
+  A task's individual runs, newest first, with the agent name joined in —
+  the task page's per-run cost breakdown.
+  """
+  @spec task_runs(pos_integer()) :: [map()]
+  def task_runs(task_id) do
+    Repo.all(
+      from r in AgentRun,
+        left_join: a in Agent,
+        on: a.id == r.agent_id,
+        where: r.task_id == ^task_id,
+        order_by: [desc: r.started_at, desc: r.id],
+        select: %{
+          id: r.id,
+          status: r.status,
+          total_tokens: r.total_tokens,
+          cost_cents: r.cost_cents,
+          started_at: r.started_at,
+          agent_name: a.name
         }
     )
   end

@@ -70,12 +70,23 @@ Each active run is a `Runtime.TaskRunner` GenServer (DynamicSupervisor
 + Registry by task id). It provisions the context, starts the driver,
 persists the ACP session id, writes an `llm_api` executor's text
 output to `<context>/output.md` as the artifact, records usage on
-result, and broadcasts over PubSub:
+result, and broadcasts run events over PubSub:
 
 - `"task:<id>"` → `{:task_event, task_id, event}` (run_started,
   message_chunk, tool_call, question, permission_request,
   run_completed, run_failed, run_cancelled)
-- `"project:<id>"` → `{:board_changed, project_id, task_id}`
+
+Board notifications are owned by `CodeLead.Tasks` itself: every task
+write (transitions, `update_task`, archive/unarchive, attention
+changes) broadcasts `{:board_changed, project_id, task_id}` on
+`"project:<id>"`, so human and system changes alike sync open boards.
+Subscribe with `Tasks.subscribe_board(project_id)` /
+`Tasks.subscribe_task(task_id)` — those helpers own the topic names.
+
+A `permission_request` additionally stores the JSON-RPC request id in
+`task.attention.ref` (stringified; the `Acp` driver keys its pending
+map by string), so the UI can answer via
+`Runtime.answer_permission(task, ref, granted?)` even after a reload.
 
 ## Console usage (IEx)
 

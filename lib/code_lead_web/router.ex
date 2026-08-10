@@ -18,6 +18,10 @@ defmodule CodeLeadWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+
+    live "/projects/:project_id/board", BoardLive, :index
+    live "/projects/:project_id/board/new", BoardLive, :new
+    live "/projects/:project_id/tasks/:id", TaskLive, :show
   end
 
   # Other scopes may use custom stacks.

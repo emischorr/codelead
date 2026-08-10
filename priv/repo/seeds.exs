@@ -163,5 +163,132 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       agent_id: copywriter.id
     })
 
-  IO.puts("Seeded demo project ##{project.id} with 2 planning tasks")
+  # --- Demo-only fabricated tasks below -----------------------------------
+  # These write state directly via Repo so every board column and task
+  # state renders in the UI without running real agents. Real workflows
+  # never mutate tasks this way.
+
+  alias CodeLead.Costs
+  alias CodeLead.Repo
+  alias CodeLead.Reviews.Review
+
+  fabricate = fn attrs, extra ->
+    {:ok, task} = Tasks.create_task(project.id, attrs)
+    task |> Ecto.Changeset.change(extra) |> Repo.update!()
+  end
+
+  fake_run = fn task, agent, tokens, cents, minutes_ago ->
+    started = DateTime.add(DateTime.utc_now(:second), -minutes_ago * 60, :second)
+
+    {:ok, _run} =
+      Costs.record_run(%{
+        task_id: task.id,
+        agent_id: agent.id,
+        provider_id: agent.provider_id,
+        usage: %{total_tokens: tokens, cost_cents: cents},
+        status: :ok,
+        started_at: started,
+        finished_at: DateTime.add(started, 300, :second)
+      })
+  end
+
+  # Running column: one task failed mid-run.
+  failed =
+    fabricate.(
+      %{
+        title: "Nightly worktree GC job",
+        description: "Sweep orphaned worktrees on a nightly cron.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :running,
+      run_state: :failed
+    )
+
+  {:ok, failed} = Tasks.set_attention(failed, :run_failed, "mix test exited with status 1")
+  fake_run.(failed, judy, 122_000, 141, 45)
+  Tasks.record_step(failed.id, :transition, :human, "human", "moved to Running (queued)")
+  Tasks.record_step(failed.id, :run, :agent, judy.name, "run started")
+
+  Tasks.record_step(
+    failed.id,
+    :transition,
+    :system,
+    "system",
+    "run failed: mix test exited with status 1"
+  )
+
+  # Review column: run finished, two reviewer verdicts recorded.
+  review =
+    fabricate.(
+      %{
+        title: "Fix worktree cleanup race",
+        description: "Serialize release/1 against in-flight agent writes.",
+        work_type: :code,
+        priority: :high,
+        agent_id: judy.id
+      },
+      state: :review,
+      run_state: :idle,
+      branch_name: "task/fix-worktree-cleanup-race"
+    )
+
+  :ok = Tasks.set_reviewers(review, [auditor.id, judy.id])
+
+  {:ok, review} =
+    Tasks.set_attention(review, :review_ready, "2 reviewers finished · 1 pass, 1 concerns")
+
+  fake_run.(review, judy, 412_300, 342, 120)
+  fake_run.(review, auditor, 44_200, 46, 60)
+  Tasks.record_step(review.id, :transition, :human, "human", "moved to Running (queued)")
+  Tasks.record_step(review.id, :run, :agent, judy.name, "run completed · 3 files changed")
+  Tasks.record_step(review.id, :transition, :system, "system", "run completed — moved to Review")
+
+  Repo.insert!(%Review{
+    task_id: review.id,
+    cycle: 1,
+    agent_id: auditor.id,
+    verdict: :pass,
+    findings:
+      "No injection risks or secret leakage in the changed files. Lock scoping looks correct."
+  })
+
+  Repo.insert!(%Review{
+    task_id: review.id,
+    cycle: 1,
+    agent_id: judy.id,
+    verdict: :concerns,
+    findings:
+      "1. acquire_lock/2 retries swallow the abort reason — log it.\n2. schedule_retry/1 has no backoff cap; a stuck tree retries forever."
+  })
+
+  # Done column: approved with a finalizer note.
+  done =
+    fabricate.(
+      %{
+        title: "Rate-limit provider calls",
+        description: "Token-bucket per provider with retry budget.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :done,
+      run_state: :idle
+    )
+
+  fake_run.(done, judy, 301_200, 290, 600)
+  Tasks.record_step(done.id, :transition, :human, "human", "moved to Running (queued)")
+  Tasks.record_step(done.id, :run, :agent, judy.name, "run completed · 5 files changed")
+  Tasks.record_step(done.id, :transition, :system, "system", "run completed — moved to Review")
+
+  Tasks.record_step(
+    done.id,
+    :commit,
+    :system,
+    "finalizer",
+    "pushed codelead/rate-limit · compare on origin"
+  )
+
+  Tasks.record_step(done.id, :transition, :human, "human", "approved — Done")
+
+  IO.puts("Seeded demo project ##{project.id}: 2 planning, 1 failed run, 1 review, 1 done")
 end
