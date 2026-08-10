@@ -11,6 +11,7 @@ Map of the repo's documentation. Design notes describe how things work
 ## Design notes
 
 - [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout.
+- [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: transition table, deviations, IEx usage.
 
 ## ADRs
 

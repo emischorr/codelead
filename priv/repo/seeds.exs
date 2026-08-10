@@ -104,3 +104,38 @@ seed_agent.(%{
 })
 
 IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 3 agents")
+
+# Demo project with tasks across the board (skipped if it exists).
+alias CodeLead.Projects
+alias CodeLead.Tasks
+
+unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
+  {:ok, project} = Projects.create_project(%{name: "Demo Product"})
+
+  judy = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Judy (Frontend Coder)")
+  auditor = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Security Auditor")
+  copywriter = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
+
+  :ok = CodeLead.Agents.set_default_reviewers(project.id, :code, [auditor.id])
+
+  {:ok, planning} =
+    Tasks.create_task(project.id, %{
+      title: "Add pricing page",
+      description: "Three tiers, monthly/yearly toggle.",
+      work_type: :code,
+      priority: :high,
+      agent_id: judy.id
+    })
+
+  :ok = Tasks.set_reviewers(planning, [auditor.id])
+
+  {:ok, _content_task} =
+    Tasks.create_task(project.id, %{
+      title: "Landing page hero copy",
+      description: "Punchy headline + subline for the launch.",
+      work_type: :content,
+      agent_id: copywriter.id
+    })
+
+  IO.puts("Seeded demo project ##{project.id} with 2 planning tasks")
+end
