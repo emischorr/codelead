@@ -301,6 +301,17 @@ defmodule CodeLead.AgentDriver.Acp do
     {:noreply, state}
   end
 
+  defp handle_agent_request(
+         "fs/write_text_file",
+         id,
+         params,
+         %{context: %{read_only: true}} = state
+       ) do
+    _ = params
+    Connection.respond_error(state.conn, id, -32_000, "write denied: read-only review context")
+    {:noreply, state}
+  end
+
   defp handle_agent_request("fs/write_text_file", id, params, state) do
     path = params["path"]
 

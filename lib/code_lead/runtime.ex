@@ -54,6 +54,31 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
+  Review → Running with the same agent, worktree, branch, and session:
+  the feedback becomes the next prompt and commits accumulate.
+  """
+  @spec request_changes(Task.t(), String.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def request_changes(%Task{} = task, feedback) do
+    with {:ok, task} <- Tasks.request_changes(task, feedback) do
+      try_dispatch(task)
+      {:ok, Tasks.get_task!(task.id)}
+    end
+  end
+
+  @doc """
+  Review → Planning with a clean reset: the worktree is removed, the
+  feature branch deleted, the session dropped — the spec is being
+  rewritten, so prior context is discarded rather than carried forward.
+  """
+  @spec send_back_to_planning(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def send_back_to_planning(%Task{} = task) do
+    with {:ok, updated} <- Tasks.send_back_to_planning(task) do
+      teardown_context(task)
+      {:ok, updated}
+    end
+  end
+
+  @doc """
   Attempts to dispatch every queued task (in priority order) that the
   scheduler admits. Called after each run completes and after
   human requeue actions.
@@ -61,6 +86,32 @@ defmodule CodeLead.Runtime do
   @spec kick_queue() :: :ok
   def kick_queue do
     Enum.each(Tasks.queued_tasks(), &try_dispatch/1)
+  end
+
+  defp teardown_context(%Task{worktree_path: nil, target: :repo}), do: :ok
+
+  defp teardown_context(%Task{target: :repo} = task) do
+    repository = CodeLead.Projects.get_repository!(task.repository_id)
+
+    context = %CodeLead.Executor.Context{
+      type: :worktree,
+      path: task.worktree_path,
+      task_id: task.id,
+      base_clone_path: repository.base_clone_path,
+      branch_name: task.branch_name
+    }
+
+    CodeLead.Executor.impl().teardown(context, keep: false)
+  end
+
+  defp teardown_context(%Task{target: :folder} = task) do
+    context = %CodeLead.Executor.Context{
+      type: :folder,
+      path: CodeLead.Workspace.task_folder(task.id),
+      task_id: task.id
+    }
+
+    CodeLead.Executor.impl().teardown(context, keep: false)
   end
 
   defp try_dispatch(%Task{} = task) do

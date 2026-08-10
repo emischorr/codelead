@@ -15,6 +15,7 @@ Map of the repo's documentation. Design notes describe how things work
 - [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches, diff/commit/push, executor provisioning.
 - [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations.
 - [`cost-tracking.md`](cost-tracking.md) — agent_runs, nightly rollups, pricing map, spend queries, budget gate.
+- [`reviews.md`](reviews.md) — reviewer fan-out, advisory verdicts, read-only ACP posture, rework loop.
 
 ## ADRs
 

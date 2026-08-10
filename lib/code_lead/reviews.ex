@@ -1,0 +1,268 @@
+defmodule CodeLead.Reviews do
+  @moduledoc """
+  The advisory review cycle. On a task's entry into Review, one run per
+  selected reviewer is fanned out concurrently through the ordinary
+  agent drivers — `llm_api` reviewers get the artifact in-prompt, `acp`
+  reviewers work read-only in the worktree. Each reviewer writes a
+  `reviews` row, an `agent_runs` row, and a `task_step`. Verdicts are
+  advisory: nothing gates the human decision. When the cycle completes
+  the task gets `attention: :review_ready`.
+
+  Review runs are cost-tracked but not budget-held.
+  """
+
+  import Ecto.Query
+
+  alias CodeLead.AgentDriver
+  alias CodeLead.Agents.Agent
+  alias CodeLead.Costs
+  alias CodeLead.Executor.Context
+  alias CodeLead.Git
+  alias CodeLead.Projects
+  alias CodeLead.Repo
+  alias CodeLead.Reviews.Review
+  alias CodeLead.Tasks
+  alias CodeLead.Tasks.Task
+
+  @review_timeout :timer.minutes(15)
+  @artifact_char_limit 60_000
+
+  @doc """
+  Reviews of a task, newest cycle first.
+  """
+  @spec list_reviews(pos_integer()) :: [Review.t()]
+  def list_reviews(task_id) do
+    Repo.all(
+      from r in Review,
+        where: r.task_id == ^task_id,
+        order_by: [desc: r.cycle, asc: r.id],
+        preload: :agent
+    )
+  end
+
+  @spec current_cycle(pos_integer()) :: non_neg_integer()
+  def current_cycle(task_id) do
+    Repo.one(from r in Review, where: r.task_id == ^task_id, select: max(r.cycle)) || 0
+  end
+
+  @doc """
+  Fans out the review cycle for a task entering Review. Runs
+  asynchronously; with no reviewers selected, Review is human-only and
+  attention is raised immediately. Returns the cycle number (0 when
+  human-only).
+  """
+  @spec start_cycle(Task.t()) :: {:ok, non_neg_integer()}
+  def start_cycle(%Task{} = task) do
+    reviewers = Tasks.reviewers(task.id)
+
+    if reviewers == [] do
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil)
+      broadcast(task, {:review_cycle_completed, 0})
+      {:ok, 0}
+    else
+      cycle = current_cycle(task.id) + 1
+
+      Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn ->
+        run_cycle(task, reviewers, cycle)
+      end)
+
+      {:ok, cycle}
+    end
+  end
+
+  ## Cycle execution (inside CodeLead.TaskSupervisor)
+
+  defp run_cycle(task, reviewers, cycle) do
+    artifact = artifact_for_review(task)
+
+    CodeLead.TaskSupervisor
+    |> Elixir.Task.Supervisor.async_stream_nolink(
+      reviewers,
+      &run_reviewer(task, &1, cycle, artifact),
+      timeout: @review_timeout,
+      on_timeout: :kill_task,
+      max_concurrency: 4
+    )
+    |> Stream.zip(reviewers)
+    |> Enum.each(fn
+      {{:ok, _review}, _reviewer} ->
+        :ok
+
+      {{:exit, reason}, reviewer} ->
+        record_review(task, reviewer, cycle, nil, "review crashed: #{inspect(reason)}", nil)
+    end)
+
+    {:ok, updated} = Tasks.set_attention(Tasks.get_task!(task.id), :review_ready, nil)
+    broadcast(updated, {:review_cycle_completed, cycle})
+  end
+
+  defp run_reviewer(task, %Agent{} = reviewer, cycle, artifact) do
+    started_at = DateTime.utc_now(:second)
+    prompt = review_prompt(task, artifact)
+    context = review_context(task, reviewer)
+
+    driver = AgentDriver.impl(reviewer)
+    {:ok, handle} = driver.start_run(task, reviewer, context, prompt)
+    result = await_result(handle)
+
+    {verdict, findings} =
+      case result do
+        %{status: :ok} = result ->
+          text = result[:content] || ""
+          {parse_verdict(text), text}
+
+        %{status: status} = result ->
+          {nil, "review #{status}: #{result[:content]}"}
+      end
+
+    step =
+      Tasks.record_step(
+        task.id,
+        :review,
+        :agent,
+        reviewer.name,
+        "review cycle #{cycle}: #{verdict || "no verdict"}",
+        Integer.to_string(reviewer.id)
+      )
+
+    Costs.record_run(%{
+      task_id: task.id,
+      task_step_id: step.id,
+      agent_id: reviewer.id,
+      provider_id: reviewer.provider_id,
+      usage: Costs.with_cost(result[:usage], reviewer.model_variant),
+      status: result.status,
+      started_at: started_at,
+      finished_at: DateTime.utc_now(:second)
+    })
+
+    review = record_review(task, reviewer, cycle, verdict, findings, step.id)
+    broadcast(task, {:review_completed, %{agent: reviewer.name, verdict: verdict}})
+    review
+  end
+
+  defp await_result(handle, content_acc \\ "") do
+    receive do
+      {:agent_event, ^handle, {:result, result}} ->
+        Map.update(result, :content, content_acc, fn
+          nil -> content_acc
+          content -> content
+        end)
+
+      {:agent_event, ^handle, {:message_chunk, text}} ->
+        await_result(handle, content_acc <> text)
+
+      {:agent_event, ^handle, _other} ->
+        await_result(handle, content_acc)
+    end
+  end
+
+  defp record_review(task, reviewer, cycle, verdict, findings, step_id) do
+    Repo.insert!(%Review{
+      task_id: task.id,
+      agent_id: reviewer.id,
+      task_step_id: step_id,
+      cycle: cycle,
+      verdict: verdict,
+      findings: findings
+    })
+  end
+
+  ## Artifact & prompt
+
+  # For :repo targets the artifact is the branch diff; for :folder the
+  # file listing plus text file contents (truncated).
+  defp artifact_for_review(%Task{target: :repo} = task) do
+    repository = Projects.get_repository!(task.repository_id)
+
+    case Git.diff(task.worktree_path, repository.default_branch) do
+      {:ok, ""} -> "The diff against the branch base is empty."
+      {:ok, diff} -> "## Diff against the branch base\n\n```diff\n#{truncate(diff)}\n```"
+      {:error, reason} -> "Diff unavailable: #{reason}"
+    end
+  end
+
+  defp artifact_for_review(%Task{} = task) do
+    folder = CodeLead.Workspace.task_folder(task.id)
+
+    files =
+      case File.ls(folder) do
+        {:ok, files} -> Enum.sort(files)
+        {:error, _reason} -> []
+      end
+
+    contents =
+      files
+      |> Enum.filter(&(Path.extname(&1) in [".md", ".txt", ".html", ".css", ".json"]))
+      |> Enum.map_join("\n\n", fn file ->
+        "### #{file}\n\n#{truncate(File.read!(Path.join(folder, file)))}"
+      end)
+
+    "## Task folder artifact\n\nFiles: #{Enum.join(files, ", ")}\n\n#{contents}"
+  end
+
+  defp review_prompt(task, artifact) do
+    """
+    You are reviewing the work below. Be specific; cite files and lines
+    where possible. This review is advisory — a human makes the final
+    decision.
+
+    ## Task
+    Title: #{task.title}
+    Description: #{task.description || "(none)"}
+    Spec / acceptance criteria: #{task.spec || "(none)"}
+
+    #{artifact}
+
+    End your review with a single line containing only JSON in the form
+    {"verdict": "pass" | "concerns" | "block"}
+    """
+  end
+
+  # ACP reviewers get the execution context read-only; llm_api
+  # reviewers need no filesystem at all.
+  defp review_context(%Task{} = task, %Agent{driver: :acp}) do
+    {type, path} =
+      case task.worktree_path do
+        nil -> {:folder, CodeLead.Workspace.task_folder(task.id)}
+        worktree_path -> {:worktree, worktree_path}
+      end
+
+    %Context{
+      type: type,
+      path: path,
+      task_id: task.id,
+      branch_name: task.branch_name,
+      read_only: true
+    }
+  end
+
+  defp review_context(%Task{}, %Agent{driver: :llm_api}), do: nil
+
+  defp parse_verdict(text) do
+    text
+    |> String.split("\n")
+    |> Enum.reverse()
+    |> Enum.find_value(fn line ->
+      case Jason.decode(String.trim(line)) do
+        {:ok, %{"verdict" => verdict}} when verdict in ["pass", "concerns", "block"] ->
+          String.to_existing_atom(verdict)
+
+        _other ->
+          nil
+      end
+    end)
+  end
+
+  defp truncate(text) do
+    if String.length(text) > @artifact_char_limit do
+      String.slice(text, 0, @artifact_char_limit) <> "\n\n[truncated]"
+    else
+      text
+    end
+  end
+
+  defp broadcast(task, event) do
+    Phoenix.PubSub.broadcast(CodeLead.PubSub, "task:#{task.id}", {:task_event, task.id, event})
+  end
+end

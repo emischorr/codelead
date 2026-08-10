@@ -13,7 +13,8 @@ defmodule CodeLead.Executor.Context do
     :base_clone_path,
     :branch_name,
     :base_branch,
-    env: []
+    env: [],
+    read_only: false
   ]
 
   @type t :: %__MODULE__{
@@ -23,6 +24,7 @@ defmodule CodeLead.Executor.Context do
           base_clone_path: String.t() | nil,
           branch_name: String.t() | nil,
           base_branch: String.t() | nil,
-          env: [{String.t(), String.t()}]
+          env: [{String.t(), String.t()}],
+          read_only: boolean()
         }
 end

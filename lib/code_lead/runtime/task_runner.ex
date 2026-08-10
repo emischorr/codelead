@@ -194,10 +194,9 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   ## Internals
 
-  # Review fan-out arrives in the next step; until then entering Review
-  # immediately needs the human.
   defp on_review_entry(task) do
-    Tasks.set_attention(task, :review_ready, nil)
+    {:ok, _cycle} = CodeLead.Reviews.start_cycle(task)
+    {:ok, task}
   end
 
   defp build_prompt(%Task{next_prompt: feedback}) when is_binary(feedback), do: feedback

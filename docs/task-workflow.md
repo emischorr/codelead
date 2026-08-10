@@ -52,6 +52,8 @@ console) calls for those actions:
 | cancel a run | `Runtime.cancel_task(task)` |
 | retry after failure | `Runtime.retry_task(task)` |
 | approve/deny a permission escalation | `Runtime.answer_permission(task, request_id, true/false)` |
+| request changes from Review | `Runtime.request_changes(task, feedback)` |
+| send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
 
 The scheduler (`CodeLead.Scheduler.PassThrough`) admits unless a
