@@ -1,0 +1,7 @@
+_build/
+.claude/
+.elixir_ls/
+deps/
+docker/
+docs/
+node_module/
