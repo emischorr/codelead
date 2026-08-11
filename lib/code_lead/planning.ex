@@ -36,6 +36,7 @@ defmodule CodeLead.Planning do
     agent = Agents.get_agent!(agent_id)
     provider = Agents.get_provider!(agent.provider_id)
     started_at = DateTime.utc_now(:second)
+    monotonic_start = System.monotonic_time(:millisecond)
 
     insert_message(task.id, :user, content)
     history = Enum.map(list_messages(task.id), &%{role: &1.role, content: &1.content})
@@ -43,11 +44,11 @@ defmodule CodeLead.Planning do
 
     case LlmApi.complete(provider.kind, provider.config, agent, messages) do
       {:ok, reply, usage} ->
-        record_usage(task, agent, usage, :ok, started_at)
+        record_usage(task, agent, usage, :ok, started_at, monotonic_start)
         {:ok, insert_message(task.id, :assistant, reply)}
 
       {:error, reason} ->
-        record_usage(task, agent, nil, :error, started_at)
+        record_usage(task, agent, nil, :error, started_at, monotonic_start)
         {:error, reason}
     end
   end
@@ -116,7 +117,7 @@ defmodule CodeLead.Planning do
     end
   end
 
-  defp record_usage(task, agent, usage, status, started_at) do
+  defp record_usage(task, agent, usage, status, started_at, monotonic_start) do
     Costs.record_run(%{
       task_id: task.id,
       agent_id: agent.id,
@@ -124,7 +125,8 @@ defmodule CodeLead.Planning do
       usage: Costs.with_cost(usage, agent.model_variant),
       status: status,
       started_at: started_at,
-      finished_at: DateTime.utc_now(:second)
+      finished_at: DateTime.utc_now(:second),
+      duration_ms: System.monotonic_time(:millisecond) - monotonic_start
     })
   end
 end

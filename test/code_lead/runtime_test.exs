@@ -4,10 +4,13 @@ defmodule CodeLead.RuntimeTest do
   use CodeLead.DataCase, async: false
 
   import CodeLead.AgentsFixtures
+  import CodeLead.GitHelpers
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.AgentFeed
   alias CodeLead.Costs.AgentRun
+  alias CodeLead.Projects
   alias CodeLead.Runtime
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
@@ -75,9 +78,9 @@ defmodule CodeLead.RuntimeTest do
 
       assert_receive {:task_event, _id, {:run_started, _agent_name}}, 15_000
       assert_receive {:task_event, _id, {:message_chunk, "Working on it. "}}, 15_000
-      assert_receive {:task_event, _id, {:tool_call, %{id: "tc-1"}}}, 15_000
+      assert_receive {:agent_feed, _id, %{kind: :tool_call, text: "Read README"}}, 15_000
       assert_receive {:task_event, _id, {:run_completed, result}}, 15_000
-      assert result.usage.total_tokens == 140
+      assert result.usage.total_tokens == 340
 
       await_runner_down(task.id)
 
@@ -89,12 +92,47 @@ defmodule CodeLead.RuntimeTest do
 
       assert [run] = Repo.all(AgentRun)
       assert run.task_id == task.id
-      assert run.total_tokens == 140
+      assert run.total_tokens == 340
+      assert run.prompt_tokens == 100
+      assert run.cached_read_tokens == 180
+      # The harness reported the money; it wins over the local rate table.
+      assert run.cost_cents == 42
+      assert run.duration_ms > 0
       assert run.status == :ok
 
       steps = Tasks.steps(task.id)
       assert Enum.any?(steps, &(&1.kind == :run and &1.summary == "run started"))
       assert List.last(steps).summary =~ "moved to Review"
+
+      # the transcript: chunks coalesced per message, nothing left open
+      events = AgentFeed.list_run(task.id)
+      assert [:run_started, :message, :tool_call, :message, :result] = Enum.map(events, & &1.kind)
+      assert Enum.map(events, & &1.text) |> Enum.member?("Working on it. ")
+      refute Enum.any?(events, & &1.streaming)
+
+      assert %{"status" => "ok", "tokens" => 340, "cost_cents" => 42, "duration_ms" => duration} =
+               List.last(events).data
+
+      assert duration > 0
+    end
+
+    test "a tool call is one row that advances in place" do
+      use_scenario("tool_updates")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _task} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      assert [tool] = task.id |> AgentFeed.list_run() |> Enum.filter(&(&1.kind == :tool_call))
+      assert tool.external_id == "tc-1"
+      # the title survives the two title-less updates
+      assert tool.text == "Write lib/foo.ex"
+      assert tool.data["status"] == "completed"
+      assert tool.data["locations"] == ["lib/foo.ex"]
+      # kept field by field, and only the strings — the timeout is machinery
+      assert tool.data["input"] == %{"path" => "lib/foo.ex"}
     end
 
     test "an llm_api executor writes its output as the task artifact" do
@@ -225,6 +263,61 @@ defmodule CodeLead.RuntimeTest do
       await_runner_down(task.id)
       assert Tasks.get_task!(task.id).state == :review
     end
+  end
+
+  describe "dispatch failures" do
+    test "a missing harness names the binary and never clones the repository" do
+      Application.put_env(:code_lead, :harnesses, %{claude_code: ["claude-agent-acp-missing"]})
+      %{task: task, repository: repository} = repo_task()
+      subscribe(task)
+
+      assert {:ok, _} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
+      assert detail =~ "claude-agent-acp-missing"
+      assert detail =~ "not found on PATH"
+      await_runner_down(task.id)
+
+      # Preflight runs ahead of provisioning: nothing was cloned.
+      assert Tasks.get_task!(task.id).worktree_path == nil
+      assert Projects.get_repository!(repository.id).base_clone_path == nil
+    end
+
+    test "an unreachable remote reports the git failure, not a bare tuple" do
+      use_scenario("happy")
+
+      %{task: task} = repo_task(git_url: "file:///nonexistent/codelead-missing.git")
+      subscribe(task)
+
+      assert {:ok, _} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
+      assert detail =~ "could not prepare the workspace"
+      assert detail =~ "does not appear to be a git repository"
+      await_runner_down(task.id)
+
+      task = Tasks.get_task!(task.id)
+      assert task.run_state == :failed
+      assert task.attention.type == :run_failed
+    end
+  end
+
+  defp repo_task(opts \\ []) do
+    project = project_fixture()
+    git_url = Keyword.get_lazy(opts, :git_url, &create_origin!/0)
+    repository = repository_fixture(project.id, %{git_url: git_url, default_branch: "main"})
+
+    agent =
+      agent_fixture(%{driver: :acp, harness: :claude_code, work_type: :code, roles: [:execute]})
+
+    task =
+      task_fixture(project.id, %{
+        work_type: :code,
+        target: :repo,
+        repository_id: repository.id,
+        agent_id: agent.id,
+        description: "Do it."
+      })
+
+    %{project: project, agent: agent, task: task, repository: repository}
   end
 
   defp task_folder(task), do: CodeLead.Workspace.task_folder(task.id)

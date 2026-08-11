@@ -25,6 +25,84 @@ defmodule CodeLead.CostsTest do
     run
   end
 
+  describe "record_run/1" do
+    test "persists the cache and reasoning split alongside the duration" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+
+      {:ok, run} =
+        Costs.record_run(%{
+          task_id: task.id,
+          status: :ok,
+          started_at: DateTime.utc_now(:second),
+          duration_ms: 134_000,
+          usage: %{
+            prompt_tokens: 100,
+            completion_tokens: 40,
+            cached_read_tokens: 180,
+            cached_write_tokens: 20,
+            reasoning_tokens: 12,
+            total_tokens: 340,
+            cost_cents: 42
+          }
+        })
+
+      assert run.cached_read_tokens == 180
+      assert run.cached_write_tokens == 20
+      assert run.reasoning_tokens == 12
+      assert run.duration_ms == 134_000
+      assert Costs.task_duration_ms(task.id) == 134_000
+    end
+
+    test "a driver that reports nothing records zeros, not nils" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+
+      {:ok, run} =
+        Costs.record_run(%{
+          task_id: task.id,
+          status: :error,
+          started_at: DateTime.utc_now(:second),
+          usage: nil
+        })
+
+      assert run.cached_read_tokens == 0
+      assert run.reasoning_tokens == 0
+      assert run.duration_ms == nil
+      assert Costs.task_duration_ms(task.id) == 0
+    end
+  end
+
+  describe "task_runs/1" do
+    test "carries the per-run breakdown and the provider kind" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+
+      {:ok, provider} =
+        CodeLead.Agents.create_provider(%{
+          name: "Sub #{System.unique_integer([:positive])}",
+          kind: :anthropic_subscription,
+          config: %{"oauth_token" => "t"}
+        })
+
+      {:ok, _run} =
+        Costs.record_run(%{
+          task_id: task.id,
+          provider_id: provider.id,
+          status: :ok,
+          started_at: DateTime.utc_now(:second),
+          duration_ms: 2_500,
+          usage: %{total_tokens: 340, cached_read_tokens: 180, cost_cents: 42}
+        })
+
+      assert [run] = Costs.task_runs(task.id)
+      assert run.cached_read_tokens == 180
+      assert run.duration_ms == 2_500
+      assert run.provider_kind == :anthropic_subscription
+      assert CodeLead.Agents.billing_mode(run.provider_kind) == :estimated
+    end
+  end
+
   describe "with_cost/2" do
     test "prices tokens from the config map" do
       usage = %{

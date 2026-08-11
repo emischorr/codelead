@@ -7,10 +7,16 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
   import Phoenix.LiveViewTest
   import CodeLead.AgentsFixtures
+  import CodeLead.GitHelpers
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.AgentFeed
+  alias CodeLead.Executor.LocalSubprocess
   alias CodeLead.Tasks
+  alias CodeLeadWeb.DiffComponents
+
+  setup :register_and_log_in_user
 
   defp task_path(project, task, tab \\ nil) do
     base = ~p"/projects/#{project.id}/tasks/#{task.id}"
@@ -155,22 +161,493 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
-  describe "agent event stream" do
-    test "live events append to the feed and chunks buffer until flushed", %{conn: conn} do
+  describe "run meta" do
+    test "the cost card shows each run's tokens and duration", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      agent = agent_fixture(%{name: "Judy"})
+
+      {:ok, _run} =
+        CodeLead.Costs.record_run(%{
+          task_id: task.id,
+          agent_id: agent.id,
+          provider_id: agent.provider_id,
+          status: :ok,
+          started_at: DateTime.utc_now(:second),
+          duration_ms: 134_000,
+          usage: %{total_tokens: 183_512, cached_read_tokens: 120_000, cost_cents: 207}
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#cost-card")
+      assert render(view) =~ "$2.07 · 183.5k · 2m 14s"
+    end
+
+    test "a subscription run's cost is marked as an estimate", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, provider} =
+        CodeLead.Agents.create_provider(%{
+          name: "Sub #{System.unique_integer([:positive])}",
+          kind: :anthropic_subscription,
+          config: %{"oauth_token" => "t"}
+        })
+
+      {:ok, _run} =
+        CodeLead.Costs.record_run(%{
+          task_id: task.id,
+          provider_id: provider.id,
+          status: :ok,
+          started_at: DateTime.utc_now(:second),
+          duration_ms: 2_500,
+          usage: %{total_tokens: 340, cost_cents: 42}
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert render(view) =~ "~$0.42 est"
+    end
+
+    test "mid-run usage adds to the live total without a task reload", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
 
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      send(
+        view.pid,
+        {:task_event, task.id,
+         {:usage, %{cost_cents: 137, context_used: 45_200, context_size: 200_000}}}
+      )
+
+      assert render(view) =~ "$1.37"
+    end
+  end
+
+  describe "timeline" do
+    test "a task with no steps still opens on its creation", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#timeline-start")
+      assert render(view) =~ "Nothing else has happened yet."
+    end
+
+    test "every entry carries the full timestamp for the hover tooltip", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      step = Tasks.record_step(task.id, :transition, :human, "human", "moved to Running")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      # the server-rendered UTC title is the fallback the hook localizes
+      assert has_element?(view, "#timeline-start-time[data-at]")
+      assert has_element?(view, "#timeline-step-#{step.id}-time[data-at]")
+      assert render(view) =~ CodeLeadWeb.Format.absolute(task.inserted_at)
+    end
+
+    test "steps follow the creation node, oldest first", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      first = Tasks.record_step(task.id, :transition, :human, "human", "moved to Running")
+      second = Tasks.record_step(task.id, :run, :system, "system", "run started")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#timeline-step-#{first.id}")
+      assert has_element?(view, "#timeline-step-#{second.id}")
+      refute render(view) =~ "Nothing else has happened yet."
+    end
+  end
+
+  describe "agent feed" do
+    setup %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
+      %{conn: conn, project: project, task: task}
+    end
+
+    defp feed_row(task, attrs) do
+      AgentFeed.record_event(task.id, Enum.into(attrs, %{kind: :message}))
+    end
+
+    defp block_id(row), do: "#agent-block-#{row.id}"
+
+    test "history is loaded from the transcript, not the audit trail", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      Tasks.record_step(task.id, :transition, :human, "human", "moved to Running")
+      row = feed_row(task, kind: :message, text: "Working on it.")
+
       {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
 
-      send(view.pid, {:task_event, task.id, {:message_chunk, "Thinking about "}})
-      send(view.pid, {:task_event, task.id, {:message_chunk, "the fix."}})
-      assert render(view) =~ "Thinking about the fix."
+      assert has_element?(view, block_id(row))
+      refute render(view) =~ "moved to Running"
 
-      send(view.pid, {:task_event, task.id, {:tool_call, %{name: "Edit", detail: "cleanup.ex"}}})
-      html = render(view)
-      assert html =~ "Edit cleanup.ex"
-      # flushed chunk buffer became a MSG card
-      assert html =~ "Thinking about the fix."
+      # the transition is still the Task tab's business
+      {:ok, task_view, _html} = live(conn, task_path(project, task, "task"))
+      assert render(task_view) =~ "moved to Running"
+    end
+
+    test "the feed survives a tab switch", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = feed_row(task, kind: :message, text: "Working on it.")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+      assert has_element?(view, block_id(row))
+
+      view |> element("nav a", "Task") |> render_click()
+      refute has_element?(view, block_id(row))
+
+      view |> element("nav a", "Agent") |> render_click()
+      assert has_element?(view, block_id(row))
+    end
+
+    test "review events never enter the feed", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      send(view.pid, {:task_event, task.id, {:review_completed, %{agent: "R", verdict: :pass}}})
+      send(view.pid, {:task_event, task.id, {:review_cycle_completed, 1}})
+
+      assert has_element?(view, "#agent-events-empty")
+    end
+
+    test "consecutive tool calls collapse into one expandable group", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      first =
+        feed_row(task, kind: :tool_call, text: "Read README", data: %{"status" => "completed"})
+
+      second = feed_row(task, kind: :tool_call, text: "Write lib/foo.ex")
+      third = feed_row(task, kind: :tool_call, text: "Read mix.exs")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      # one block for all three, keyed by the first row
+      assert has_element?(view, block_id(first))
+      refute has_element?(view, block_id(second))
+      refute has_element?(view, block_id(third))
+      assert has_element?(view, "#{block_id(first)} button", "3 tool calls")
+
+      # expanded by default while the run is executing, so the members show
+      assert render(view) =~ "Write lib/foo.ex"
+
+      view |> element("#{block_id(first)}-toggle") |> render_click()
+      refute render(view) =~ "Write lib/foo.ex"
+    end
+
+    test "a tool_call_update advances the call in place", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = feed_row(task, kind: :tool_call, text: "Read README", data: %{"status" => "pending"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      updated = AgentFeed.update_event(row, %{data: %{"status" => "completed"}})
+      send(view.pid, {:agent_feed, task.id, updated})
+
+      # still exactly one block, still the same dom id
+      assert has_element?(view, block_id(row))
+      assert has_element?(view, "#{block_id(row)} button", "Read README")
+    end
+
+    test "an agent message renders as markdown", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = feed_row(task, kind: :message, text: "Shipped it:\n\n- one\n- two\n")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      assert has_element?(view, "#{block_id(row)} .md li", "one")
+      assert has_element?(view, "#{block_id(row)} .md li", "two")
+    end
+
+    test "a shell tool call reads as description then command, each once", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      row =
+        feed_row(task,
+          kind: :tool_call,
+          # the harness titles a shell call with its own command line
+          text: "git status --short",
+          data: %{
+            "tool_kind" => "execute",
+            "input" => %{"command" => "git status --short", "description" => "Check the tree"}
+          }
+        )
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      # the group header carries the description, not the command line
+      assert has_element?(view, "#{block_id(row)}-toggle", "Check the tree")
+      # and the command itself is rendered exactly once, in the expanded row
+      assert view |> render() |> String.split("git status --short") |> length() == 2
+    end
+
+    test "live chunks render in the live pane until the row is finalized", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      row = feed_row(task, kind: :message, text: "Thinking about ", streaming: true)
+      send(view.pid, {:agent_feed, task.id, row})
+      send(view.pid, {:task_event, task.id, {:message_chunk, "the fix."}})
+
+      assert has_element?(view, "#agent-live-message")
+      assert render(view) =~ "Thinking about the fix."
+      refute has_element?(view, block_id(row))
+
+      finalized =
+        AgentFeed.update_event(row, %{text: "Thinking about the fix.", streaming: false})
+
+      send(view.pid, {:agent_feed, task.id, finalized})
+
+      refute has_element?(view, "#agent-live-message")
+      assert has_element?(view, block_id(row))
+      # not rendered twice
+      assert render(view) =~ "Thinking about the fix."
+    end
+
+    test "an unresolved permission is answerable, a resolved one is not", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      row =
+        feed_row(task, kind: :permission, text: "write outside the worktree", external_id: "7")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+      assert has_element?(view, "#{block_id(row)}-grant")
+
+      resolved = AgentFeed.update_event(row, %{data: %{"resolved" => true}})
+      send(view.pid, {:agent_feed, task.id, resolved})
+
+      refute has_element?(view, "#{block_id(row)}-grant")
+    end
+  end
+
+  describe "diff tab" do
+    setup %{conn: conn} do
+      project = project_fixture()
+      git_url = create_origin!()
+      repository = repository_fixture(project.id, %{git_url: git_url, default_branch: "main"})
+
+      task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id
+        })
+
+      {:ok, context} = LocalSubprocess.provision(task)
+      write!(context.path, "alpha.md", "alpha\n")
+      write!(context.path, "beta.md", "beta\n")
+
+      task = Tasks.get_task!(task.id) |> put_context!(%{state: :review})
+
+      %{conn: conn, project: project, task: task, worktree: context.path}
+    end
+
+    defp write!(worktree, path, content), do: File.write!(Path.join(worktree, path), content)
+
+    defp card(path), do: "##{DiffComponents.file_dom_id(path)}"
+
+    defp body(path), do: "#{card(path)} table"
+
+    defp open_diff(conn, project, task) do
+      {:ok, view, _html} = live(conn, task_path(project, task, "diff"))
+      render_async(view, 2_000)
+      view
+    end
+
+    test "opens with only the first file expanded", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      view = open_diff(conn, project, task)
+
+      assert has_element?(view, card("alpha.md"))
+      assert has_element?(view, card("beta.md"))
+      assert has_element?(view, body("alpha.md"))
+      refute has_element?(view, body("beta.md"))
+    end
+
+    test "a file header toggles its own body and nothing else", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      view = open_diff(conn, project, task)
+
+      view |> element("#{card("beta.md")} button") |> render_click()
+      assert has_element?(view, body("beta.md"))
+      assert has_element?(view, body("alpha.md"))
+
+      view |> element("#{card("beta.md")} button") |> render_click()
+      refute has_element?(view, body("beta.md"))
+    end
+
+    test "jumping from the sidebar focuses one file and scrolls to it", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      view = open_diff(conn, project, task)
+
+      view
+      |> element("button[phx-click='focus_file'][phx-value-path='beta.md']")
+      |> render_click()
+
+      assert_push_event(view, "diff:scroll_to", %{id: id})
+      assert id == DiffComponents.file_dom_id("beta.md")
+      assert has_element?(view, body("beta.md"))
+      refute has_element?(view, body("alpha.md"))
+    end
+
+    test "re-entering the tab collapses back to the first file", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      view = open_diff(conn, project, task)
+      view |> element("#{card("beta.md")} button") |> render_click()
+      assert has_element?(view, body("beta.md"))
+
+      view |> element("nav a", "Task") |> render_click()
+      view |> element("nav a", "Diff") |> render_click()
+      render_async(view, 2_000)
+
+      assert has_element?(view, body("alpha.md"))
+      refute has_element?(view, body("beta.md"))
+    end
+
+    test "a writing tool call brings in files the agent just wrote", ctx do
+      %{conn: conn, project: project, task: task, worktree: worktree} = ctx
+
+      view = open_diff(conn, project, task)
+      refute has_element?(view, card("gamma.md"))
+
+      write!(worktree, "gamma.md", "gamma\n")
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "edit")})
+      send(view.pid, :refresh_diff)
+      render_async(view, 2_000)
+
+      assert has_element?(view, card("gamma.md"))
+    end
+
+    test "a read-only tool call does not re-run git", ctx do
+      %{conn: conn, project: project, task: task, worktree: worktree} = ctx
+
+      view = open_diff(conn, project, task)
+
+      write!(worktree, "gamma.md", "gamma\n")
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "read")})
+      send(view.pid, :refresh_diff)
+      render_async(view, 2_000)
+
+      refute has_element?(view, card("gamma.md"))
+    end
+
+    test "a background refresh preserves what the reader expanded", ctx do
+      %{conn: conn, project: project, task: task, worktree: worktree} = ctx
+
+      view = open_diff(conn, project, task)
+      view |> element("#{card("beta.md")} button") |> render_click()
+      view |> element("#{card("alpha.md")} button") |> render_click()
+
+      write!(worktree, "gamma.md", "gamma\n")
+      view |> element("#diff-refresh") |> render_click()
+      render_async(view, 2_000)
+
+      assert has_element?(view, card("gamma.md"))
+      assert has_element?(view, body("beta.md"))
+      refute has_element?(view, body("alpha.md"))
+      # newly written files stay collapsed
+      refute has_element?(view, body("gamma.md"))
+    end
+
+    test "follow mode is offered only during a run and tracks what the agent writes", ctx do
+      %{conn: conn, project: project, task: task, worktree: worktree} = ctx
+
+      view = open_diff(conn, project, task)
+      refute has_element?(view, "#diff-follow")
+
+      task = put_context!(task, %{state: :running, run_state: :executing})
+      view = open_diff(conn, project, task)
+      assert has_element?(view, "#diff-follow")
+
+      # the agent reports where it is working, then the refresh lands
+      write!(worktree, "gamma.md", "gamma\n")
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "edit")})
+      view |> element("#diff-follow") |> render_click()
+      send(view.pid, :refresh_diff)
+      render_async(view, 2_000)
+
+      assert has_element?(view, "#diff-following")
+      assert_push_event(view, "diff:scroll_to", %{id: id})
+      assert id == DiffComponents.file_dom_id("gamma.md")
+      assert has_element?(view, body("gamma.md"))
+      refute has_element?(view, body("alpha.md"))
+    end
+
+    test "clicking the chip stops following", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      task = put_context!(task, %{state: :running, run_state: :executing})
+
+      view = open_diff(conn, project, task)
+      view |> element("#diff-follow") |> render_click()
+      assert has_element?(view, "#diff-following")
+
+      view |> element("#diff-following") |> render_click()
+
+      refute has_element?(view, "#diff-following")
+      assert has_element?(view, "#diff-follow")
+    end
+
+    # Re-anchoring on every refresh would drag the viewport back through
+    # ten consecutive edits of one file.
+    test "following re-scrolls only when the agent moves to another file", ctx do
+      %{conn: conn, project: project, task: task, worktree: worktree} = ctx
+      task = put_context!(task, %{state: :running, run_state: :executing})
+
+      view = open_diff(conn, project, task)
+      write!(worktree, "gamma.md", "gamma\n")
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "edit")})
+      view |> element("#diff-follow") |> render_click()
+      assert_push_event(view, "diff:scroll_to", %{id: _gamma})
+
+      # same file again — no second scroll
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "edit")})
+      send(view.pid, :refresh_diff)
+      render_async(view, 2_000)
+      refute_push_event(view, "diff:scroll_to", %{})
+
+      # a different file — follow moves
+      write!(worktree, "delta.md", "delta\n")
+      send(view.pid, {:agent_feed, task.id, tool_row(task, "edit", "delta.md")})
+      send(view.pid, :refresh_diff)
+      render_async(view, 2_000)
+
+      assert_push_event(view, "diff:scroll_to", %{id: id})
+      assert id == DiffComponents.file_dom_id("delta.md")
+      assert has_element?(view, body("delta.md"))
+    end
+
+    test "the reader taking over hands control back from the agent", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      task = put_context!(task, %{state: :running, run_state: :executing})
+
+      view = open_diff(conn, project, task)
+      view |> element("#diff-follow") |> render_click()
+      assert has_element?(view, "#diff-following")
+
+      # what the JS hook pushes on a user scroll
+      render_hook(view, "diff_unfollow", %{})
+
+      refute has_element?(view, "#diff-following")
+      assert has_element?(view, "#diff-follow")
+    end
+
+    defp tool_row(task, tool_kind, path \\ "gamma.md") do
+      AgentFeed.record_event(task.id, %{
+        kind: :tool_call,
+        text: "Write #{path}",
+        data: %{"tool_kind" => tool_kind, "locations" => [path]}
+      })
     end
   end
 end

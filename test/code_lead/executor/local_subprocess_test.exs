@@ -71,6 +71,39 @@ defmodule CodeLead.Executor.LocalSubprocessTest do
       assert {:ok, context} = LocalSubprocess.provision(task)
       assert {"API_KEY", "s3cret"} in context.env
     end
+
+    test "a stored forge token does not disturb a remote that needs none" do
+      %{task: task, project: project} = repo_task_setup()
+      {:ok, _} = Projects.put_env(project.id, "GITHUB_TOKEN", "gh-token")
+
+      assert {:ok, %Context{type: :worktree} = context} = LocalSubprocess.provision(task)
+      assert File.exists?(Path.join(context.path, "README.md"))
+    end
+
+    test "an unreachable remote reports the forge and whether a token was presented" do
+      %{task: task, repository: repository} = repo_task_setup()
+
+      {:ok, _} =
+        Projects.update_repository(repository, %{
+          git_url: "file:///nonexistent/codelead-missing.git"
+        })
+
+      assert {:error, {:remote, details}} = LocalSubprocess.provision(Tasks.get_task!(task.id))
+      assert details.forge == :other
+      refute details.token_present?
+      assert details.output =~ "does not appear to be a git repository"
+    end
+  end
+
+  describe "available?/1" do
+    test "resolves an executable on PATH" do
+      assert LocalSubprocess.available?(["git"]) == :ok
+    end
+
+    test "names the missing executable" do
+      assert LocalSubprocess.available?(["definitely-not-a-real-binary-xyz", "acp"]) ==
+               {:error, {:executable_not_found, "definitely-not-a-real-binary-xyz"}}
+    end
   end
 
   describe "provision/1 for :folder targets" do

@@ -1,0 +1,107 @@
+defmodule CodeLeadWeb.FormOptions do
+  @moduledoc """
+  Select options and label copy for the enums the setup wizard and the
+  settings pages both edit. Kept in one place so the two surfaces cannot
+  drift apart — the wizard creates a provider or an agent, settings edits
+  the same row later.
+
+  Roles are a special case: `agents.roles` is an array, but the form offers
+  the three combinations that make sense as a single select, so
+  `parse_roles/1` and `role_value/1` convert between the two.
+  """
+
+  @spec provider_kinds() :: [{String.t(), String.t()}]
+  def provider_kinds do
+    [
+      {"Anthropic — API key", "anthropic_api"},
+      {"Anthropic — subscription (OAuth token)", "anthropic_subscription"},
+      {"OpenAI", "openai"},
+      {"Ollama (local)", "ollama"}
+    ]
+  end
+
+  @spec credential_type(String.t() | atom() | nil) :: String.t()
+  def credential_type(kind) when kind in ["ollama", :ollama], do: "url"
+  def credential_type(_kind), do: "password"
+
+  @spec credential_label(String.t() | atom() | nil) :: String.t()
+  def credential_label(kind) when kind in ["ollama", :ollama], do: "Endpoint URL"
+
+  def credential_label(kind) when kind in ["anthropic_subscription", :anthropic_subscription],
+    do: "OAuth token"
+
+  def credential_label(_kind), do: "API key"
+
+  @spec credential_placeholder(String.t() | atom() | nil) :: String.t() | nil
+  def credential_placeholder(kind) when kind in ["ollama", :ollama], do: "http://localhost:11434"
+  def credential_placeholder(_kind), do: nil
+
+  @doc """
+  Whether a kind's credential is a secret. An Ollama endpoint is a plain URL
+  and is safe to show; everything else must be masked.
+  """
+  @spec secret_credential?(String.t() | atom() | nil) :: boolean()
+  def secret_credential?(kind), do: kind not in ["ollama", :ollama]
+
+  @spec provider_kind_label(String.t() | atom() | nil) :: String.t()
+  def provider_kind_label(kind) do
+    kind = to_string(kind)
+
+    Enum.find_value(provider_kinds(), kind, fn {label, value} -> value == kind && label end)
+  end
+
+  @spec work_types() :: [{String.t(), String.t()}]
+  def work_types do
+    [{"Code", "code"}, {"Design", "design"}, {"Content", "content"}, {"File", "file"}]
+  end
+
+  @spec work_type_values() :: [atom()]
+  def work_type_values, do: [:code, :design, :content, :file]
+
+  @spec roles() :: [{String.t(), String.t()}]
+  def roles do
+    [
+      {"Execute and review", "execute,review"},
+      {"Execute only", "execute"},
+      {"Review only", "review"}
+    ]
+  end
+
+  @doc """
+  Turns the roles select value into the atom list the schema stores.
+  """
+  @spec parse_roles(String.t() | nil) :: [atom()]
+  def parse_roles("execute"), do: [:execute]
+  def parse_roles("review"), do: [:review]
+  def parse_roles(_both), do: [:execute, :review]
+
+  @doc """
+  The inverse of `parse_roles/1`, for pre-selecting the roles select.
+  """
+  @spec role_value([atom() | String.t()] | nil) :: String.t()
+  def role_value(roles) when is_list(roles) do
+    case Enum.map(roles, &to_string/1) do
+      ["execute"] -> "execute"
+      ["review"] -> "review"
+      _both -> "execute,review"
+    end
+  end
+
+  def role_value(_roles), do: "execute,review"
+
+  @spec drivers() :: [{String.t(), String.t()}]
+  def drivers do
+    [{"ACP — a full coding harness", "acp"}, {"LLM API — a single model call", "llm_api"}]
+  end
+
+  @spec harnesses() :: [{String.t(), String.t()}]
+  def harnesses, do: [{"Claude Code", "claude_code"}, {"Codex", "codex"}]
+
+  @spec locales() :: [{String.t(), String.t()}]
+  def locales, do: [{"English", "en"}]
+
+  @spec provider_options([%{name: String.t(), id: pos_integer()}]) :: [
+          {String.t(), pos_integer()}
+        ]
+  def provider_options(providers), do: Enum.map(providers, &{&1.name, &1.id})
+end

@@ -36,6 +36,33 @@ defmodule CodeLead.TasksBoardEventsTest do
       assert_receive {:board_changed, ^project_id, ^task_id}
     end
 
+    test "creating a task notifies board subscribers" do
+      project = project_fixture()
+      :ok = Tasks.subscribe_board(project.id)
+      project_id = project.id
+
+      task = task_fixture(project.id)
+      task_id = task.id
+
+      assert_receive {:board_changed, ^project_id, ^task_id}
+    end
+
+    test "one org subscription covers every project" do
+      project_a = project_fixture()
+      project_b = project_fixture()
+      :ok = Tasks.subscribe_org()
+      a_id = project_a.id
+      b_id = project_b.id
+
+      task_a = task_fixture(project_a.id)
+      task_b = task_fixture(project_b.id)
+      a_task_id = task_a.id
+      b_task_id = task_b.id
+
+      assert_receive {:board_changed, ^a_id, ^a_task_id}
+      assert_receive {:board_changed, ^b_id, ^b_task_id}
+    end
+
     test "update_task and archive notify board subscribers" do
       project = project_fixture()
       task = task_fixture(project.id)

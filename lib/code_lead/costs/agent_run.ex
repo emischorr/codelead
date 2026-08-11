@@ -15,11 +15,15 @@ defmodule CodeLead.Costs.AgentRun do
     field :provider_id, :id
     field :prompt_tokens, :integer, default: 0
     field :completion_tokens, :integer, default: 0
+    field :cached_read_tokens, :integer, default: 0
+    field :cached_write_tokens, :integer, default: 0
+    field :reasoning_tokens, :integer, default: 0
     field :total_tokens, :integer, default: 0
     field :cost_cents, :integer, default: 0
     field :status, Ecto.Enum, values: [:ok, :error, :cancelled]
     field :started_at, :utc_datetime
     field :finished_at, :utc_datetime
+    field :duration_ms, :integer
 
     timestamps(type: :utc_datetime, updated_at: false)
   end

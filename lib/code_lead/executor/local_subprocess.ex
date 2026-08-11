@@ -21,7 +21,10 @@ defmodule CodeLead.Executor.LocalSubprocess do
     base_path =
       repository.base_clone_path || Workspace.base_clone_path(repository.name, repository.id)
 
-    with {:ok, _} <- Git.ensure_clone(repository.git_url, base_path),
+    forge = Git.forge(repository.git_url)
+    token = forge_token(task.project_id, forge)
+
+    with {:ok, _} <- clone(repository.git_url, base_path, forge, token),
          :ok <- persist_base_clone_path(repository, base_path),
          {:ok, task, worktree_path, branch} <- ensure_worktree(task, repository, base_path) do
       {:ok,
@@ -48,6 +51,14 @@ defmodule CodeLead.Executor.LocalSubprocess do
        task_id: task.id,
        env: Projects.env_vars(task.project_id)
      }}
+  end
+
+  @impl CodeLead.Executor
+  def available?([executable | _args]) do
+    case System.find_executable(executable) do
+      nil -> {:error, {:executable_not_found, executable}}
+      _resolved -> :ok
+    end
   end
 
   @impl CodeLead.Executor
@@ -107,6 +118,25 @@ defmodule CodeLead.Executor.LocalSubprocess do
       end
     end
   end
+
+  # A bare git failure cannot tell the operator what to do about it, so
+  # carry the two facts that decide the remedy: which forge convention
+  # applies, and whether a token was actually presented.
+  defp clone(git_url, base_path, forge, token) do
+    case Git.ensure_clone(git_url, base_path, token: token) do
+      {:ok, path} ->
+        {:ok, path}
+
+      {:error, output} ->
+        {:error, {:remote, %{output: output, forge: forge, token_present?: not is_nil(token)}}}
+    end
+  end
+
+  # Only GitHub and GitLab remotes have a token convention; anything else
+  # (self-hosted forges, file:// remotes) falls back to the host's own
+  # git credentials.
+  defp forge_token(_project_id, :other), do: nil
+  defp forge_token(project_id, {kind, _owner, _repo}), do: Projects.forge_token(project_id, kind)
 
   defp persist_base_clone_path(%{base_clone_path: path}, path), do: :ok
 

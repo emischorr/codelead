@@ -2,6 +2,7 @@ defmodule CodeLead.ProjectsTest do
   use CodeLead.DataCase, async: true
 
   import CodeLead.ProjectsFixtures
+  import CodeLead.TasksFixtures
 
   alias CodeLead.Projects
   alias CodeLead.Projects.Project
@@ -83,6 +84,65 @@ defmodule CodeLead.ProjectsTest do
       :ok = Projects.delete_env(project.id, "API_KEY")
       assert Projects.env_vars(project.id) == []
       assert Repo.aggregate(ProjectEnv, :count) == 0
+    end
+
+    # The listing UI must never decrypt: `list_env_keys/1` selects a bare map
+    # so Cloak's load callback never runs.
+    test "list_env_keys/1 returns keys without values" do
+      project = project_fixture()
+      {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
+
+      assert [entry] = Projects.list_env_keys(project.id)
+      assert entry.key == "API_KEY"
+      assert entry.updated_at
+      refute Map.has_key?(entry, :value)
+
+      # the value is still reachable where it is actually needed
+      assert Projects.env_var(project.id, "API_KEY") == "s3cret"
+    end
+  end
+
+  describe "guarded deletes" do
+    test "delete_project/1 refuses while a task belongs to it" do
+      project = project_fixture()
+      task_fixture(project.id)
+
+      assert Projects.project_usage(project.id) == %{tasks: 1}
+      assert {:error, {:has_tasks, 1}} = Projects.delete_project(project)
+    end
+
+    test "delete_project/1 takes the repositories and env store with it" do
+      project = project_fixture()
+      repository_fixture(project.id)
+      {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
+
+      assert {:ok, _project} = Projects.delete_project(project)
+      assert Projects.list_repositories(project.id) == []
+      assert Projects.list_env_keys(project.id) == []
+    end
+
+    test "delete_repository/1 refuses while a task targets it" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      task_fixture(project.id, %{target: :repo, repository_id: repository.id})
+
+      assert {:error, {:has_tasks, 1}} = Projects.delete_repository(repository)
+    end
+
+    test "delete_repository/1 unlinks an unused repository" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      assert {:ok, _repository} = Projects.delete_repository(repository)
+      assert Projects.list_repositories(project.id) == []
+    end
+  end
+
+  describe "change_project/2" do
+    test "rejects negative budgets" do
+      changeset = Projects.change_project(%Project{}, %{name: "x", budget_limit_cents: -1})
+
+      assert %{budget_limit_cents: _} = errors_on(changeset)
     end
   end
 end

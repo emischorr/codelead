@@ -201,15 +201,20 @@ defmodule CodeLead.TasksTest do
     test "approve moves to done; archive hides from the board", %{task: task} do
       assert {:ok, task} = Tasks.approve(task)
       assert task.state == :done
+      assert task.completed_at
+      completed_at = task.completed_at
 
       assert {:ok, task} = Tasks.archive(task)
       assert task.archived_at
+      # Archiving hides the card; it does not un-do the completion.
+      assert task.completed_at == completed_at
 
       board = Tasks.board(task.project_id)
       assert board.done == []
 
       assert {:ok, task} = Tasks.unarchive(task)
       assert task.archived_at == nil
+      assert task.completed_at == completed_at
       assert [%{id: id}] = Tasks.board(task.project_id).done
       assert id == task.id
     end

@@ -83,11 +83,17 @@ defmodule CodeLeadWeb.CoreComponents do
 
       <.button>Send!</.button>
       <.button phx-click="go" variant="primary">Send!</.button>
+      <.button variant="primary" full>Save</.button>
       <.button navigate={~p"/"}>Home</.button>
+      <.button variant="primary" class="w-full sm:w-auto">Save</.button>
+
+  `class` is additive — it is appended to the base and variant classes, not a
+  replacement for them.
   """
   attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any
+  attr :class, :any, default: nil, doc: "extra classes appended to the base and variant classes"
   attr :variant, :string, values: ~w(primary ghost danger)
+  attr :full, :boolean, default: false, doc: "stretch to the width of the container"
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
@@ -99,24 +105,23 @@ defmodule CodeLeadWeb.CoreComponents do
     }
 
     assigns =
-      assign_new(assigns, :class, fn ->
-        [
-          "inline-flex cursor-pointer items-center justify-center gap-2 rounded-[10px]",
-          "px-3.5 py-2 text-[13px] font-semibold transition-colors",
-          "disabled:cursor-not-allowed disabled:opacity-50",
-          Map.fetch!(variants, assigns[:variant])
-        ]
-      end)
+      assign(assigns, :base_class, [
+        "inline-flex cursor-pointer items-center justify-center gap-2 rounded-[10px]",
+        "px-3.5 py-2 text-[13px] font-semibold transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        assigns.full && "w-full",
+        Map.fetch!(variants, assigns[:variant])
+      ])
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
       ~H"""
-      <.link class={@class} {@rest}>
+      <.link class={[@base_class, @class]} {@rest}>
         {render_slot(@inner_block)}
       </.link>
       """
     else
       ~H"""
-      <button class={@class} {@rest}>
+      <button class={[@base_class, @class]} {@rest}>
         {render_slot(@inner_block)}
       </button>
       """

@@ -20,6 +20,12 @@ defmodule CodeLead.Executor do
   @callback provision(task :: Task.t()) :: {:ok, Context.t()} | {:error, term()}
 
   @doc """
+  Whether the executor could run `command` — checked before provisioning
+  so a missing harness fails the run before a repository is cloned.
+  """
+  @callback available?(command :: [String.t()]) :: :ok | {:error, term()}
+
+  @doc """
   Spawns an OS process inside the context with the project env
   injected, returning the connected port.
   """

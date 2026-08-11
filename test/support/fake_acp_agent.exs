@@ -3,6 +3,7 @@
 # scenario comes from argv:
 #
 #   elixir fake_acp_agent.exs happy        # chunks + tool_call + usage result
+#   elixir fake_acp_agent.exs tool_updates # one tool call across three status updates
 #   elixir fake_acp_agent.exs writes_file  # asks the client to write hello.txt
 #   elixir fake_acp_agent.exs permission   # escalating permission request (outside path)
 #   elixir fake_acp_agent.exs terminal     # runs `echo hi` through the client terminal
@@ -81,10 +82,67 @@ defmodule FakeAcpAgent do
 
     chunk(session_id, "Done.")
 
+    # Money arrives mid-run as a cumulative session total, tokens only
+    # at the end — and both in ACP's camelCase spelling.
+    notify("session/update", %{
+      sessionId: session_id,
+      update: %{
+        sessionUpdate: "usage_update",
+        used: 340,
+        size: 200_000,
+        cost: %{amount: 0.42, currency: "USD"}
+      }
+    })
+
+    respond(id, %{
+      stopReason: "end_turn",
+      usage: %{
+        totalTokens: 340,
+        inputTokens: 100,
+        outputTokens: 40,
+        cachedReadTokens: 180,
+        cachedWriteTokens: 20
+      }
+    })
+  end
+
+  # A harness that spells usage the Anthropic/OpenAI way and reports no
+  # money — the fallback path in `extract_usage/1`.
+  defp prompt("snake_usage", id, session_id) do
+    chunk(session_id, "Done.")
+
     respond(id, %{
       stopReason: "end_turn",
       usage: %{input_tokens: 100, output_tokens: 40}
     })
+  end
+
+  # One logical tool call announced across three updates, the way a real
+  # harness does it: only the first carries a title.
+  defp prompt("tool_updates", id, session_id) do
+    tool_update(session_id, %{
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-1",
+      title: "Write lib/foo.ex",
+      kind: "edit",
+      status: "pending",
+      locations: [%{path: "lib/foo.ex"}],
+      rawInput: %{path: "lib/foo.ex", timeout: 120_000}
+    })
+
+    tool_update(session_id, %{
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc-1",
+      status: "in_progress"
+    })
+
+    tool_update(session_id, %{
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc-1",
+      status: "completed"
+    })
+
+    respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
   end
 
   defp prompt("writes_file", id, session_id) do
@@ -156,6 +214,10 @@ defmodule FakeAcpAgent do
       sessionId: session_id,
       update: %{sessionUpdate: "agent_message_chunk", content: %{type: "text", text: text}}
     })
+  end
+
+  defp tool_update(session_id, update) do
+    notify("session/update", %{sessionId: session_id, update: update})
   end
 
   defp respond(id, result) do

@@ -6,9 +6,13 @@ defmodule CodeLeadWeb.TaskLive do
   """
   use CodeLeadWeb, :live_view
 
+  require Logger
+
+  alias CodeLead.AgentFeed
   alias CodeLead.Agents
   alias CodeLead.Costs
   alias CodeLead.Git
+  alias CodeLead.Git.DiffFile
   alias CodeLead.Planning
   alias CodeLead.Projects
   alias CodeLead.Reviews
@@ -16,13 +20,21 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLead.Workspace
+  alias CodeLeadWeb.DiffComponents
   alias CodeLeadWeb.FlashMessages
+  alias CodeLeadWeb.NavContext
+  alias CodeLeadWeb.TaskLive.AgentFeedBlocks
   alias CodeLeadWeb.TaskLive.AgentTab
   alias CodeLeadWeb.TaskLive.DiffTab
   alias CodeLeadWeb.TaskLive.TaskTab
   alias CodeLeadWeb.TaskLive.TerminalTab
 
   @tabs [:task, :agent, :diff, :terminal]
+
+  # Trailing-edge debounce: a burst of tool calls collapses into one
+  # `git diff`. Below ~1s it stops coalescing — ACP harnesses emit both a
+  # tool_call and a tool_call_update per call.
+  @diff_refresh_ms 1_500
 
   @impl true
   def mount(%{"project_id" => project_id, "id" => id}, _session, socket) do
@@ -38,21 +50,30 @@ defmodule CodeLeadWeb.TaskLive do
       socket
       |> assign(
         project: project,
-        projects: Projects.list_projects(),
         task: task,
-        current_message: nil,
+        live_message: nil,
+        feed_blocks: [],
+        all_runs?: false,
         chat_pending?: false,
         show_feedback?: false,
         diff_files: nil,
         diff_stats: nil,
         diff_error: nil,
         diff_loading?: false,
-        folder_artifact: nil
+        diff_expanded: MapSet.new(),
+        diff_stale?: false,
+        diff_refresh_timer: nil,
+        following?: false,
+        follow_path: nil,
+        follow_anchor: nil,
+        folder_artifact: nil,
+        live_usage: nil,
+        tick_timer: nil,
+        now: DateTime.utc_now()
       )
       |> load_task()
-      |> stream_configure(:events, dom_id: & &1.id)
-      |> stream(:events, [])
-      |> seed_history()
+      |> stream_configure(:feed, dom_id: &"agent-block-#{&1.id}")
+      |> load_feed()
 
     {:ok, socket}
   end
@@ -60,9 +81,18 @@ defmodule CodeLeadWeb.TaskLive do
   @impl true
   def handle_params(params, _uri, socket) do
     tab = parse_tab(params["tab"], socket.assigns.task)
+    entering_diff? = tab == :diff and Map.get(socket.assigns, :tab) != :diff
 
     socket = assign(socket, tab: tab)
-    socket = if tab == :diff, do: maybe_load_diff(socket), else: socket
+    socket = if tab == :diff, do: enter_diff(socket, entering_diff?), else: socket
+
+    # LiveView prunes stream inserts after every render, whether or not
+    # the container was on screen, so the feed has to be re-streamed from
+    # the server-side copy each time the tab comes back into view.
+    socket =
+      if tab == :agent,
+        do: stream(socket, :feed, socket.assigns.feed_blocks, reset: true),
+        else: socket
 
     {:noreply, socket}
   end
@@ -123,6 +153,49 @@ defmodule CodeLeadWeb.TaskLive do
 
   def handle_event("archive", _params, socket) do
     socket.assigns.task |> Tasks.archive() |> after_action(socket)
+  end
+
+  ## Agent feed
+
+  def handle_event("toggle_block", %{"id" => id}, socket) do
+    {blocks, block} = AgentFeedBlocks.toggle(socket.assigns.feed_blocks, String.to_integer(id))
+    socket = assign(socket, feed_blocks: blocks)
+
+    {:noreply, if(block, do: stream_insert(socket, :feed, block), else: socket)}
+  end
+
+  def handle_event("show_earlier_runs", _params, socket) do
+    {:noreply, socket |> assign(all_runs?: true) |> load_feed()}
+  end
+
+  ## Diff
+
+  def handle_event("toggle_file", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> assign(diff_expanded: toggle_path(socket.assigns.diff_expanded, path))
+     |> unfollow()}
+  end
+
+  def handle_event("focus_file", %{"path" => path}, socket) do
+    {:noreply, socket |> unfollow() |> focus_path(path)}
+  end
+
+  def handle_event("follow_agent", _params, socket) do
+    socket = assign(socket, following?: true)
+
+    case socket.assigns.follow_path do
+      nil -> {:noreply, socket}
+      path -> {:noreply, socket |> assign(follow_anchor: path) |> focus_path(path)}
+    end
+  end
+
+  def handle_event("diff_unfollow", _params, socket) do
+    {:noreply, unfollow(socket)}
+  end
+
+  def handle_event("refresh_diff", _params, socket) do
+    {:noreply, start_diff_load(socket)}
   end
 
   ## Planning: edits, executor/reviewers, chat
@@ -202,28 +275,62 @@ defmodule CodeLeadWeb.TaskLive do
      |> put_flash(:error, "Assistant call crashed: #{inspect(reason)}")}
   end
 
-  def handle_async(:load_diff, {:ok, result}, socket) do
-    socket = assign(socket, diff_loading?: false)
+  def handle_async(:load_diff, {:ok, {:ok, files, stats}}, socket) do
+    %{diff_files: previous, diff_expanded: expanded} = socket.assigns
 
-    case result do
-      {:ok, files, stats} ->
-        {:noreply, assign(socket, diff_files: files, diff_stats: stats, diff_error: nil)}
+    socket =
+      socket
+      |> assign(
+        diff_loading?: false,
+        diff_error: nil,
+        diff_files: files,
+        diff_stats: stats,
+        diff_expanded: merge_expanded(previous, expanded, files)
+      )
+      |> apply_follow(files)
+      |> schedule_diff_refresh()
 
-      {:error, reason} ->
-        {:noreply, assign(socket, diff_error: "git diff failed: #{inspect(reason)}")}
-    end
+    {:noreply, socket}
+  end
+
+  def handle_async(:load_diff, {:ok, {:error, reason}}, socket) do
+    {:noreply, socket |> assign(diff_loading?: false) |> diff_failed("git diff failed", reason)}
   end
 
   def handle_async(:load_diff, {:exit, reason}, socket) do
     {:noreply,
-     assign(socket, diff_loading?: false, diff_error: "diff crashed: #{inspect(reason)}")}
+     socket |> assign(diff_loading?: false) |> diff_failed("diff crashed", inspect(reason))}
   end
 
   ## PubSub
 
   @impl true
+  def handle_info({:agent_feed, _task_id, row}, socket) do
+    changed? = AgentFeed.file_changing?(row.kind, row.data["tool_kind"])
+
+    {:noreply,
+     socket
+     |> apply_feed_row(row)
+     |> track_follow_path(row)
+     |> maybe_mark_diff_stale(changed?)}
+  end
+
   def handle_info({:task_event, _task_id, event}, socket) do
-    {:noreply, socket |> ingest_event(event) |> maybe_reload(event)}
+    state_bearing? = state_bearing?(event)
+
+    {:noreply,
+     socket
+     |> ingest_event(event)
+     |> maybe_reload(state_bearing?)
+     |> maybe_mark_diff_stale(state_bearing?)}
+  end
+
+  def handle_info(:tick, socket) do
+    {:noreply, reschedule_tick(socket)}
+  end
+
+  def handle_info(:refresh_diff, socket) do
+    {:noreply, socket |> assign(diff_refresh_timer: nil) |> refresh_diff()}
   end
 
   def handle_info({:board_changed, _project_id, task_id}, socket) do
@@ -245,33 +352,112 @@ defmodule CodeLeadWeb.TaskLive do
 
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
     agents = Map.new(Agents.list_agents(project.id), &{&1.id, &1})
+    steps = Tasks.steps(task.id)
+    runs = Costs.task_runs(task.id)
 
-    assign(socket,
+    socket
+    |> assign(
       task: task,
       page_title: task.title,
       repository: repository,
       executor: task.agent_id && agents[task.agent_id],
       agents: agents,
-      steps: Tasks.steps(task.id),
+      steps: steps,
+      run_started_at: last_run_started_at(steps),
       reviewers: Tasks.reviewers(task.id),
       reviews: Reviews.list_reviews(task.id),
       task_spend: Costs.task_spend(task.id),
-      runs: Costs.task_runs(task.id),
+      task_duration_ms: Costs.task_duration_ms(task.id),
+      cost_mode: runs |> Enum.map(& &1.provider_kind) |> Agents.billing_mode(),
+      runs: runs,
       messages: Planning.list_messages(task.id),
       assistant_agent: assistant_agent(project.id),
       eligible_executors:
         (planning? && Agents.eligible_executors(task.work_type, project.id)) || [],
       eligible_reviewers:
         (planning? && Agents.eligible_reviewers(task.work_type, project.id)) || [],
-      edit_form: to_form(Task.planning_changeset(task, %{})),
-      attention_count: length(Tasks.attention_tasks(project.id)),
-      project_spend: Costs.project_spend(project.id)
+      edit_form: to_form(Task.planning_changeset(task, %{}))
     )
+    |> NavContext.put_stats(
+      length(Tasks.attention_tasks(project.id)),
+      Costs.project_spend(project.id)
+    )
+    |> drop_stale_live_usage()
+    |> reschedule_tick()
+  end
+
+  # Once the run's own `agent_runs` row exists, `task_spend` already
+  # counts it — keeping the snapshot would double the money on screen.
+  defp drop_stale_live_usage(socket) do
+    if executing?(socket.assigns.task),
+      do: socket,
+      else: assign(socket, live_usage: nil)
+  end
+
+  # A run's start is already on the timeline; no need to plumb it
+  # through the event stream just to drive the elapsed counter.
+  defp last_run_started_at(steps) do
+    steps
+    |> Enum.filter(&(&1.kind == :run))
+    |> List.last()
+    |> case do
+      nil -> nil
+      step -> step.inserted_at
+    end
   end
 
   defp assistant_agent(project_id) do
     project_id |> Agents.list_agents() |> Enum.find(&(&1.driver == :llm_api))
   end
+
+  ## Elapsed counter
+
+  defp reschedule_tick(socket) do
+    if timer = socket.assigns[:tick_timer], do: Process.cancel_timer(timer)
+
+    timer =
+      if connected?(socket) and executing?(socket.assigns.task),
+        do: Process.send_after(self(), :tick, 1_000)
+
+    socket
+    |> assign(tick_timer: timer, now: DateTime.utc_now())
+    |> put_task_stat()
+  end
+
+  # The single stat the header, Agent tab and Cost card all render:
+  # everything already recorded, plus whatever the run in flight has
+  # reported so far.
+  defp put_task_stat(socket) do
+    %{task_spend: spend, task_duration_ms: duration, live_usage: live, task: task} =
+      socket.assigns
+
+    assign(socket, :task_stat, %{
+      cost_cents: spend.cost_cents + live_cost_cents(live),
+      tokens: spend.tokens,
+      duration_ms:
+        duration +
+          live_elapsed_ms(socket.assigns.run_started_at, task.run_state, socket.assigns.now),
+      cost_mode: socket.assigns.cost_mode
+    })
+  end
+
+  # Wall-clock elapsed for the run in flight. The persisted `duration_ms`
+  # takes over the moment the run lands.
+  defp live_elapsed_ms(nil, _run_state, _now), do: 0
+
+  defp live_elapsed_ms(started_at, :executing, now),
+    do: max(DateTime.diff(now, started_at, :millisecond), 0)
+
+  defp live_elapsed_ms(_started_at, _run_state, _now), do: 0
+
+  defp live_cost_cents(%{cost_cents: cents}) when is_integer(cents), do: cents
+  defp live_cost_cents(_live_usage), do: 0
+
+  defp cost_mode_hint(:estimated),
+    do: "Subscription run — API-equivalent estimate, not money billed"
+
+  defp cost_mode_hint(:free), do: "Locally hosted model — no per-token cost"
+  defp cost_mode_hint(_mode), do: nil
 
   defp parse_tab(param, task) do
     case Enum.find(@tabs, &(Atom.to_string(&1) == param)) do
@@ -285,9 +471,29 @@ defmodule CodeLeadWeb.TaskLive do
   defp default_tab(:review), do: :diff
   defp default_tab(_state), do: :task
 
-  defp maybe_load_diff(%{assigns: %{task: task}} = socket) do
+  # Entering the tab always collapses back to the first file, and picks
+  # up anything that went stale while another tab was on screen.
+  defp enter_diff(socket, entering?) do
+    socket
+    |> then(&if entering?, do: reset_diff_view(&1), else: &1)
+    |> then(
+      &if &1.assigns.diff_files == nil or &1.assigns.diff_stale?,
+        do: start_diff_load(&1),
+        else: &1
+    )
+  end
+
+  defp reset_diff_view(socket) do
+    assign(socket,
+      following?: false,
+      follow_anchor: nil,
+      diff_expanded: initial_expanded(socket.assigns.diff_files)
+    )
+  end
+
+  defp start_diff_load(%{assigns: %{task: task}} = socket) do
     cond do
-      socket.assigns.diff_loading? or socket.assigns.diff_files != nil ->
+      socket.assigns.diff_loading? ->
         socket
 
       task.target == :repo and is_binary(task.worktree_path) and socket.assigns.repository ->
@@ -295,16 +501,115 @@ defmodule CodeLeadWeb.TaskLive do
         base = socket.assigns.repository.default_branch
 
         socket
-        |> assign(diff_loading?: true, diff_error: nil)
+        |> assign(diff_loading?: true, diff_stale?: false)
         |> start_async(:load_diff, fn -> run_diff(worktree, base) end)
 
       task.target == :folder ->
-        assign(socket, folder_artifact: load_folder_artifact(task.id))
+        assign(socket,
+          diff_stale?: false,
+          folder_artifact: load_folder_artifact(task.id)
+        )
 
       true ->
         socket
     end
   end
+
+  defp maybe_mark_diff_stale(socket, false), do: socket
+
+  defp maybe_mark_diff_stale(socket, true) do
+    socket |> assign(diff_stale?: true) |> schedule_diff_refresh()
+  end
+
+  # Off the diff tab only the flag accumulates — `enter_diff/2` picks it
+  # up — so no git runs for a page nobody is looking at.
+  defp schedule_diff_refresh(
+         %{assigns: %{tab: :diff, diff_stale?: true, diff_refresh_timer: nil}} = socket
+       ) do
+    assign(socket,
+      diff_refresh_timer: Process.send_after(self(), :refresh_diff, @diff_refresh_ms)
+    )
+  end
+
+  defp schedule_diff_refresh(socket), do: socket
+
+  defp refresh_diff(%{assigns: %{tab: :diff, diff_stale?: true, diff_loading?: false}} = socket),
+    do: start_diff_load(socket)
+
+  defp refresh_diff(socket), do: socket
+
+  # A failed refresh must not blank a diff that is already on screen.
+  defp diff_failed(%{assigns: %{diff_files: nil}} = socket, label, reason) do
+    assign(socket, diff_error: "#{label}: #{reason}")
+  end
+
+  defp diff_failed(socket, label, reason) do
+    Logger.debug("#{label} on task #{socket.assigns.task.id}: #{reason}")
+    socket
+  end
+
+  defp merge_expanded(nil, _expanded, files), do: initial_expanded(files)
+
+  defp merge_expanded(_previous, expanded, files) do
+    MapSet.intersection(expanded, MapSet.new(files, &DiffFile.path/1))
+  end
+
+  defp initial_expanded([first | _rest]), do: MapSet.new([DiffFile.path(first)])
+  defp initial_expanded(_files), do: MapSet.new()
+
+  defp toggle_path(expanded, path) do
+    if MapSet.member?(expanded, path) do
+      MapSet.delete(expanded, path)
+    else
+      MapSet.put(expanded, path)
+    end
+  end
+
+  defp focus_path(socket, path) do
+    socket
+    |> assign(diff_expanded: MapSet.new([path]))
+    |> push_event("diff:scroll_to", %{id: DiffComponents.file_dom_id(path)})
+  end
+
+  ## Follow mode
+
+  # Tracked even while follow is off, so engaging it lands on the file
+  # the agent is working in right now.
+  defp track_follow_path(socket, %{data: %{"locations" => [_ | _] = locations}}) do
+    case worktree_relative(locations, socket.assigns.task.worktree_path) do
+      nil -> socket
+      path -> assign(socket, follow_path: path)
+    end
+  end
+
+  defp track_follow_path(socket, _row), do: socket
+
+  defp worktree_relative(_locations, nil), do: nil
+
+  defp worktree_relative(locations, worktree_path) do
+    root = Path.expand(worktree_path)
+
+    locations
+    |> Enum.map(&Path.relative_to(Path.expand(&1, root), root))
+    |> Enum.find(&(not String.starts_with?(&1, "/")))
+  end
+
+  # Scrolls only when the agent moves to a different file: re-anchoring on
+  # every refresh would yank the viewport back through ten edits of the
+  # same file.
+  defp apply_follow(%{assigns: %{following?: true, follow_path: path}} = socket, files)
+       when is_binary(path) do
+    if path != socket.assigns.follow_anchor and Enum.any?(files, &(DiffFile.path(&1) == path)) do
+      socket |> assign(follow_anchor: path) |> focus_path(path)
+    else
+      socket
+    end
+  end
+
+  defp apply_follow(socket, _files), do: socket
+
+  defp unfollow(%{assigns: %{following?: false}} = socket), do: socket
+  defp unfollow(socket), do: assign(socket, following?: false, follow_anchor: nil)
 
   defp run_diff(worktree, base_branch) do
     with {:ok, raw} <- Git.diff(worktree, base_branch) do
@@ -331,110 +636,69 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
-  ## Live event ingestion (Agent tab)
+  ## Agent feed
 
+  defp load_feed(%{assigns: %{task: task, all_runs?: all_runs?}} = socket) do
+    rows = if all_runs?, do: AgentFeed.list_all(task.id), else: AgentFeed.list_run(task.id)
+    executing? = executing?(task)
+    {rows, live_message} = split_live_message(rows, executing?)
+    blocks = AgentFeedBlocks.fold(rows, executing?)
+
+    socket
+    |> assign(feed_blocks: blocks, live_message: live_message)
+    |> stream(:feed, blocks, reset: true)
+  end
+
+  # The runner keeps rewriting the row it is streaming into, so it
+  # belongs in the live pane rather than the feed — but only while the
+  # run is alive, or a killed runner would strand it there.
+  defp split_live_message(rows, true) do
+    case List.last(rows) do
+      %{streaming: true} = row -> {Enum.drop(rows, -1), row}
+      _other -> {rows, nil}
+    end
+  end
+
+  defp split_live_message(rows, false), do: {rows, nil}
+
+  defp executing?(%Task{run_state: run_state}), do: run_state == :executing
+
+  defp apply_feed_row(socket, %{streaming: true} = row) do
+    assign(socket, live_message: row)
+  end
+
+  defp apply_feed_row(socket, row) do
+    {blocks, changed} = AgentFeedBlocks.apply_row(socket.assigns.feed_blocks, row)
+
+    live_message =
+      if live_message?(socket.assigns.live_message, row),
+        do: nil,
+        else: socket.assigns.live_message
+
+    socket = assign(socket, feed_blocks: blocks, live_message: live_message)
+    Enum.reduce(changed, socket, &stream_insert(&2, :feed, &1))
+  end
+
+  defp live_message?(%{id: id}, %{id: id}), do: true
+  defp live_message?(_live_message, _row), do: false
+
+  # Chunks arrive ahead of the row they accumulate into; the row's text
+  # is authoritative and replaces this the moment it lands.
   defp ingest_event(socket, {:message_chunk, text}) do
-    assign(socket, current_message: (socket.assigns.current_message || "") <> text)
+    case socket.assigns.live_message do
+      nil -> socket
+      row -> assign(socket, live_message: %{row | text: (row.text || "") <> text})
+    end
   end
 
-  defp ingest_event(socket, event) do
-    socket
-    |> flush_current_message()
-    |> stream_event(event)
+  # Advisory mid-run money. It is deliberately not state-bearing: it must
+  # not reload the task, and `load_task/1` drops it again once the run's
+  # own `agent_runs` row exists, so the two are never added together.
+  defp ingest_event(socket, {:usage, snapshot}) do
+    socket |> assign(live_usage: snapshot) |> put_task_stat()
   end
 
-  defp flush_current_message(%{assigns: %{current_message: nil}} = socket), do: socket
-
-  defp flush_current_message(%{assigns: %{current_message: text}} = socket) do
-    socket
-    |> assign(current_message: nil)
-    |> stream_insert(:events, event_entry(:message, "MSG", text))
-  end
-
-  defp stream_event(socket, {:run_started, agent_name}) do
-    stream_insert(socket, :events, event_entry(:system, "RUN", "#{agent_name} started"))
-  end
-
-  defp stream_event(socket, {:tool_call, detail}) do
-    text = tool_call_text(detail)
-    stream_insert(socket, :events, event_entry(:tool, "TOOL", text))
-  end
-
-  defp stream_event(socket, {:question, text}) do
-    stream_insert(socket, :events, event_entry(:question, "QUESTION", text))
-  end
-
-  defp stream_event(socket, {:permission_request, %{id: id, detail: detail}}) do
-    entry = event_entry(:permission, "PERMISSION", detail, %{ref: to_string(id)})
-    stream_insert(socket, :events, entry)
-  end
-
-  defp stream_event(socket, {:run_completed, result}) do
-    text = "success · #{Format.cost_tokens(usage_cents(result), usage_tokens(result))}"
-    stream_insert(socket, :events, event_entry(:result_ok, "RESULT", text))
-  end
-
-  defp stream_event(socket, {:run_failed, detail}) do
-    stream_insert(socket, :events, event_entry(:result_error, "RESULT", "failed · #{detail}"))
-  end
-
-  defp stream_event(socket, {:run_cancelled, _result}) do
-    stream_insert(socket, :events, event_entry(:system, "RESULT", "cancelled"))
-  end
-
-  defp stream_event(socket, {:review_completed, %{agent: agent, verdict: verdict}}) do
-    text = "#{agent} reviewed · #{verdict || "no verdict"}"
-    stream_insert(socket, :events, event_entry(:system, "REVIEW", text))
-  end
-
-  defp stream_event(socket, {:review_cycle_completed, cycle}) do
-    stream_insert(
-      socket,
-      :events,
-      event_entry(:system, "REVIEW", "review cycle #{cycle} finished")
-    )
-  end
-
-  defp stream_event(socket, _unknown), do: socket
-
-  defp tool_call_text(%{name: name, detail: detail}), do: "#{name} #{detail}"
-  defp tool_call_text(%{name: name}), do: to_string(name)
-  defp tool_call_text(other), do: inspect(other)
-
-  defp usage_tokens(%{usage: %{total_tokens: tokens}}), do: tokens
-  defp usage_tokens(_result), do: nil
-
-  defp usage_cents(%{usage: %{cost_cents: cents}}), do: cents
-  defp usage_cents(_result), do: nil
-
-  defp event_entry(kind, label, text, meta \\ %{}) do
-    %{
-      id: "evt-#{System.unique_integer([:positive, :monotonic])}",
-      kind: kind,
-      label: label,
-      text: text,
-      at: DateTime.utc_now(),
-      meta: meta
-    }
-  end
-
-  # Events aren't persisted; seed the feed with the audit trail so the
-  # Agent tab has history after a reload.
-  defp seed_history(socket) do
-    entries =
-      Enum.map(socket.assigns.steps, fn step ->
-        %{
-          id: "step-#{step.id}",
-          kind: :step,
-          label: step.kind |> Atom.to_string() |> String.upcase(),
-          text: step.summary,
-          at: step.inserted_at,
-          meta: %{executor_type: step.executor_type, executor_name: step.executor_name}
-        }
-      end)
-
-    stream(socket, :events, entries)
-  end
+  defp ingest_event(socket, _event), do: socket
 
   @state_bearing_events [
     :run_started,
@@ -447,12 +711,17 @@ defmodule CodeLeadWeb.TaskLive do
     :review_cycle_completed
   ]
 
-  defp maybe_reload(socket, event)
-       when is_tuple(event) and elem(event, 0) in @state_bearing_events do
-    load_task(socket)
-  end
+  defp state_bearing?(event) when is_tuple(event), do: elem(event, 0) in @state_bearing_events
+  defp state_bearing?(_event), do: false
 
-  defp maybe_reload(socket, _event), do: socket
+  defp maybe_reload(socket, false), do: socket
+
+  defp maybe_reload(socket, true) do
+    socket = load_task(socket)
+
+    # Nothing left to follow once the agent stops writing.
+    if executing?(socket.assigns.task), do: socket, else: unfollow(socket)
+  end
 
   defp after_action(result, socket) do
     case result do
@@ -474,15 +743,7 @@ defmodule CodeLeadWeb.TaskLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app
-      flash={@flash}
-      project={@project}
-      projects={@projects}
-      attention_count={@attention_count}
-      project_spend={@project_spend}
-      budget_limit_cents={@project.budget_limit_cents}
-      sidebar={:rail}
-    >
+    <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope} sidebar={:rail}>
       <header class="shrink-0 border-b border-border bg-surface">
         <div class="flex items-center gap-2.5 px-4 pt-3.5 sm:gap-3.5 sm:px-6">
           <Layouts.sidebar_toggle />
@@ -499,8 +760,11 @@ defmodule CodeLeadWeb.TaskLive do
           <.state_badge state={@task.state} run_state={@task.run_state} />
           <.agent_pill :if={@executor} name={@executor.name} harness={@executor.harness} />
           <.cost_stat
-            cost_cents={@task_spend.cost_cents}
-            tokens={@task_spend.tokens}
+            cost_cents={@task_stat.cost_cents}
+            tokens={@task_stat.tokens}
+            duration_ms={@task_stat.duration_ms}
+            cost_mode={@task_stat.cost_mode}
+            title={cost_mode_hint(@task_stat.cost_mode)}
             class="hidden md:inline"
           />
           <div class="flex-1" />
@@ -521,7 +785,7 @@ defmodule CodeLeadWeb.TaskLive do
           reviewers={@reviewers}
           reviews={@reviews}
           runs={@runs}
-          task_spend={@task_spend}
+          task_stat={@task_stat}
           messages={@messages}
           assistant_agent={@assistant_agent}
           chat_pending?={@chat_pending?}
@@ -534,9 +798,11 @@ defmodule CodeLeadWeb.TaskLive do
         <AgentTab.agent_tab
           :if={@tab == :agent}
           task={@task}
-          events={@streams.events}
-          current_message={@current_message}
-          task_spend={@task_spend}
+          blocks={@streams.feed}
+          live_message={@live_message}
+          executing?={@task.run_state == :executing}
+          all_runs?={@all_runs?}
+          task_stat={@task_stat}
         />
         <DiffTab.diff_tab
           :if={@tab == :diff}
@@ -546,6 +812,9 @@ defmodule CodeLeadWeb.TaskLive do
           diff_stats={@diff_stats}
           diff_error={@diff_error}
           diff_loading?={@diff_loading?}
+          expanded={@diff_expanded}
+          following?={@following?}
+          executing?={@task.run_state == :executing}
           folder_artifact={@folder_artifact}
         />
         <TerminalTab.terminal_tab :if={@tab == :terminal} task={@task} />
@@ -619,7 +888,7 @@ defmodule CodeLeadWeb.TaskLive do
       variant="ghost"
       phx-click="send_back"
       id={action_id("send-back", @mobile)}
-      class={@mobile && "hidden"}
+      class={@mobile && "hidden!"}
     >
       Send back
     </.button>

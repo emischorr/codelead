@@ -4,4 +4,14 @@ _build/
 deps/
 docker/
 docs/
-node_module/
+node_modules/
+
+# Local CodeLead-managed state: real clones, worktrees and task folders.
+workspace/
+tmp/
+
+# Rebuilt inside the image by `mix assets.deploy`.
+priv/static/assets/
+
+test/
+erl_crash.dump

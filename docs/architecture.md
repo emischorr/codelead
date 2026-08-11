@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-10)
+# Architecture overview (last updated: 2026-08-11)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -13,6 +13,7 @@ note is the "how it works today" map.
 | `CodeLead.Agents` | providers (encrypted config), agent personas, eligibility rules, default reviewers, provider env for harnesses |
 | `CodeLead.Tasks` | the task state machine (spec §4), task steps, task reviewers, attention, board queries |
 | `CodeLead.Planning` | planning-assistant chat (`planning_messages`) |
+| `CodeLead.AgentFeed` | the executor transcript (`agent_events`) behind the Agent tab — see [ADR-0002](adr/0002-persist-agent-transcript.md); **not in the architecture spec's data model**, a deliberate addition |
 | `CodeLead.Reviews` | review cycles, fan-out, advisory verdicts |
 | `CodeLead.Costs` | agent_runs, daily_metrics rollup (Oban), pricing, budget gate |
 
@@ -30,10 +31,13 @@ note is the "how it works today" map.
   request_changes, send_back_to_planning, approve, permissions, queue
   kick). The LiveViews call these.
 - `CodeLead.Runtime.TaskRunner` — one GenServer per active run
-  (DynamicSupervisor + Registry), consumes driver events, broadcasts
-  task events on `task:<id>`, records usage/audit. Board
-  notifications (`project:<id>` → `:board_changed`) come from
-  `CodeLead.Tasks` on every task write.
+  (DynamicSupervisor + Registry), consumes driver events, persists the
+  transcript through `CodeLead.AgentFeed` (which broadcasts
+  `{:agent_feed, task_id, row}`), broadcasts task events on
+  `task:<id>`, records usage/audit. It is the single writer of a task's
+  transcript, so tool-call correlation and the open message row live in
+  its state rather than in SQL. Board notifications (`project:<id>` →
+  `:board_changed`) come from `CodeLead.Tasks` on every task write.
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.

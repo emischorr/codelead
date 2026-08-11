@@ -1,5 +1,8 @@
 import Config
 
+# Only in tests, remove the complexity from the password hashing algorithm
+config :bcrypt_elixir, :log_rounds, 1
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
@@ -28,6 +31,9 @@ config :code_lead, :llm_api_req_options, plug: {Req.Test, CodeLead.LlmApiStub}
 
 # In test we don't send emails
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Test
+
+# The wizard's forge-token check must not reach github.com from a test.
+config :code_lead, git_access_check: {CodeLead.GitHelpers, :check_access}
 
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false

@@ -112,19 +112,129 @@ defmodule CodeLeadWeb.UIComponents do
   end
 
   @doc """
-  Renders the mono cost/token stat, e.g. `$2.07 · 183.5k`.
+  Renders the mono run stat, e.g. `$2.07 · 183.5k · 2m 14s`.
+
+  `cost_mode` says how to read the money: `:exact` was billed,
+  `:estimated` is the API-equivalent of a subscription run, `:free`
+  is a local model. The caller resolves it — this component knows
+  nothing about providers.
   """
   attr :cost_cents, :integer, default: nil
   attr :tokens, :integer, default: nil
+  attr :duration_ms, :integer, default: nil
+  attr :cost_mode, :atom, default: :exact
+  attr :title, :string, default: nil
   attr :class, :any, default: nil
 
   def cost_stat(assigns) do
     ~H"""
-    <span class={["font-mono text-[11px] text-text3", @class]}>
-      {Format.cost_tokens(@cost_cents, @tokens)}
+    <span class={["font-mono text-[11px] text-text3", @class]} title={@title}>
+      {Format.run_stat(@cost_cents, @tokens, @duration_ms, @cost_mode)}
     </span>
     """
   end
+
+  @doc """
+  Renders a headline readout: a big number with its label, an icon chip,
+  and an optional detail line. `tone` colors the chip and the number.
+
+  The caller formats `value` — this component does no number formatting,
+  so the same tile carries counts, money, and durations.
+
+  ## Examples
+
+      <.stat_tile id="s" icon="hero-eye" label="Needs approval" value="4" tone={:warn} />
+  """
+  attr :id, :string, required: true
+  attr :icon, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :detail, :string, default: nil
+  attr :tone, :atom, default: :neutral, values: [:neutral, :accent, :run, :warn, :ok]
+  attr :navigate, :string, default: nil
+  slot :meter
+
+  def stat_tile(%{navigate: nil} = assigns) do
+    ~H"""
+    <div id={@id} class="rounded-[14px] border border-border bg-surface p-4">
+      <.stat_tile_body {assigns} />
+    </div>
+    """
+  end
+
+  def stat_tile(assigns) do
+    ~H"""
+    <.link
+      id={@id}
+      navigate={@navigate}
+      class="block rounded-[14px] border border-border bg-surface p-4 transition-colors hover:border-accent"
+    >
+      <.stat_tile_body {assigns} />
+    </.link>
+    """
+  end
+
+  defp stat_tile_body(assigns) do
+    ~H"""
+    <div class="flex items-start gap-3">
+      <span class={[
+        "flex size-9 shrink-0 items-center justify-center rounded-[10px]",
+        tone_chip(@tone)
+      ]}>
+        <.icon name={@icon} class="size-[18px]" />
+      </span>
+      <div class="min-w-0 flex-1">
+        <span class="block text-[11px] font-semibold uppercase tracking-wider text-text3">
+          {@label}
+        </span>
+        <span class={["mt-1 block font-mono text-[22px] font-semibold leading-none", tone_text(@tone)]}>
+          {@value}
+        </span>
+        <span :if={@detail} class="mt-1.5 block truncate text-[11.5px] text-text3">{@detail}</span>
+      </div>
+    </div>
+    {render_slot(@meter)}
+    """
+  end
+
+  defp tone_chip(:neutral), do: "bg-surface2 text-text2"
+  defp tone_chip(:accent), do: "bg-accent-soft text-accent"
+  defp tone_chip(:run), do: "bg-run-soft text-run"
+  defp tone_chip(:warn), do: "bg-warn-soft text-warn"
+  defp tone_chip(:ok), do: "bg-ok-soft text-ok"
+
+  defp tone_text(:neutral), do: "text-text"
+  defp tone_text(:accent), do: "text-accent"
+  defp tone_text(:run), do: "text-run"
+  defp tone_text(:warn), do: "text-warn"
+  defp tone_text(:ok), do: "text-ok"
+
+  @doc """
+  Renders a progress bar for a value against a limit. Renders nothing
+  without a limit — a bar with no ceiling would imply one.
+  """
+  attr :value, :integer, required: true
+  attr :max, :integer, default: nil
+  attr :tone, :atom, default: :accent, values: [:accent, :run, :warn, :ok]
+  attr :class, :any, default: nil
+
+  def meter(assigns) do
+    ~H"""
+    <div :if={@max && @max > 0} class={["h-1 rounded-full bg-border", @class]}>
+      <div
+        class={["h-1 rounded-full", meter_fill(@tone)]}
+        style={"width: #{meter_percent(@value, @max)}%"}
+      />
+    </div>
+    """
+  end
+
+  defp meter_fill(:accent), do: "bg-accent"
+  defp meter_fill(:run), do: "bg-run"
+  defp meter_fill(:warn), do: "bg-warn"
+  defp meter_fill(:ok), do: "bg-ok"
+
+  defp meter_percent(value, max), do: min(100, round(value / max * 100))
 
   @doc """
   Renders a surface card with an optional uppercase section label.
@@ -187,15 +297,76 @@ defmodule CodeLeadWeb.UIComponents do
   defp attention_title(_), do: "Needs attention"
 
   @doc """
+  Renders a relative timestamp that reveals the full time on hover.
+
+  The `title` is rendered server-side in UTC so it works without
+  JavaScript; the `.LocalTime` hook rewrites it to the viewer's zone.
+  """
+  attr :id, :string, required: true
+  attr :at, :any, default: nil
+
+  def timestamp(assigns) do
+    ~H"""
+    <span
+      id={@id}
+      class="shrink-0 cursor-help font-mono text-[11px] text-text3"
+      phx-hook=".LocalTime"
+      data-at={Format.iso8601(@at)}
+      title={Format.absolute(@at)}
+    >
+      {Format.relative(@at)}
+    </span>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
+      const FMT = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"})
+
+      // The server-rendered UTC title is the no-JS fallback, and morphdom puts
+      // it back on every patch — so updated() has to re-localize, not just mounted().
+      export default {
+        mounted() { this.localize() },
+        updated() { this.localize() },
+        localize() {
+          const at = this.el.dataset.at
+          if (!at) { return }
+          const parsed = new Date(at)
+          if (!isNaN(parsed)) { this.el.setAttribute("title", FMT.format(parsed)) }
+        }
+      }
+    </script>
+    """
+  end
+
+  @doc """
+  Renders the node that opens a timeline — the task's creation. Styled
+  apart from the entries below it so the oldest-first order is legible
+  at a glance.
+  """
+  attr :id, :string, required: true
+  attr :at, :any, default: nil
+
+  def timeline_start(assigns) do
+    ~H"""
+    <li id={@id} class="group relative flex gap-3 pb-3 last:pb-0">
+      <.timeline_rail />
+      <span class="mt-1.5 size-2.5 shrink-0 rounded-full bg-accent ring-4 ring-accent-soft" />
+      <span class="min-w-0 flex-1 text-[13px] font-medium text-text">Task created</span>
+      <.timestamp id={@id <> "-time"} at={@at} />
+    </li>
+    """
+  end
+
+  @doc """
   Renders one audit-trail entry with the HUMAN/AGENT/SYSTEM chip.
   """
+  attr :id, :string, required: true
   attr :executor_type, :atom, required: true, doc: ":human | :agent | :system"
   attr :summary, :string, required: true
   attr :at, :any, default: nil
 
   def timeline_entry(assigns) do
     ~H"""
-    <div class="flex items-center gap-3">
+    <li id={@id} class="group relative flex gap-3 pb-3 last:pb-0">
+      <.timeline_rail />
+      <span class="mt-1.5 size-2.5 shrink-0 rounded-full border border-border bg-surface" />
       <span class={[
         "w-[58px] shrink-0 rounded-md py-0.5 text-center text-[10px] font-bold tracking-wide",
         executor_chip(@executor_type)
@@ -203,8 +374,17 @@ defmodule CodeLeadWeb.UIComponents do
         {@executor_type |> Atom.to_string() |> String.upcase()}
       </span>
       <span class="min-w-0 flex-1 break-words text-[13px] text-text">{@summary}</span>
-      <span class="shrink-0 font-mono text-[11px] text-text3">{Format.relative(@at)}</span>
-    </div>
+      <.timestamp id={@id <> "-time"} at={@at} />
+    </li>
+    """
+  end
+
+  # The connector between two nodes. Positioned at half the 2.5 node width
+  # so it runs through their centers; `group-last:` drops the tail on the
+  # final row, which saves threading a `last?` flag through every entry.
+  defp timeline_rail(assigns) do
+    ~H"""
+    <span class="absolute bottom-0 left-[4.5px] top-4 w-px bg-border group-last:hidden" />
     """
   end
 
@@ -275,6 +455,8 @@ defmodule CodeLeadWeb.UIComponents do
   attr :harness, :atom, default: nil
   attr :cost_cents, :integer, default: nil
   attr :tokens, :integer, default: nil
+  attr :duration_ms, :integer, default: nil
+  attr :cost_mode, :atom, default: :exact
   attr :navigate, :string, required: true
   attr :warn, :boolean, default: false
   attr :muted, :boolean, default: false, doc: "slightly faded, for Done cards"
@@ -302,10 +484,29 @@ defmodule CodeLeadWeb.UIComponents do
       </div>
       <div class="flex flex-wrap items-center gap-1.5">
         <.agent_pill :if={@agent_name} name={@agent_name} harness={@harness} />
-        <.cost_stat cost_cents={@cost_cents} tokens={@tokens} />
+        <.cost_stat
+          cost_cents={@cost_cents}
+          tokens={@tokens}
+          duration_ms={@duration_ms}
+          cost_mode={@cost_mode}
+        />
       </div>
       <div :if={@footer != []}>{render_slot(@footer)}</div>
     </div>
+    """
+  end
+
+  @doc """
+  Renders markdown prose. The caller sets the base font size and color on
+  `class`; `.md` sizes everything else relative to it.
+  """
+  attr :text, :string, default: nil
+  attr :class, :any, default: nil
+  attr :rest, :global
+
+  def markdown(assigns) do
+    ~H"""
+    <div class={["md", @class]} {@rest}>{CodeLeadWeb.Markdown.to_html(@text)}</div>
     """
   end
 

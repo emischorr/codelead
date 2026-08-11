@@ -7,6 +7,10 @@ defmodule CodeLead.Tasks.Task do
   `:repo` = worktree + feature branch, `:folder` = task folder).
   `state` is the Kanban column; `run_state` tracks execution inside
   Running. `archived_at` is orthogonal to `state`.
+
+  `archived_at` and `completed_at` are set by the context alone — they
+  appear in no changeset, because a caller-supplied value would corrupt
+  the throughput readouts derived from them.
   """
 
   use Ecto.Schema
@@ -42,6 +46,7 @@ defmodule CodeLead.Tasks.Task do
     field :next_prompt, :string
     field :assignee_id, :id
     field :archived_at, :utc_datetime
+    field :completed_at, :utc_datetime
     field :parent_id, :id
 
     belongs_to :agent, Agent

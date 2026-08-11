@@ -6,14 +6,24 @@ defmodule CodeLeadWeb.DiffComponents do
   """
   use Phoenix.Component
 
+  import CodeLeadWeb.CoreComponents, only: [icon: 1]
+
   alias CodeLead.Git.DiffFile
 
   @doc """
-  Renders the changed-files sidebar list. Entries link to per-file
-  anchors inside the diff pane.
+  The DOM id of a file's diff card — the jump target. Base64 keeps it
+  injective: a slug would collapse `a/b.ex` and `a-b.ex` onto one id.
+  """
+  @spec file_dom_id(String.t()) :: String.t()
+  def file_dom_id(path), do: "diff-file-" <> Base.url_encode64(path, padding: false)
+
+  @doc """
+  Renders the changed-files sidebar list. Entries focus their file in
+  the diff pane; the expanded one is marked active.
   """
   attr :files, :list, required: true
   attr :stats, :map, required: true
+  attr :expanded, :any, required: true, doc: "MapSet of expanded file paths"
 
   def file_list(assigns) do
     ~H"""
@@ -27,10 +37,19 @@ defmodule CodeLeadWeb.DiffComponents do
           <span class="text-del-text">−{@stats.deletions}</span>
         </span>
       </div>
-      <a
+      <button
         :for={file <- @files}
-        href={"#diff-file-#{file_dom_id(file)}"}
-        class="flex items-center gap-2 rounded-[9px] px-2 py-1.5 hover:bg-surface2"
+        :key={DiffFile.path(file)}
+        type="button"
+        phx-click="focus_file"
+        phx-value-path={DiffFile.path(file)}
+        class={[
+          "flex w-full items-center gap-2 rounded-[9px] px-2 py-1.5 text-left transition-colors",
+          if(MapSet.member?(@expanded, DiffFile.path(file)),
+            do: "bg-surface2 text-text",
+            else: "hover:bg-surface2"
+          )
+        ]}
       >
         <span class="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text2">
           {DiffFile.path(file)}
@@ -39,23 +58,35 @@ defmodule CodeLeadWeb.DiffComponents do
           <span class="text-add-text">+{file.additions}</span>
           <span class="text-del-text">−{file.deletions}</span>
         </span>
-      </a>
+      </button>
     </div>
     """
   end
 
   @doc """
-  Renders one file's diff: sticky mono header plus hunk rows.
+  Renders one file's diff: a sticky mono header that toggles the body,
+  plus hunk rows. A collapsed file renders no rows at all.
   """
   attr :file, DiffFile, required: true
+  attr :expanded?, :boolean, default: false
 
   def file_diff(assigns) do
     ~H"""
     <div
-      id={"diff-file-#{file_dom_id(@file)}"}
+      id={file_dom_id(DiffFile.path(@file))}
       class="overflow-hidden rounded-xl border border-border"
     >
-      <div class="sticky top-0 z-10 flex items-center gap-2.5 border-b border-border bg-surface2 px-4 py-2.5">
+      <button
+        type="button"
+        phx-click="toggle_file"
+        phx-value-path={DiffFile.path(@file)}
+        aria-expanded={to_string(@expanded?)}
+        class="sticky top-0 z-10 flex w-full items-center gap-2.5 border-b border-border bg-surface2 px-4 py-2.5 text-left hover:bg-surface"
+      >
+        <.icon
+          name="hero-chevron-right"
+          class={["size-3.5 shrink-0 text-text3 transition-transform", @expanded? && "rotate-90"]}
+        />
         <span class="min-w-0 truncate font-mono text-xs font-semibold text-text">
           {DiffFile.path(@file)}
         </span>
@@ -65,17 +96,20 @@ defmodule CodeLeadWeb.DiffComponents do
         <span class="ml-auto shrink-0 font-mono text-[11px] text-text3">
           +{@file.additions} −{@file.deletions}
         </span>
-      </div>
-      <div :if={@file.binary?} class="bg-surface px-4 py-6 text-center text-xs text-text3">
+      </button>
+      <div
+        :if={@expanded? && @file.binary?}
+        class="bg-surface px-4 py-6 text-center text-xs text-text3"
+      >
         Binary file — no text diff.
       </div>
       <div
-        :if={@file.hunks == [] && !@file.binary?}
+        :if={@expanded? && @file.hunks == [] && !@file.binary?}
         class="bg-surface px-4 py-6 text-center text-xs text-text3"
       >
         No content changes.
       </div>
-      <div :if={@file.hunks != []} class="overflow-x-auto bg-surface">
+      <div :if={@expanded? && @file.hunks != []} class="overflow-x-auto bg-surface">
         <table class="w-full border-collapse font-mono text-xs leading-relaxed">
           <tbody>
             <%= for hunk <- @file.hunks do %>
@@ -115,8 +149,4 @@ defmodule CodeLeadWeb.DiffComponents do
   defp line_prefix(:add), do: "+"
   defp line_prefix(:del), do: "-"
   defp line_prefix(:ctx), do: " "
-
-  defp file_dom_id(file) do
-    file |> DiffFile.path() |> String.replace(~r/[^A-Za-z0-9_-]/, "-")
-  end
 end

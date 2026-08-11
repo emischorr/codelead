@@ -15,6 +15,8 @@ defmodule CodeLead.Agents do
   alias CodeLead.Agents.ProjectDefaultReviewer
   alias CodeLead.Agents.Provider
   alias CodeLead.Repo
+  alias CodeLead.Tasks.Task
+  alias CodeLead.Tasks.TaskReviewer
 
   ## Providers
 
@@ -45,6 +47,77 @@ defmodule CodeLead.Agents do
   def get_provider_by_name(name), do: Repo.get_by(Provider, name: name)
 
   @doc """
+  The `config` key under which a provider kind keeps its credential.
+  """
+  @spec credential_key(atom() | String.t()) :: String.t()
+  def credential_key(kind) when kind in [:ollama, "ollama"], do: "endpoint"
+
+  def credential_key(kind) when kind in [:anthropic_subscription, "anthropic_subscription"],
+    do: "oauth_token"
+
+  def credential_key(_kind), do: "api_key"
+
+  @doc """
+  Creates or updates a provider from a form. The credential is merged into the
+  stored config rather than replacing it, so a blank one keeps the stored
+  secret — the form never round-trips a credential to the browser.
+
+  A credential is required on create, and again when the kind changes, because
+  each kind reads a different config key and `provider_env/1` would otherwise
+  silently yield nothing.
+  """
+  @spec save_provider(Provider.t(), %{
+          name: String.t(),
+          kind: String.t(),
+          credential: String.t() | nil
+        }) :: {:ok, Provider.t()} | {:error, Ecto.Changeset.t()}
+  def save_provider(%Provider{} = provider, %{name: name, kind: kind, credential: credential}) do
+    credential = credential |> to_string() |> String.trim()
+    kind_changed? = not is_nil(provider.id) and to_string(kind) != to_string(provider.kind)
+    stored = provider.config || %{}
+
+    config =
+      if credential == "", do: stored, else: Map.put(stored, credential_key(kind), credential)
+
+    provider
+    |> Provider.changeset(%{name: name, kind: kind, config: config})
+    |> require_credential(credential == "", is_nil(provider.id), kind_changed?)
+    |> Repo.insert_or_update()
+  end
+
+  @doc """
+  Names of the agents bound to a provider. A non-empty list blocks deletion.
+  """
+  @spec provider_usage(pos_integer()) :: [String.t()]
+  def provider_usage(provider_id) do
+    Repo.all(
+      from a in Agent, where: a.provider_id == ^provider_id, order_by: a.name, select: a.name
+    )
+  end
+
+  @doc """
+  Deletes a provider unless an agent still points at it. Past `agent_runs`
+  keep their cost figures — their `provider_id` nilifies.
+  """
+  @spec delete_provider(Provider.t()) :: {:ok, Provider.t()} | {:error, {:in_use, [String.t()]}}
+  def delete_provider(%Provider{id: id} = provider) do
+    case provider_usage(id) do
+      [] -> Repo.delete(provider)
+      names -> {:error, {:in_use, names}}
+    end
+  end
+
+  defp require_credential(changeset, false, _new?, _kind_changed?), do: changeset
+
+  defp require_credential(changeset, true, true, _kind_changed?),
+    do: Ecto.Changeset.add_error(changeset, :config, "can't be blank")
+
+  defp require_credential(changeset, true, false, true),
+    do: Ecto.Changeset.add_error(changeset, :config, "is required when the backend changes")
+
+  defp require_credential(changeset, true, false, false), do: changeset
+
+  @doc """
   Environment variables an ACP harness subprocess needs to authenticate
   against the provider. Never log the result.
   """
@@ -58,6 +131,36 @@ defmodule CodeLead.Agents do
   end
 
   def provider_env(%Provider{}), do: []
+
+  @doc """
+  How a provider's reported cost should be read. Subscription runs are
+  billed by seat, so their dollar figure is an API-equivalent estimate;
+  a locally hosted model costs nothing. An unknown provider (the run's
+  provider row was deleted) is treated as exact — the recorded number
+  is all we have.
+
+  Accepts a list for work spanning several providers, where an estimate
+  anywhere makes the whole figure an estimate and only an all-local set
+  is free.
+  """
+  @spec billing_mode(atom() | String.t() | nil | [atom() | String.t()]) ::
+          :exact | :estimated | :free
+  def billing_mode(kinds) when is_list(kinds) do
+    modes = Enum.map(kinds, &billing_mode/1)
+
+    cond do
+      modes == [] -> :exact
+      Enum.all?(modes, &(&1 == :free)) -> :free
+      :estimated in modes -> :estimated
+      true -> :exact
+    end
+  end
+
+  def billing_mode(kind) when kind in [:anthropic_subscription, "anthropic_subscription"],
+    do: :estimated
+
+  def billing_mode(kind) when kind in [:ollama, "ollama"], do: :free
+  def billing_mode(_kind), do: :exact
 
   defp reject_missing(pairs) do
     Enum.reject(pairs, fn {_key, value} -> value in [nil, ""] end)
@@ -86,6 +189,58 @@ defmodule CodeLead.Agents do
 
   @spec get_agent!(pos_integer()) :: Agent.t()
   def get_agent!(id), do: Repo.get!(Agent, id)
+
+  @spec change_agent(Agent.t(), map()) :: Ecto.Changeset.t()
+  def change_agent(%Agent{} = agent, attrs \\ %{}), do: Agent.changeset(agent, attrs)
+
+  @doc """
+  Every org-scoped agent — the shared pool managed from Settings.
+  """
+  @spec list_org_agents() :: [Agent.t()]
+  def list_org_agents do
+    Repo.all(from a in Agent, where: a.scope == :org, order_by: a.name)
+  end
+
+  @doc """
+  Where an agent is still referenced. All-zero means it can be deleted.
+  """
+  @spec agent_usage(pos_integer()) :: %{
+          tasks: non_neg_integer(),
+          reviewer_slots: non_neg_integer(),
+          default_reviewer_slots: non_neg_integer()
+        }
+  def agent_usage(agent_id) do
+    %{
+      tasks: Repo.aggregate(from(t in Task, where: t.agent_id == ^agent_id), :count),
+      reviewer_slots:
+        Repo.aggregate(from(r in TaskReviewer, where: r.agent_id == ^agent_id), :count),
+      default_reviewer_slots:
+        Repo.aggregate(from(d in ProjectDefaultReviewer, where: d.agent_id == ^agent_id), :count)
+    }
+  end
+
+  @doc """
+  Deletes an agent unless a task, a reviewer slot, or a default reviewer set
+  still references it. The guard is load-bearing: those foreign keys nilify or
+  cascade, so an unguarded delete would quietly strip executors and reviewers
+  off existing tasks instead of failing.
+  """
+  @spec delete_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, {:in_use, map()}}
+  def delete_agent(%Agent{id: id} = agent) do
+    usage = agent_usage(id)
+
+    if usage.tasks == 0 and usage.reviewer_slots == 0 and usage.default_reviewer_slots == 0 do
+      Repo.delete(agent)
+    else
+      {:error, {:in_use, usage}}
+    end
+  end
+
+  @doc """
+  Whether the instance has any agent at all. Used by the setup wizard.
+  """
+  @spec any_agents?() :: boolean()
+  def any_agents?, do: Repo.exists?(Agent)
 
   @doc """
   All agents visible to a project: org-scoped plus the project's own.

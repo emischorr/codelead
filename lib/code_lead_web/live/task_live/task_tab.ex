@@ -6,6 +6,8 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   """
   use CodeLeadWeb, :html
 
+  alias CodeLead.Agents
+
   attr :task, :map, required: true
   attr :repository, :map, default: nil
   attr :executor, :map, default: nil
@@ -13,7 +15,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :reviewers, :list, required: true
   attr :reviews, :list, required: true
   attr :runs, :list, required: true
-  attr :task_spend, :map, required: true
+  attr :task_stat, :map, required: true
   attr :messages, :list, required: true
   attr :assistant_agent, :map, default: nil
   attr :chat_pending?, :boolean, default: false
@@ -69,15 +71,17 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         />
 
         <.section_card label="Timeline" id="timeline-card">
-          <div class="flex flex-col gap-3">
+          <ol class="flex flex-col">
+            <.timeline_start id="timeline-start" at={@task.inserted_at} />
             <.timeline_entry
               :for={step <- @steps}
+              id={"timeline-step-#{step.id}"}
               executor_type={step.executor_type}
               summary={step.summary}
               at={step.inserted_at}
             />
-            <p :if={@steps == []} class="text-[13px] text-text3">Nothing has happened yet.</p>
-          </div>
+          </ol>
+          <p :if={@steps == []} class="text-[13px] text-text3">Nothing else has happened yet.</p>
         </.section_card>
       </div>
 
@@ -90,7 +94,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
         />
-        <.cost_card runs={@runs} task_spend={@task_spend} />
+        <.cost_card runs={@runs} task_stat={@task_stat} />
       </div>
     </div>
     """
@@ -363,7 +367,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   defp verdict_text(verdict), do: to_string(verdict)
 
   attr :runs, :list, required: true
-  attr :task_spend, :map, required: true
+  attr :task_stat, :map, required: true
 
   defp cost_card(assigns) do
     ~H"""
@@ -372,21 +376,54 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         <div
           :for={run <- Enum.take(@runs, 8)}
           class="flex items-center justify-between gap-2 text-text2"
+          title={token_breakdown(run)}
         >
           <span class="min-w-0 flex-1 truncate">
             {run.agent_name || "run"} <span class={run_status_class(run.status)}>·</span>
           </span>
-          <span class="shrink-0">{Format.cost_tokens(run.cost_cents, run.total_tokens)}</span>
+          <span class="shrink-0">
+            {Format.run_stat(
+              run.cost_cents,
+              run.total_tokens,
+              run.duration_ms,
+              Agents.billing_mode(run.provider_kind)
+            )}
+          </span>
         </div>
         <p :if={@runs == []} class="font-sans text-[13px] text-text3">No runs yet.</p>
         <div :if={@runs != []} class="h-px bg-border" />
         <div class="flex items-center justify-between font-semibold text-text">
           <span>total</span>
-          <span>{Format.cost_tokens(@task_spend.cost_cents, @task_spend.tokens)}</span>
+          <span>
+            {Format.run_stat(
+              @task_stat.cost_cents,
+              @task_stat.tokens,
+              @task_stat.duration_ms,
+              @task_stat.cost_mode
+            )}
+          </span>
         </div>
       </div>
     </.section_card>
     """
+  end
+
+  # Hover detail: where a run's tokens actually went. Cache reads are
+  # usually the bulk of a coding run and are billed differently, so the
+  # single total on the row can look surprising without it.
+  defp token_breakdown(run) do
+    [
+      {"in", run.prompt_tokens},
+      {"out", run.completion_tokens},
+      {"cache read", run.cached_read_tokens},
+      {"cache write", run.cached_write_tokens},
+      {"reasoning", run.reasoning_tokens}
+    ]
+    |> Enum.reject(fn {_label, count} -> count in [nil, 0] end)
+    |> case do
+      [] -> nil
+      parts -> Enum.map_join(parts, ", ", fn {label, n} -> "#{label} #{Format.tokens(n)}" end)
+    end
   end
 
   defp run_status_class(:ok), do: "text-ok"

@@ -18,6 +18,25 @@ ARG DEBIAN_VERSION=trixie-20260112-slim
 ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
 
+# The ACP harness is a Node package and needs Node >= 22, which Debian
+# trixie does not ship. Take Node from the official image of the *same*
+# Debian release so the binary we copy into the runner matches its
+# glibc/libstdc++.
+ARG NODE_IMAGE="docker.io/node:22-trixie-slim"
+ARG CLAUDE_ACP_VERSION=0.66.0
+
+# Bundle the Claude Code ACP harness. This stage reads nothing from the
+# repo, so it caches independently of the application source.
+FROM ${NODE_IMAGE} AS harness
+
+ARG CLAUDE_ACP_VERSION
+
+# --prefix keeps npm itself out of what we copy: the package lands in
+# /opt/harness/lib/node_modules and is linked as
+# /opt/harness/bin/claude-agent-acp (a relative symlink, so COPY keeps it).
+RUN npm install -g --prefix /opt/harness --no-fund --no-audit \
+  "@agentclientprotocol/claude-agent-acp@${CLAUDE_ACP_VERSION}"
+
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
@@ -84,8 +103,22 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
+# Node plus the bundled ACP harness. libstdc++6 (installed above) is the
+# only shared library Node needs beyond libc. `#!/usr/bin/env node` in
+# the harness bin script resolves through PATH.
+COPY --from=harness /usr/local/bin/node /usr/local/bin/node
+COPY --from=harness /opt/harness /opt/harness
+ENV PATH="/opt/harness/bin:${PATH}"
+
 WORKDIR "/app"
 RUN chown nobody /app
+
+# Mutable state, kept out of the release directory. Mount a volume here:
+# `home` is where the agent harness writes its own config and session
+# state, `workspace` holds base clones, task worktrees and task folders.
+RUN mkdir -p /data/home /data/workspace && chown -R nobody /data
+ENV HOME=/data/home
+ENV WORKSPACE_ROOT=/data/workspace
 
 # set runner ENV
 ENV MIX_ENV="prod"

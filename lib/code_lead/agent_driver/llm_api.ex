@@ -15,6 +15,11 @@ defmodule CodeLead.AgentDriver.LlmApi do
   @receive_timeout 120_000
   @max_tokens 8192
 
+  # Nothing to launch — the provider is reached over HTTP, and a bad
+  # credential only shows up in the response.
+  @impl CodeLead.AgentDriver
+  def preflight(%Agent{}), do: :ok
+
   @impl CodeLead.AgentDriver
   def start_run(_task, %Agent{} = agent, _context, prompt) do
     provider = Agents.get_provider!(agent.provider_id)
@@ -132,7 +137,11 @@ defmodule CodeLead.AgentDriver.LlmApi do
       |> Enum.filter(&(&1["type"] == "text"))
       |> Enum.map_join("", & &1["text"])
 
-    {:ok, text, usage(usage["input_tokens"], usage["output_tokens"])}
+    {:ok, text,
+     usage(usage["input_tokens"], usage["output_tokens"],
+       cached_read: usage["cache_read_input_tokens"],
+       cached_write: usage["cache_creation_input_tokens"]
+     )}
   end
 
   defp parse_anthropic(body), do: {:error, {:unexpected_response, body}}
@@ -149,14 +158,19 @@ defmodule CodeLead.AgentDriver.LlmApi do
 
   defp parse_ollama(body), do: {:error, {:unexpected_response, body}}
 
-  defp usage(prompt_tokens, completion_tokens) do
+  defp usage(prompt_tokens, completion_tokens, opts \\ []) do
     prompt_tokens = prompt_tokens || 0
     completion_tokens = completion_tokens || 0
+    cached_read = opts[:cached_read] || 0
+    cached_write = opts[:cached_write] || 0
 
     %{
       prompt_tokens: prompt_tokens,
       completion_tokens: completion_tokens,
-      total_tokens: prompt_tokens + completion_tokens,
+      cached_read_tokens: cached_read,
+      cached_write_tokens: cached_write,
+      reasoning_tokens: 0,
+      total_tokens: prompt_tokens + completion_tokens + cached_read + cached_write,
       cost_cents: nil
     }
   end

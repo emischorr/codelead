@@ -38,6 +38,17 @@ defmodule CodeLead.Runtime.RunSupervisor do
     Registry.count(@registry)
   end
 
+  @doc """
+  The task ids that currently have a runner process. This is the truth
+  about *processes*, not about `run_state` — a task persisted as
+  `:executing` whose id is missing here has lost its runner. Node-local,
+  like the registry itself.
+  """
+  @spec active_task_ids() :: [pos_integer()]
+  def active_task_ids do
+    Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
   @spec via(pos_integer()) :: {:via, Registry, {module(), pos_integer()}}
   def via(task_id) do
     {:via, Registry, {@registry, task_id}}

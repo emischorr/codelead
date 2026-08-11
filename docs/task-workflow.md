@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-10)
+# Task workflow (last updated: 2026-08-11)
 
 Implementation of architecture spec §4 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -19,7 +19,7 @@ is orthogonal to `state`.
 | `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process |
 | `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session; feedback stored in `next_prompt` |
 | `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch |
-| `approve/1` | human | review | done, idle | finalizer (commit/push/PR or artifact) runs around this |
+| `approve/1` | human | review | done, idle | stamps `completed_at`; finalizer (commit/push/PR or artifact) runs around this |
 | `archive/1` / `unarchive/1` | human | done | (state unchanged) | sets/clears `archived_at`; board/list exclude archived |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 
@@ -32,6 +32,14 @@ Invalid from-states return `{:error, :invalid_state}`.
   prompt" must survive the async gap between `request_changes` and
   scheduler dispatch, so the feedback is persisted on the task and
   cleared on dispatch-from-planning. Not in spec §3; pure mechanics.
+- **`completed_at` column (addition):** the model had no completion
+  timestamp — `updated_at` moves on every edit and archive, and the
+  audit trail only records it as the prose summary `"approved — Done"`.
+  Throughput and lead time need a real one, so `approve/1` stamps it.
+  It is written **exactly once**: no transition leaves `:done`, so
+  nothing clears it, and `archive/1` deliberately leaves it intact —
+  archiving hides a card, it does not un-do the work. Any future reopen
+  transition must set `completed_at: nil` or throughput double-counts.
 - `attention := :review_ready` is set by the review fan-out once the
   cycle completes (Step 11); until reviewers exist, entry into Review
   carries no attention.
@@ -72,9 +80,26 @@ persists the ACP session id, writes an `llm_api` executor's text
 output to `<context>/output.md` as the artifact, records usage on
 result, and broadcasts run events over PubSub:
 
-- `"task:<id>"` → `{:task_event, task_id, event}` (run_started,
-  message_chunk, tool_call, question, permission_request,
-  run_completed, run_failed, run_cancelled)
+- `"task:<id>"` → `{:task_event, task_id, event}` — *signals*:
+  run_started, message_chunk, question, permission_request,
+  run_completed, run_failed, run_cancelled. These drive attention and
+  UI reloads.
+- `"task:<id>"` → `{:agent_feed, task_id, row}` — a transcript row
+  inserted or updated, broadcast by `CodeLead.AgentFeed`. `tool_call`
+  travels only this way; there is no `:task_event` for it.
+
+**Two per-task logs, deliberately separate.** `task_steps` is the
+workflow audit trail (`:transition`/`:run`/`:review`/`:commit`), what
+the Task tab's timeline shows. `agent_events` is the executor
+transcript — what the agent said and did — behind the Agent tab. They
+were briefly conflated (the Agent tab used to seed itself from task
+steps because events weren't persisted), which is exactly the mixing
+this split exists to prevent. See
+[ADR-0002](adr/0002-persist-agent-transcript.md).
+
+`send_back_to_planning/1` discards the worktree, branch, and ACP
+session, but **keeps** the transcript: history the human may still want
+to read is not context the next run would inherit.
 
 Board notifications are owned by `CodeLead.Tasks` itself: every task
 write (transitions, `update_task`, archive/unarchive, attention

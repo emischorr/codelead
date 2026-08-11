@@ -10,6 +10,7 @@ defmodule CodeLead.Costs do
 
   alias CodeLead.Accounts
   alias CodeLead.Agents.Agent
+  alias CodeLead.Agents.Provider
   alias CodeLead.Costs.AgentRun
   alias CodeLead.Costs.DailyMetric
   alias CodeLead.Repo
@@ -35,18 +36,24 @@ defmodule CodeLead.Costs do
       provider_id: attrs[:provider_id],
       prompt_tokens: usage[:prompt_tokens] || 0,
       completion_tokens: usage[:completion_tokens] || 0,
+      cached_read_tokens: usage[:cached_read_tokens] || 0,
+      cached_write_tokens: usage[:cached_write_tokens] || 0,
+      reasoning_tokens: usage[:reasoning_tokens] || 0,
       total_tokens: usage[:total_tokens] || 0,
       cost_cents: usage[:cost_cents] || 0,
       status: Map.fetch!(attrs, :status),
       started_at: Map.fetch!(attrs, :started_at),
-      finished_at: attrs[:finished_at]
+      finished_at: attrs[:finished_at],
+      duration_ms: attrs[:duration_ms]
     })
   end
 
   @doc """
   Prices a usage map from the configured per-model rates (cents per
   million tokens). Unknown models cost 0. A backend-reported
-  `cost_cents` wins.
+  `cost_cents` wins — and usually should: the rate table carries no
+  cache rates, so a locally derived figure understates any run with
+  cache reads or writes.
   """
   @spec with_cost(CodeLead.AgentDriver.usage() | nil, String.t() | nil) ::
           CodeLead.AgentDriver.usage() | nil
@@ -127,6 +134,121 @@ defmodule CodeLead.Costs do
   end
 
   @doc """
+  Today's not-yet-rolled-up spend across the organization.
+  """
+  @spec org_spend_today() :: spend()
+  def org_spend_today do
+    Repo.one(
+      from r in AgentRun,
+        where: r.started_at >= ^today_start(),
+        select: %{
+          tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+          cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+        }
+    )
+  end
+
+  @doc """
+  Cumulative spend per project — rollups plus today's runs — in two
+  queries regardless of how many projects exist. Projects that have
+  never spent anything are absent.
+  """
+  @spec spend_by_project() :: %{pos_integer() => spend()}
+  def spend_by_project do
+    rolled =
+      Repo.all(
+        from m in DailyMetric,
+          group_by: m.project_id,
+          select:
+            {m.project_id,
+             %{
+               tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
+               cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer)
+             }}
+      )
+      |> Map.new()
+
+    fresh =
+      Repo.all(
+        from r in AgentRun,
+          join: t in Task,
+          on: t.id == r.task_id,
+          where: r.started_at >= ^today_start(),
+          group_by: t.project_id,
+          select:
+            {t.project_id,
+             %{
+               tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+               cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+             }}
+      )
+      |> Map.new()
+
+    Map.merge(rolled, fresh, fn _project_id, a, b -> add_spend(a, b) end)
+  end
+
+  @doc """
+  Org-wide spend per day for the last `days` days, oldest first, with
+  missing days zero-filled — the dashboard's spend chart.
+  """
+  @spec daily_series(pos_integer()) :: [
+          %{
+            date: Date.t(),
+            tokens: non_neg_integer(),
+            cost_cents: non_neg_integer(),
+            run_count: non_neg_integer()
+          }
+        ]
+  def daily_series(days) do
+    from_date = Date.add(Date.utc_today(), -(days - 1))
+
+    raw =
+      Repo.all(
+        from r in AgentRun,
+          where: r.started_at >= ^DateTime.new!(from_date, ~T[00:00:00], "Etc/UTC"),
+          group_by: fragment("date(?)", r.started_at),
+          select:
+            {fragment("date(?)", r.started_at),
+             %{
+               tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+               cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer),
+               run_count: count(r.id)
+             }}
+      )
+      |> Map.new()
+
+    rolled =
+      Repo.all(
+        from m in DailyMetric,
+          where: m.date >= ^from_date,
+          group_by: m.date,
+          select:
+            {m.date,
+             %{
+               tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
+               cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer),
+               run_count: type(coalesce(sum(m.run_count), 0), :integer)
+             }}
+      )
+      |> Map.new()
+
+    # Rolled days win over raw ones — they must not be summed. Between the
+    # nightly rollup and the 14-day prune a completed day exists in both
+    # tables, and `rollup/0` writes the total it read from those very runs.
+    # Raw covers today, which is never rolled, and any completed day the
+    # nightly job has not reached yet.
+    by_date = Map.merge(raw, rolled)
+
+    Enum.map(0..(days - 1), fn offset ->
+      date = Date.add(from_date, offset)
+
+      by_date
+      |> Map.get(date, %{tokens: 0, cost_cents: 0, run_count: 0})
+      |> Map.put(:date, date)
+    end)
+  end
+
+  @doc """
   Budget gate for the scheduler: `:ok` or `{:hold, :budget}` when the
   project's or the organization's cost/token limit is reached.
   """
@@ -200,22 +322,28 @@ defmodule CodeLead.Costs do
   end
 
   @doc """
-  Per-task cost for many tasks at once (one grouped query, for board
-  cards). Tasks without runs are absent from the result.
+  Per-task run meta for many tasks at once (one grouped query, for board
+  cards): spend plus total duration and the distinct provider kinds
+  involved, which tell the UI whether the money was billed or estimated.
+  Tasks without runs are absent from the result.
   """
-  @spec spend_by_task([pos_integer()]) :: %{pos_integer() => spend()}
+  @spec spend_by_task([pos_integer()]) :: %{pos_integer() => map()}
   def spend_by_task([]), do: %{}
 
   def spend_by_task(task_ids) do
     Repo.all(
       from r in AgentRun,
+        left_join: p in Provider,
+        on: p.id == r.provider_id,
         where: r.task_id in ^task_ids,
         group_by: r.task_id,
         select:
           {r.task_id,
            %{
              tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
-             cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+             cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer),
+             duration_ms: type(coalesce(sum(r.duration_ms), 0), :integer),
+             provider_kinds: fragment("array_remove(array_agg(DISTINCT ?), NULL)", p.kind)
            }}
     )
     |> Map.new()
@@ -239,8 +367,10 @@ defmodule CodeLead.Costs do
   end
 
   @doc """
-  A task's individual runs, newest first, with the agent name joined in —
-  the task page's per-run cost breakdown.
+  A task's individual runs, newest first, with the agent name and the
+  provider kind joined in — the task page's per-run breakdown. The
+  provider kind tells the UI whether the cost is money actually billed
+  or a subscription-equivalent estimate.
   """
   @spec task_runs(pos_integer()) :: [map()]
   def task_runs(task_id) do
@@ -248,16 +378,40 @@ defmodule CodeLead.Costs do
       from r in AgentRun,
         left_join: a in Agent,
         on: a.id == r.agent_id,
+        left_join: p in Provider,
+        on: p.id == r.provider_id,
         where: r.task_id == ^task_id,
         order_by: [desc: r.started_at, desc: r.id],
         select: %{
           id: r.id,
           status: r.status,
+          prompt_tokens: r.prompt_tokens,
+          completion_tokens: r.completion_tokens,
+          cached_read_tokens: r.cached_read_tokens,
+          cached_write_tokens: r.cached_write_tokens,
+          reasoning_tokens: r.reasoning_tokens,
           total_tokens: r.total_tokens,
           cost_cents: r.cost_cents,
           started_at: r.started_at,
-          agent_name: a.name
+          finished_at: r.finished_at,
+          duration_ms: r.duration_ms,
+          agent_name: a.name,
+          provider_kind: p.kind
         }
+    )
+  end
+
+  @doc """
+  Total time a task's runs spent executing, in milliseconds. Runs
+  recorded before `duration_ms` existed, or that never finished, count
+  as zero.
+  """
+  @spec task_duration_ms(pos_integer()) :: non_neg_integer()
+  def task_duration_ms(task_id) do
+    Repo.one(
+      from r in AgentRun,
+        where: r.task_id == ^task_id,
+        select: type(coalesce(sum(r.duration_ms), 0), :integer)
     )
   end
 

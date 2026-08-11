@@ -12,10 +12,16 @@ alias CodeLead.Agents
     settings: %{"setup_done" => true}
   })
 
+# The seeded instance is already marked set up, so it skips the wizard —
+# which means the admin needs a real password to log in with.
+admin_password = System.get_env("ADMIN_PASSWORD", "codelead-dev-password")
+
 admin =
   case Accounts.get_user_by_email("admin@example.com") do
     nil ->
-      {:ok, user} = Accounts.create_user(%{email: "admin@example.com", role: :admin})
+      {:ok, user} =
+        Accounts.register_admin(%{email: "admin@example.com", password: admin_password})
+
       user
 
     user ->
@@ -25,6 +31,8 @@ admin =
 IO.puts(
   "Seeded organization ##{organization.id} (#{organization.name}), admin ##{admin.id} (#{admin.email})"
 )
+
+IO.puts("Log in with #{admin.email} / #{admin_password} (override with ADMIN_PASSWORD)")
 
 # Providers. The Anthropic key comes from the local environment when
 # present; a placeholder otherwise (update via Agents.update_provider/2).
@@ -168,6 +176,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   # state renders in the UI without running real agents. Real workflows
   # never mutate tasks this way.
 
+  alias CodeLead.AgentFeed
   alias CodeLead.Costs
   alias CodeLead.Repo
   alias CodeLead.Reviews.Review
@@ -177,18 +186,32 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     task |> Ecto.Changeset.change(extra) |> Repo.update!()
   end
 
-  fake_run = fn task, agent, tokens, cents, minutes_ago ->
+  # Demo numbers, shaped like what a real ACP run records: most of the
+  # tokens are cache reads, and the cost comes from the harness rather
+  # than the local rate table.
+  fake_run = fn task, agent, tokens, cents, minutes_ago, duration_ms ->
     started = DateTime.add(DateTime.utc_now(:second), -minutes_ago * 60, :second)
+    cached_read = div(tokens * 7, 10)
+    completion = div(tokens, 10)
 
     {:ok, _run} =
       Costs.record_run(%{
         task_id: task.id,
         agent_id: agent.id,
         provider_id: agent.provider_id,
-        usage: %{total_tokens: tokens, cost_cents: cents},
+        usage: %{
+          prompt_tokens: tokens - cached_read - completion,
+          completion_tokens: completion,
+          cached_read_tokens: cached_read,
+          cached_write_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: tokens,
+          cost_cents: cents
+        },
         status: :ok,
         started_at: started,
-        finished_at: DateTime.add(started, 300, :second)
+        finished_at: DateTime.add(started, div(duration_ms, 1000), :second),
+        duration_ms: duration_ms
       })
   end
 
@@ -206,7 +229,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     )
 
   {:ok, failed} = Tasks.set_attention(failed, :run_failed, "mix test exited with status 1")
-  fake_run.(failed, judy, 122_000, 141, 45)
+  fake_run.(failed, judy, 122_000, 141, 45, 214_000)
   Tasks.record_step(failed.id, :transition, :human, "human", "moved to Running (queued)")
   Tasks.record_step(failed.id, :run, :agent, judy.name, "run started")
 
@@ -238,11 +261,82 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   {:ok, review} =
     Tasks.set_attention(review, :review_ready, "2 reviewers finished · 1 pass, 1 concerns")
 
-  fake_run.(review, judy, 412_300, 342, 120)
-  fake_run.(review, auditor, 44_200, 46, 60)
+  fake_run.(review, judy, 412_300, 342, 120, 1_284_000)
+  fake_run.(review, auditor, 44_200, 46, 60, 47_500)
   Tasks.record_step(review.id, :transition, :human, "human", "moved to Running (queued)")
   Tasks.record_step(review.id, :run, :agent, judy.name, "run completed · 3 files changed")
   Tasks.record_step(review.id, :transition, :system, "system", "run completed — moved to Review")
+
+  # A transcript for the Agent tab: one message, a tool-call group, a
+  # closing message, the result.
+  [
+    %{kind: :run_started, text: "#{judy.name} started"},
+    %{kind: :message, text: "Reading the worktree teardown path before I touch the lock."},
+    %{
+      kind: :tool_call,
+      text: "Read lib/code_lead/git.ex",
+      external_id: "tc-1",
+      data: %{
+        "status" => "completed",
+        "tool_kind" => "read",
+        "locations" => ["lib/code_lead/git.ex"]
+      }
+    },
+    %{
+      kind: :tool_call,
+      text: "Read lib/code_lead/workspace.ex",
+      external_id: "tc-2",
+      data: %{"status" => "completed", "tool_kind" => "read"}
+    },
+    %{
+      kind: :tool_call,
+      text: "Write lib/code_lead/workspace.ex",
+      external_id: "tc-3",
+      data: %{"status" => "completed", "tool_kind" => "edit"}
+    },
+    %{
+      kind: :tool_call,
+      text: "mix test test/code_lead/workspace_test.exs",
+      external_id: "tc-4",
+      data: %{
+        "status" => "completed",
+        "tool_kind" => "execute",
+        "input" => %{
+          "command" => "mix test test/code_lead/workspace_test.exs",
+          "description" => "Run the workspace tests"
+        }
+      }
+    },
+    %{
+      kind: :message,
+      text: """
+      `release/1` now takes the task lock before pruning:
+
+      - the lock is acquired **before** the worktree is removed
+      - a stale lock is reclaimed after `@lock_timeout_ms`
+
+      ```elixir
+      def release(task_id) do
+        with :ok <- Lock.acquire(task_id) do
+          prune(task_id)
+        end
+      end
+      ```
+
+      Tests pass.
+      """
+    },
+    %{
+      kind: :result,
+      data: %{
+        "status" => "ok",
+        "tokens" => 412_300,
+        "cost_cents" => 342,
+        "duration_ms" => 1_284_000
+      }
+    }
+  ]
+  |> Enum.each(&AgentFeed.record_event(review.id, &1))
 
   Repo.insert!(%Review{
     task_id: review.id,
@@ -263,6 +357,8 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   })
 
   # Done column: approved with a finalizer note.
+  now = DateTime.utc_now(:second)
+
   done =
     fabricate.(
       %{
@@ -272,10 +368,12 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
         agent_id: judy.id
       },
       state: :done,
-      run_state: :idle
+      run_state: :idle,
+      completed_at: DateTime.add(now, -9 * 3600, :second),
+      inserted_at: DateTime.add(now, -34 * 3600, :second)
     )
 
-  fake_run.(done, judy, 301_200, 290, 600)
+  fake_run.(done, judy, 301_200, 290, 600, 903_000)
   Tasks.record_step(done.id, :transition, :human, "human", "moved to Running (queued)")
   Tasks.record_step(done.id, :run, :agent, judy.name, "run completed · 5 files changed")
   Tasks.record_step(done.id, :transition, :system, "system", "run completed — moved to Review")
@@ -290,5 +388,43 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
 
   Tasks.record_step(done.id, :transition, :human, "human", "approved — Done")
 
-  IO.puts("Seeded demo project ##{project.id}: 2 planning, 1 failed run, 1 review, 1 done")
+  # A fortnight of finished work. Without a spread of completion dates the
+  # dashboard's throughput chart is a single bar on a fresh database, which
+  # reads as a broken widget rather than an empty one.
+  # {days_ago, title, tokens, cents, duration_ms, lead_hours}
+  history = [
+    {13, "Add pagination to the user list endpoint", 88_400, 74, 512_000, 30},
+    {12, "Fix container cleanup on run timeout", 141_900, 118, 731_000, 8},
+    {10, "Stream NDJSON agent output to the task page", 262_500, 231, 1_104_000, 52},
+    {9, "Cache provider model lists for a day", 61_300, 49, 288_000, 5},
+    {7, "Retry the ACP handshake on cold start", 118_700, 96, 604_000, 20},
+    {5, "Collapse duplicate board broadcasts", 74_600, 58, 341_000, 6},
+    {4, "Guard settings deletes behind usage checks", 199_800, 174, 918_000, 46},
+    {4, "Self-host DM Sans and JetBrains Mono", 47_200, 38, 205_000, 3},
+    {2, "Remember the last project in the sidebar", 93_100, 81, 447_000, 11}
+  ]
+
+  Enum.each(history, fn {days_ago, title, tokens, cents, duration_ms, lead_hours} ->
+    completed_at = DateTime.add(now, -days_ago * 24 * 3600, :second)
+
+    task =
+      fabricate.(
+        %{title: title, work_type: :code, agent_id: judy.id},
+        state: :done,
+        run_state: :idle,
+        completed_at: completed_at,
+        inserted_at: DateTime.add(completed_at, -lead_hours * 3600, :second),
+        updated_at: completed_at
+      )
+
+    # Start the run just before its completion so the spend series and the
+    # throughput series agree on which day the work happened.
+    minutes_ago = div(DateTime.diff(now, completed_at), 60) + div(duration_ms, 60_000)
+    fake_run.(task, judy, tokens, cents, minutes_ago, duration_ms)
+    Tasks.record_step(task.id, :transition, :human, "human", "approved — Done")
+  end)
+
+  IO.puts(
+    "Seeded demo project ##{project.id}: 2 planning, 1 failed run, 1 review, #{length(history) + 1} done"
+  )
 end

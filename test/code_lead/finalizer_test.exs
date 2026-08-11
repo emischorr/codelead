@@ -50,16 +50,6 @@ defmodule CodeLead.FinalizerTest do
     %{task: task, context: context, repository: repository, project: project}
   end
 
-  describe "forge/1" do
-    test "classifies remotes" do
-      assert Finalizer.forge("https://github.com/acme/site.git") == {:github, "acme", "site"}
-      assert Finalizer.forge("git@github.com:acme/site.git") == {:github, "acme", "site"}
-      assert Finalizer.forge("https://gitlab.com/acme/site") == {:gitlab, "acme", "site"}
-      assert Finalizer.forge("file:///tmp/origin.git") == :other
-      assert Finalizer.forge("https://git.example.com/acme/site.git") == :other
-    end
-  end
-
   describe "Runtime.approve/1 for :repo targets" do
     test "commits the remainder, pushes the branch, and moves to Done" do
       %{task: task, context: context} = reviewed_repo_task()

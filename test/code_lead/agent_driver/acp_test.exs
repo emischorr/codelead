@@ -62,11 +62,30 @@ defmodule CodeLead.AgentDriver.AcpTest do
              _other -> false
            end)
 
+    assert {:usage, %{cost_cents: 42, context_used: 340, context_size: 200_000}} in events
+
     assert result.status == :ok
     assert result.session_id == "fake-sess-happy"
     assert result.usage.prompt_tokens == 100
     assert result.usage.completion_tokens == 40
+    assert result.usage.cached_read_tokens == 180
+    assert result.usage.cached_write_tokens == 20
+    assert result.usage.total_tokens == 340
+    # The harness priced the run; Costs.with_cost/2 must not overwrite it.
+    assert result.usage.cost_cents == 42
+  end
+
+  test "falls back to snake_case usage and leaves pricing to Costs", ctx do
+    use_scenario("snake_usage")
+
+    {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Do the thing")
+    {_events, result} = collect_until_result(handle)
+
+    assert result.usage.prompt_tokens == 100
+    assert result.usage.completion_tokens == 40
     assert result.usage.total_tokens == 140
+    assert result.usage.cached_read_tokens == 0
+    assert result.usage.cost_cents == nil
   end
 
   test "agent writes a file through the client fs capability", ctx do
@@ -156,5 +175,24 @@ defmodule CodeLead.AgentDriver.AcpTest do
 
     assert {:error, {:unknown_harness, :claude_code}} =
              Acp.start_run(ctx.task, ctx.agent, ctx.context, "hi")
+  end
+
+  describe "preflight/1" do
+    test "passes when the harness binary resolves", ctx do
+      use_scenario("happy")
+      assert Acp.preflight(ctx.agent) == :ok
+    end
+
+    test "names a harness binary that is not installed", ctx do
+      Application.put_env(:code_lead, :harnesses, %{claude_code: ["claude-agent-acp-missing"]})
+
+      assert Acp.preflight(ctx.agent) ==
+               {:error, {:executable_not_found, "claude-agent-acp-missing"}}
+    end
+
+    test "reports an unconfigured harness", ctx do
+      Application.put_env(:code_lead, :harnesses, %{})
+      assert Acp.preflight(ctx.agent) == {:error, {:unknown_harness, :claude_code}}
+    end
   end
 end

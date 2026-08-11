@@ -42,6 +42,13 @@ defmodule CodeLead.AgentDriver.Acp do
   ## AgentDriver callbacks
 
   @impl CodeLead.AgentDriver
+  def preflight(agent) do
+    with {:ok, command} <- harness_command(agent) do
+      Executor.impl().available?(command)
+    end
+  end
+
+  @impl CodeLead.AgentDriver
   def start_run(task, agent, %Context{} = context, prompt) do
     GenServer.start_link(__MODULE__, %{
       caller: self(),
@@ -91,7 +98,10 @@ defmodule CodeLead.AgentDriver.Acp do
          stage: {:initializing, ref},
          pending_permissions: %{},
          terminals: %{},
-         usage: nil
+         usage: nil,
+         cost_cents: nil,
+         context_used: nil,
+         context_size: nil
        }}
     else
       {:error, reason} -> {:stop, reason}
@@ -120,7 +130,7 @@ defmodule CodeLead.AgentDriver.Acp do
       Connection.notify(state.conn, "session/cancel", %{sessionId: state.session_id})
     end
 
-    finish(state, %{status: :cancelled, content: nil, usage: state.usage})
+    finish(state, %{status: :cancelled, content: nil, usage: settled_usage(state)})
   end
 
   @impl GenServer
@@ -131,8 +141,7 @@ defmodule CodeLead.AgentDriver.Acp do
   def handle_info({:acp_response, _stale_ref, _reply}, state), do: {:noreply, state}
 
   def handle_info({:acp_notification, "session/update", params}, state) do
-    handle_session_update(params["update"] || %{}, state)
-    {:noreply, state}
+    {:noreply, handle_session_update(params["update"] || %{}, state)}
   end
 
   def handle_info({:acp_notification, _method, _params}, state), do: {:noreply, state}
@@ -145,7 +154,7 @@ defmodule CodeLead.AgentDriver.Acp do
     finish(state, %{
       status: :error,
       content: "agent process exited with status #{exit_status}",
-      usage: state.usage
+      usage: settled_usage(state)
     })
   end
 
@@ -204,7 +213,7 @@ defmodule CodeLead.AgentDriver.Acp do
   end
 
   defp handle_stage_response(:prompting, {:ok, result}, state) do
-    usage = extract_usage(result) || state.usage
+    usage = settled_usage(%{state | usage: extract_usage(result) || state.usage})
 
     status =
       case result["stopReason"] do
@@ -226,7 +235,7 @@ defmodule CodeLead.AgentDriver.Acp do
     finish(state, %{
       status: :error,
       content: "prompt failed: #{inspect(error)}",
-      usage: state.usage
+      usage: settled_usage(state)
     })
   end
 
@@ -267,8 +276,13 @@ defmodule CodeLead.AgentDriver.Acp do
       %{"type" => "text", "text" => text} -> emit(state, {:message_chunk, text})
       _other -> :ok
     end
+
+    state
   end
 
+  # `tool_call` and `tool_call_update` share one normalized event; the
+  # consumer correlates them by `id` and merges non-nil fields, since an
+  # update usually carries only a status.
   defp handle_session_update(%{"sessionUpdate" => kind} = update, state)
        when kind in ["tool_call", "tool_call_update"] do
     emit(
@@ -278,12 +292,42 @@ defmodule CodeLead.AgentDriver.Acp do
          id: update["toolCallId"],
          title: update["title"],
          kind: update["kind"],
-         status: update["status"]
+         status: update["status"],
+         locations: update["locations"],
+         raw_input: update["rawInput"]
        }}
     )
+
+    state
   end
 
-  defp handle_session_update(_update, _state), do: :ok
+  # The harness reports money as it goes: `cost.amount` is the session's
+  # cumulative spend in `cost.currency`. One CodeLead run is one prompt
+  # turn in a freshly spawned subprocess, so cumulative equals this run's
+  # cost — no baseline to subtract. `used`/`size` are context-window
+  # occupancy, not tokens billed.
+  defp handle_session_update(%{"sessionUpdate" => "usage_update"} = update, state) do
+    state = %{
+      state
+      | cost_cents: cost_cents(update["cost"]) || state.cost_cents,
+        context_used: update["used"] || state.context_used,
+        context_size: update["size"] || state.context_size
+    }
+
+    emit(
+      state,
+      {:usage,
+       %{
+         cost_cents: state.cost_cents,
+         context_used: state.context_used,
+         context_size: state.context_size
+       }}
+    )
+
+    state
+  end
+
+  defp handle_session_update(_update, state), do: state
 
   ## Agent → client requests
 
@@ -544,18 +588,32 @@ defmodule CodeLead.AgentDriver.Acp do
     end
   end
 
+  # ACP spells `PromptResponse.usage` in camelCase (`inputTokens`,
+  # `cachedReadTokens`, …). The snake_case spellings are kept as
+  # fallbacks so Anthropic/OpenAI-shaped payloads from other harnesses
+  # still land.
   defp extract_usage(result) do
     usage = result["usage"] || get_in(result, ["_meta", "usage"])
 
     case usage do
       %{} = usage ->
-        prompt_tokens = usage["input_tokens"] || usage["prompt_tokens"] || 0
-        completion_tokens = usage["output_tokens"] || usage["completion_tokens"] || 0
+        prompt_tokens = pick(usage, ["inputTokens", "input_tokens", "prompt_tokens"])
+        completion_tokens = pick(usage, ["outputTokens", "output_tokens", "completion_tokens"])
+        cached_read = pick(usage, ["cachedReadTokens", "cache_read_input_tokens"])
+        cached_write = pick(usage, ["cachedWriteTokens", "cache_creation_input_tokens"])
+        reasoning = pick(usage, ["thoughtTokens", "reasoning_tokens"])
+
+        total =
+          pick(usage, ["totalTokens", "total_tokens"], nil) ||
+            prompt_tokens + completion_tokens + cached_read + cached_write
 
         %{
           prompt_tokens: prompt_tokens,
           completion_tokens: completion_tokens,
-          total_tokens: usage["total_tokens"] || prompt_tokens + completion_tokens,
+          cached_read_tokens: cached_read,
+          cached_write_tokens: cached_write,
+          reasoning_tokens: reasoning,
+          total_tokens: total,
           cost_cents: usage["cost_cents"]
         }
 
@@ -563,6 +621,42 @@ defmodule CodeLead.AgentDriver.Acp do
         nil
     end
   end
+
+  # `default` is nil where the caller must tell "absent" from "zero" —
+  # a reported total of 0 is not the same as no total at all.
+  defp pick(usage, keys, default \\ 0) do
+    Enum.find_value(keys, default, fn key ->
+      case usage[key] do
+        n when is_integer(n) -> n
+        _other -> nil
+      end
+    end)
+  end
+
+  defp cost_cents(%{"amount" => amount}) when is_number(amount), do: round(amount * 100)
+  defp cost_cents(_cost), do: nil
+
+  # Runs that end without a `PromptResponse` (cancel, crash, protocol
+  # error) still burned money the harness already told us about — report
+  # it rather than recording the run as free.
+  defp settled_usage(%{usage: nil, cost_cents: nil}), do: nil
+
+  defp settled_usage(%{usage: nil, cost_cents: cents, context_used: used}) do
+    %{
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_read_tokens: 0,
+      cached_write_tokens: 0,
+      reasoning_tokens: 0,
+      total_tokens: used || 0,
+      cost_cents: cents
+    }
+  end
+
+  defp settled_usage(%{usage: usage, cost_cents: cents}), do: with_cost_cents(usage, cents)
+
+  defp with_cost_cents(%{cost_cents: cents} = usage, _fallback) when is_integer(cents), do: usage
+  defp with_cost_cents(usage, fallback), do: %{usage | cost_cents: fallback}
 
   defp emit(state, event) do
     send(state.caller, {:agent_event, self(), event})

@@ -15,6 +15,7 @@ defmodule CodeLeadWeb.BoardLive do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLeadWeb.FlashMessages
+  alias CodeLeadWeb.NavContext
 
   @columns [planning: "Planning", running: "Running", review: "Review", done: "Done"]
   @work_types [Code: "code", Design: "design", Content: "content", File: "file"]
@@ -32,7 +33,6 @@ defmodule CodeLeadWeb.BoardLive do
       |> assign(
         page_title: "Board",
         project: project,
-        projects: Projects.list_projects(),
         columns: @columns,
         mobile_column: :planning
       )
@@ -113,18 +113,21 @@ defmodule CodeLeadWeb.BoardLive do
       |> Enum.with_index(1)
       |> Map.new(fn {task, position} -> {task.id, position} end)
 
-    assign(socket,
+    socket
+    |> assign(
       board: board,
       spend: Costs.spend_by_task(task_ids),
       today_spend: Costs.project_spend_today(project.id),
-      project_spend: Costs.project_spend(project.id),
-      attention_count: length(Tasks.attention_tasks(project.id)),
       running_count: Enum.count(board.running, &(&1.run_state == :executing)),
       queued_positions: queued_positions,
       review_verdicts: Reviews.verdicts_by_task(review_ids),
       reviewer_counts: Map.new(review_ids, &{&1, length(Tasks.reviewers(&1))}),
       done_notes: Tasks.commit_notes(Enum.map(board.done, & &1.id)),
       agents: Map.new(Agents.list_agents(project.id), &{&1.id, &1})
+    )
+    |> NavContext.put_stats(
+      length(Tasks.attention_tasks(project.id)),
+      Costs.project_spend(project.id)
     )
   end
 
@@ -148,14 +151,7 @@ defmodule CodeLeadWeb.BoardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app
-      flash={@flash}
-      project={@project}
-      projects={@projects}
-      attention_count={@attention_count}
-      project_spend={@project_spend}
-      budget_limit_cents={@project.budget_limit_cents}
-    >
+    <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope}>
       <header class="flex h-[58px] shrink-0 items-center gap-3.5 border-b border-border bg-surface px-4 sm:px-5">
         <Layouts.sidebar_toggle />
         <span class="truncate text-[15px] font-semibold text-text">{@project.name}</span>
@@ -173,14 +169,10 @@ defmodule CodeLeadWeb.BoardLive do
           variant="primary"
           patch={~p"/projects/#{@project.id}/board/new"}
           id="new-task-button"
-          class="hidden lg:inline-flex"
+          class="max-lg:hidden!"
         >
           <.icon name="hero-plus" class="size-3.5" /> New task
         </.button>
-        <Layouts.theme_toggle />
-        <span class="flex size-8 items-center justify-center rounded-full bg-accent-soft text-xs font-bold text-accent">
-          PO
-        </span>
       </header>
 
       <div class="min-h-0 flex-1 overflow-auto p-4 sm:p-5">
@@ -292,13 +284,17 @@ defmodule CodeLeadWeb.BoardLive do
 
   defp board_card(assigns) do
     agent = assigns.ctx.agents[assigns.task.agent_id]
-    spend = assigns.ctx.spend[assigns.task.id] || %{cost_cents: 0, tokens: 0}
+
+    spend =
+      assigns.ctx.spend[assigns.task.id] ||
+        %{cost_cents: 0, tokens: 0, duration_ms: 0, provider_kinds: []}
 
     assigns =
       assign(assigns,
         agent_name: agent && agent.name,
         harness: agent && agent.harness,
-        spend: spend
+        spend: spend,
+        cost_mode: Agents.billing_mode(spend.provider_kinds)
       )
 
     ~H"""
@@ -310,6 +306,8 @@ defmodule CodeLeadWeb.BoardLive do
       harness={@harness}
       cost_cents={@spend.cost_cents}
       tokens={@spend.tokens}
+      duration_ms={@spend.duration_ms}
+      cost_mode={@cost_mode}
       navigate={~p"/projects/#{@ctx.project.id}/tasks/#{@task.id}"}
       warn={@task.attention != nil}
       muted={@column == :done}

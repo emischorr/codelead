@@ -47,5 +47,18 @@ defmodule CodeLead.GitHelpers do
     :ok
   end
 
+  @doc """
+  Stands in for `CodeLead.Git.check_access/2` (see the `:git_access_check`
+  config) so the first-run wizard never reaches a real forge from a test.
+  A URL containing `reject` is refused; everything else is reachable.
+  """
+  def check_access(git_url, _opts) do
+    if String.contains?(git_url, "reject") do
+      {:error, "remote: Invalid username or token.\nfatal: Authentication failed\n"}
+    else
+      :ok
+    end
+  end
+
   defp git(args), do: System.cmd("git", args, stderr_to_stdout: true)
 end

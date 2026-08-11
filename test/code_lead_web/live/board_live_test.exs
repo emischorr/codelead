@@ -8,6 +8,8 @@ defmodule CodeLeadWeb.BoardLiveTest do
 
   alias CodeLead.Tasks
 
+  setup :register_and_log_in_user
+
   describe "rendering" do
     test "shows all four columns with task cards", %{conn: conn} do
       project = project_fixture()

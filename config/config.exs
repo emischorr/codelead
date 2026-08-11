@@ -7,9 +7,25 @@
 # General application configuration
 import Config
 
+config :code_lead, :scopes,
+  user: [
+    default: true,
+    module: CodeLead.Accounts.Scope,
+    assign_key: :current_scope,
+    access_path: [:user, :id],
+    schema_key: :user_id,
+    schema_type: :id,
+    schema_table: :users,
+    test_data_fixture: CodeLead.AccountsFixtures,
+    test_setup_helper: :register_and_log_in_user
+  ]
+
 config :code_lead,
   ecto_repos: [CodeLead.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  # How the first-run wizard checks a forge token against the remote;
+  # stubbed in test so the suite stays off the network.
+  git_access_check: {CodeLead.Git, :check_access}
 
 # Configure the endpoint
 config :code_lead, CodeLeadWeb.Endpoint,
@@ -32,10 +48,12 @@ config :code_lead, Oban,
     {Oban.Plugins.Cron, crontab: [{"0 2 * * *", CodeLead.Costs.RollupWorker}]}
   ]
 
-# Launch commands for ACP harnesses (resolved via PATH inside the
-# execution context). Overridable per environment.
+# Launch commands for ACP harnesses, resolved against the PATH of the
+# process running CodeLead (not the execution context's). Overridable
+# per environment. The Docker image bundles `claude-agent-acp`; `codex`
+# is bring-your-own — see docs/configuration.md.
 config :code_lead, :harnesses, %{
-  claude_code: ["claude-code-acp"],
+  claude_code: ["claude-agent-acp"],
   codex: ["codex", "acp"]
 }
 

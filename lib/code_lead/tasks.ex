@@ -40,6 +40,19 @@ defmodule CodeLead.Tasks do
           | {:error, :executor_ineligible}
           | {:error, :missing_repository}
 
+  @type summary :: %{atom() => non_neg_integer()}
+
+  @empty_summary %{
+    planning: 0,
+    running: 0,
+    review: 0,
+    done: 0,
+    queued: 0,
+    executing: 0,
+    failed: 0,
+    attention: 0
+  }
+
   ## PubSub
 
   @doc """
@@ -60,11 +73,25 @@ defmodule CodeLead.Tasks do
     Phoenix.PubSub.subscribe(CodeLead.PubSub, task_topic(task_id))
   end
 
+  @doc """
+  Subscribes to the organization-wide task topic, which carries every
+  project's changes as the same `{:board_changed, project_id, task_id}`
+  message. One subscription for a cross-project surface, and projects
+  created after the subscriber mounted are covered too.
+  """
+  @spec subscribe_org() :: :ok | {:error, term()}
+  def subscribe_org do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, org_topic())
+  end
+
   @spec board_topic(pos_integer()) :: String.t()
   def board_topic(project_id), do: "project:#{project_id}"
 
   @spec task_topic(pos_integer()) :: String.t()
   def task_topic(task_id), do: "task:#{task_id}"
+
+  @spec org_topic() :: String.t()
+  def org_topic, do: "org:tasks"
 
   ## Creation & editing
 
@@ -82,7 +109,7 @@ defmodule CodeLead.Tasks do
       task
       |> maybe_default_repository()
       |> prefill_reviewers()
-      |> then(&{:ok, &1})
+      |> then(&broadcast_board_change({:ok, &1}))
     end
   end
 
@@ -243,10 +270,22 @@ defmodule CodeLead.Tasks do
   @doc """
   Review → Done. Finalization (commit/push/PR or artifact) is performed
   by the system executor around this transition.
+
+  Stamps `completed_at`, the only completion timestamp the model has.
+  It is written exactly once: nothing reopens a Done task today, so
+  nothing clears it. A future reopen transition must set it back to nil
+  or throughput will double-count.
   """
   @spec approve(Task.t()) :: {:ok, Task.t()} | transition_error()
   def approve(%Task{state: :review} = task) do
-    transition(task, %{state: :done, run_state: :idle, attention: nil},
+    transition(
+      task,
+      %{
+        state: :done,
+        run_state: :idle,
+        attention: nil,
+        completed_at: DateTime.utc_now(:second)
+      },
       actor: :human,
       summary: "approved — Done"
     )
@@ -481,7 +520,231 @@ defmodule CodeLead.Tasks do
     )
   end
 
+  ## Aggregates
+  #
+  # Org-wide readouts for the dashboard. Each is one grouped query for
+  # every project — never one query per project — and every one of them
+  # excludes archived tasks, except `completions_by_day/1`: archiving
+  # hides a card, it does not un-do the work it recorded.
+
+  @doc """
+  Org-wide task counts: one entry per Kanban column, plus the three
+  `run_state` readouts and the number of tasks waiting on a human.
+  """
+  @spec board_summary() :: summary()
+  def board_summary do
+    Repo.all(
+      from t in Task,
+        where: is_nil(t.archived_at) and t.state != :cancelled,
+        group_by: [t.state, t.run_state],
+        select:
+          {t.state, t.run_state, count(t.id),
+           type(fragment("count(*) FILTER (WHERE ? IS NOT NULL)", t.attention), :integer)}
+    )
+    |> Enum.reduce(@empty_summary, fn {state, run_state, count, attention}, acc ->
+      merge_summary(acc, state, run_state, count, attention)
+    end)
+  end
+
+  @doc """
+  The same counts as `board_summary/0`, split per project — the
+  dashboard's project breakdown. Projects without tasks are absent.
+  """
+  @spec project_summaries() :: %{pos_integer() => summary()}
+  def project_summaries do
+    Repo.all(
+      from t in Task,
+        where: is_nil(t.archived_at) and t.state != :cancelled,
+        group_by: [t.project_id, t.state, t.run_state],
+        select:
+          {t.project_id, t.state, t.run_state, count(t.id),
+           type(fragment("count(*) FILTER (WHERE ? IS NOT NULL)", t.attention), :integer)}
+    )
+    |> Enum.reduce(%{}, fn {project_id, state, run_state, count, attention}, acc ->
+      Map.update(
+        acc,
+        project_id,
+        merge_summary(@empty_summary, state, run_state, count, attention),
+        &merge_summary(&1, state, run_state, count, attention)
+      )
+    end)
+  end
+
+  @doc """
+  Org-wide count of tasks waiting on a human, keyed by attention type.
+  """
+  @spec attention_counts() :: %{atom() => non_neg_integer()}
+  def attention_counts do
+    Repo.all(
+      from t in Task,
+        where: is_nil(t.archived_at) and not is_nil(t.attention),
+        group_by: fragment("?->>'type'", t.attention),
+        select: {fragment("?->>'type'", t.attention), count(t.id)}
+    )
+    |> Map.new(fn {type, count} -> {attention_type(type), count} end)
+  end
+
+  @doc """
+  Tasks waiting on a human across every project, oldest first.
+  """
+  @spec org_attention_tasks(pos_integer()) :: [map()]
+  def org_attention_tasks(limit) do
+    Repo.all(
+      from t in Task,
+        where: is_nil(t.archived_at) and not is_nil(t.attention),
+        order_by: [asc: t.updated_at, asc: t.id],
+        limit: ^limit,
+        select: %{
+          id: t.id,
+          project_id: t.project_id,
+          title: t.title,
+          attention: t.attention,
+          at: t.updated_at
+        }
+    )
+  end
+
+  @doc """
+  Tasks with a live or pending run across every project, oldest first.
+  `run_state` is what the database believes; whether a runner process
+  actually exists is the caller's cross-check.
+  """
+  @spec active_runs() :: [map()]
+  def active_runs do
+    Repo.all(
+      from t in Task,
+        left_join: a in Agent,
+        on: a.id == t.agent_id,
+        where: t.state == :running and t.run_state != :idle and is_nil(t.archived_at),
+        order_by: [asc: t.updated_at, asc: t.id],
+        select: %{
+          id: t.id,
+          project_id: t.project_id,
+          title: t.title,
+          run_state: t.run_state,
+          agent_name: a.name,
+          harness: a.harness,
+          since: t.updated_at
+        }
+    )
+  end
+
+  @doc """
+  Tasks approved per day over the last `days` days, keyed by date. Days
+  without completions are absent — the caller zero-fills.
+  """
+  @spec completions_by_day(pos_integer()) :: %{Date.t() => non_neg_integer()}
+  def completions_by_day(days) do
+    since = window_start(days)
+
+    Repo.all(
+      from t in Task,
+        where: not is_nil(t.completed_at) and t.completed_at >= ^since,
+        group_by: fragment("date(?)", t.completed_at),
+        select: {fragment("date(?)", t.completed_at), count(t.id)}
+    )
+    |> Map.new()
+  end
+
+  @doc """
+  Mean time from task creation to approval over the last `days` days, in
+  milliseconds; nil when nothing completed. This is lead time, not agent
+  time — it includes however long the task sat in Planning.
+  """
+  @spec avg_lead_time_ms(pos_integer()) :: non_neg_integer() | nil
+  def avg_lead_time_ms(days) do
+    since = window_start(days)
+
+    # `type/2` is load-bearing: without it Postgrex hands back a Decimal
+    # and `round/1` raises.
+    Repo.one(
+      from t in Task,
+        where: not is_nil(t.completed_at) and t.completed_at >= ^since,
+        select:
+          type(
+            fragment("avg(extract(epoch from (? - ?)) * 1000)", t.completed_at, t.inserted_at),
+            :float
+          )
+    )
+    |> case do
+      nil -> nil
+      ms -> round(ms)
+    end
+  end
+
+  @doc """
+  The most recently approved tasks across every project, newest first.
+  """
+  @spec recently_completed(pos_integer()) :: [map()]
+  def recently_completed(limit) do
+    Repo.all(
+      from t in Task,
+        where: not is_nil(t.completed_at),
+        order_by: [desc: t.completed_at, desc: t.id],
+        limit: ^limit,
+        select: %{
+          id: t.id,
+          project_id: t.project_id,
+          title: t.title,
+          completed_at: t.completed_at
+        }
+    )
+  end
+
+  @doc """
+  The newest audit steps across every project, with the task they belong
+  to — the dashboard's activity feed. Ordered by id, which is monotonic
+  with `inserted_at` and covered by the primary key.
+  """
+  @spec recent_activity(pos_integer()) :: [map()]
+  def recent_activity(limit) do
+    Repo.all(
+      from s in TaskStep,
+        join: t in Task,
+        on: t.id == s.task_id,
+        order_by: [desc: s.id],
+        limit: ^limit,
+        select: %{
+          id: s.id,
+          task_id: s.task_id,
+          project_id: t.project_id,
+          task_title: t.title,
+          executor_type: s.executor_type,
+          executor_name: s.executor_name,
+          kind: s.kind,
+          summary: s.summary,
+          at: s.inserted_at
+        }
+    )
+  end
+
   ## Internals
+
+  defp merge_summary(summary, state, run_state, count, attention) do
+    summary
+    |> Map.update!(state, &(&1 + count))
+    |> Map.update!(:attention, &(&1 + attention))
+    |> add_run_state(run_state, count)
+  end
+
+  defp add_run_state(summary, run_state, count) when run_state in [:queued, :executing, :failed],
+    do: Map.update!(summary, run_state, &(&1 + count))
+
+  defp add_run_state(summary, _run_state, _count), do: summary
+
+  # Ecto serializes the embed with string keys, so the grouped value comes
+  # back as a string. Explicit clauses rather than `String.to_existing_atom/1`:
+  # nothing from the database becomes an atom, and an unrecognized value
+  # surfaces as `:other` instead of crashing the page.
+  defp attention_type("run_failed"), do: :run_failed
+  defp attention_type("review_ready"), do: :review_ready
+  defp attention_type("agent_question"), do: :agent_question
+  defp attention_type("permission_request"), do: :permission_request
+  defp attention_type(_unknown), do: :other
+
+  defp window_start(days) do
+    DateTime.new!(Date.add(Date.utc_today(), -(days - 1)), ~T[00:00:00], "Etc/UTC")
+  end
 
   defp transition(task, changes, opts) do
     actor = Keyword.fetch!(opts, :actor)
@@ -500,14 +763,15 @@ defmodule CodeLead.Tasks do
     end
   end
 
-  # Notifies board and task subscribers after a successful write; passes
-  # errors through untouched so it can sit at the end of a pipeline.
+  # Notifies board and organization subscribers after a successful write;
+  # passes errors through untouched so it can sit at the end of a pipeline.
+  # The two topics carry the same message and have disjoint subscribers —
+  # a board watches one project, the dashboard watches the organization.
   defp broadcast_board_change({:ok, %Task{} = task} = result) do
-    Phoenix.PubSub.broadcast(
-      CodeLead.PubSub,
-      board_topic(task.project_id),
-      {:board_changed, task.project_id, task.id}
-    )
+    message = {:board_changed, task.project_id, task.id}
+
+    Phoenix.PubSub.broadcast(CodeLead.PubSub, board_topic(task.project_id), message)
+    Phoenix.PubSub.broadcast(CodeLead.PubSub, org_topic(), message)
 
     result
   end

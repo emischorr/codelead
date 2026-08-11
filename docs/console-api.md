@@ -54,8 +54,10 @@ Runtime.cancel_task(Tasks.get_task!(task.id))
 Runtime.retry_task(Tasks.get_task!(task.id))
 ```
 
-Note: ACP runs need the harness CLI on PATH (`claude-code-acp` — see
+Note: ACP runs need the harness CLI on PATH (`claude-agent-acp` — see
 the `:harnesses` config) and provider credentials on the provider row.
+The Docker image bundles the Claude harness; locally, install it with
+`npm i -g @agentclientprotocol/claude-agent-acp`.
 
 ## 3. Review
 

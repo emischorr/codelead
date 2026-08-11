@@ -10,6 +10,10 @@ defmodule CodeLead.Finalizer do
   - `:folder` — the task folder is the downloadable artifact;
     `commit_to_path/3` optionally pushes it to a repo path on a
     `codelead/task-<id>-artifact` branch.
+
+  Git transport uses the same forge token: it is resolved here and passed
+  to `CodeLead.Git`, which injects it through an ephemeral credential
+  helper. See `CodeLead.Git` for why nothing is written to `.git/config`.
   """
 
   alias CodeLead.Git
@@ -31,11 +35,13 @@ defmodule CodeLead.Finalizer do
   @spec finalize(Task.t()) :: {:ok, outcome()} | {:error, term()}
   def finalize(%Task{target: :repo} = task) do
     repository = Projects.get_repository!(task.repository_id)
+    forge = Git.forge(repository.git_url)
+    token = forge_token(task.project_id, forge)
 
     with :ok <- ensure_context(task),
          _commit = Git.commit_all(task.worktree_path, "CodeLead: finalize #{task.title}"),
-         {:ok, _output} <- Git.push(task.worktree_path, task.branch_name) do
-      {:ok, forge_outcome(task, repository)}
+         {:ok, _output} <- Git.push(task.worktree_path, task.branch_name, token: token) do
+      {:ok, forge_outcome(task, repository, forge, token)}
     else
       {:error, reason} -> {:error, {:push_failed, reason}}
     end
@@ -66,36 +72,21 @@ defmodule CodeLead.Finalizer do
       repository.base_clone_path || Workspace.base_clone_path(repository.name, repository.id)
 
     worktree = Path.join([Workspace.root(), "worktrees", "task-#{task.id}-artifact"])
+    token = forge_token(task.project_id, Git.forge(repository.git_url))
 
-    with {:ok, _} <- Git.ensure_clone(repository.git_url, base_path),
+    with {:ok, _} <- Git.ensure_clone(repository.git_url, base_path, token: token),
          {:ok, _} <- persist_base_clone_path(repository, base_path),
          {:ok, _} <- Git.create_worktree(base_path, worktree, branch, repository.default_branch),
          dest = Path.join(worktree, dest_path),
          :ok <- File.mkdir_p(dest),
          {:ok, _files} <- File.cp_r(artifact, dest),
          _commit = Git.commit_all(worktree, "CodeLead: artifact of #{task.title}"),
-         {:ok, _} <- Git.push(worktree, branch) do
+         {:ok, _} <- Git.push(worktree, branch, token: token) do
       Git.remove_worktree(base_path, worktree)
       {:ok, %{branch: branch, note: "artifact committed to #{dest_path} on #{branch}"}}
     else
       {:error, reason} -> {:error, reason}
       {:error, reason, _file} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Classifies a git remote URL: `{:github, owner, repo}`,
-  `{:gitlab, owner, repo}`, or `:other`.
-  """
-  @spec forge(String.t()) :: {:github | :gitlab, String.t(), String.t()} | :other
-  def forge(git_url) do
-    case Regex.run(
-           ~r{(?:https://|git@)(github\.com|gitlab\.com)[:/]([^/]+)/(.+?)(?:\.git)?/?$},
-           git_url
-         ) do
-      ["" <> _match, "github.com", owner, repo] -> {:github, owner, repo}
-      [_match, "gitlab.com", owner, repo] -> {:gitlab, owner, repo}
-      _no_match -> :other
     end
   end
 
@@ -147,24 +138,20 @@ defmodule CodeLead.Finalizer do
     Projects.update_repository(repository, %{base_clone_path: path})
   end
 
-  defp forge_outcome(task, repository) do
-    case forge(repository.git_url) do
-      :other ->
-        %{branch: task.branch_name, note: "branch pushed; open a PR on your forge manually"}
+  defp forge_outcome(task, _repository, :other, _token) do
+    %{branch: task.branch_name, note: "branch pushed; open a PR on your forge manually"}
+  end
 
-      {kind, _owner, _repo} = forge ->
-        case forge_token(task.project_id, kind) do
-          nil ->
-            %{
-              url: compare_url(forge, repository.default_branch, task.branch_name),
-              branch: task.branch_name,
-              note: "branch pushed; no #{token_var(kind)} in the project env — compare link"
-            }
+  defp forge_outcome(task, repository, {kind, _owner, _repo} = forge, nil) do
+    %{
+      url: compare_url(forge, repository.default_branch, task.branch_name),
+      branch: task.branch_name,
+      note: "branch pushed; no #{Git.token_var(kind)} in the project env — compare link"
+    }
+  end
 
-          token ->
-            pull_request_outcome(forge, token, task, repository)
-        end
-    end
+  defp forge_outcome(task, repository, forge, token) do
+    pull_request_outcome(forge, token, task, repository)
   end
 
   defp pull_request_outcome({kind, _owner, _repo} = forge, token, task, repository) do
@@ -187,14 +174,8 @@ defmodule CodeLead.Finalizer do
   defp compare_url({:gitlab, owner, repo}, base, branch),
     do: "https://gitlab.com/#{owner}/#{repo}/-/compare/#{base}...#{branch}"
 
-  defp forge_token(project_id, kind) do
-    project_id
-    |> Projects.env_vars()
-    |> Enum.find_value(fn {key, value} -> if key == token_var(kind), do: value end)
-  end
-
-  defp token_var(:github), do: "GITHUB_TOKEN"
-  defp token_var(:gitlab), do: "GITLAB_TOKEN"
+  defp forge_token(_project_id, :other), do: nil
+  defp forge_token(project_id, {kind, _owner, _repo}), do: Projects.forge_token(project_id, kind)
 
   defp pr_body(task) do
     """

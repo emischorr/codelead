@@ -1,0 +1,122 @@
+defmodule CodeLeadWeb.DashboardLiveTest do
+  use CodeLeadWeb.ConnCase, async: true
+
+  import Phoenix.LiveViewTest
+  import CodeLead.ProjectsFixtures
+  import CodeLead.TasksFixtures
+
+  alias CodeLead.Tasks
+
+  setup :register_and_log_in_user
+
+  defp tile_value(view, id) do
+    view
+    |> element("#" <> id)
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(".font-mono")
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
+  describe "empty instance" do
+    test "offers to create the first project, with the sidebar intact", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert has_element?(view, ~s{#create-first-project[href="/settings/projects/new"]})
+      assert has_element?(view, "#nav-dashboard")
+      assert has_element?(view, "#account-card")
+      refute has_element?(view, "#tile-review")
+    end
+  end
+
+  describe "attention tiles" do
+    test "count states across every project", %{conn: conn} do
+      project_a = project_fixture()
+      project_b = project_fixture()
+
+      put_context!(task_fixture(project_a.id), state: :review)
+      put_context!(task_fixture(project_b.id), state: :review)
+      put_context!(task_fixture(project_a.id), state: :running, run_state: :failed)
+      put_context!(task_fixture(project_b.id), state: :running, run_state: :queued)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert tile_value(view, "tile-review") == "2"
+      assert tile_value(view, "tile-failed") == "1"
+      assert tile_value(view, "tile-running") == "0"
+      assert view |> element("#tile-running") |> render() =~ "1 queued"
+    end
+
+    test "reports a task executing without a runner process as stalled", %{conn: conn} do
+      project = project_fixture()
+      put_context!(task_fixture(project.id), state: :running, run_state: :executing)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert view |> element("#tile-stalled") |> render() =~ "Executing with no runner"
+    end
+  end
+
+  describe "panels" do
+    test "list waiting tasks, active runs and completions", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, waiting} =
+        project.id
+        |> task_fixture(%{title: "Needs a decision"})
+        |> Tasks.set_attention(:agent_question, "which retention window?")
+
+      running =
+        put_context!(task_fixture(project.id, %{title: "In flight"}),
+          state: :running,
+          run_state: :executing
+        )
+
+      done =
+        put_context!(task_fixture(project.id, %{title: "Shipped it"}),
+          state: :done,
+          completed_at: DateTime.add(DateTime.utc_now(:second), -2, :hour)
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert has_element?(view, ~s{a[href="/projects/#{project.id}/tasks/#{waiting.id}"]})
+      assert has_element?(view, ~s{a[href="/projects/#{project.id}/tasks/#{running.id}"]})
+      assert has_element?(view, ~s{a[href="/projects/#{project.id}/tasks/#{done.id}"]})
+      assert render(view) =~ "Needs a decision"
+      assert render(view) =~ "Shipped it"
+    end
+
+    test "the project row links to its board", %{conn: conn} do
+      project = project_fixture()
+      task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert has_element?(view, ~s{a[href="/projects/#{project.id}/board"]}, project.name)
+    end
+  end
+
+  describe "live refresh" do
+    # One org subscription picks up changes in any project, and each one
+    # arms a trailing-edge timer rather than reloading per event — a burst
+    # of run transitions costs a single reload. Asserting immediately after
+    # the change, the way BoardLiveTest does, would fail here; both halves
+    # are the contract.
+    test "coalesces org-wide changes into one debounced reload", %{conn: conn} do
+      project = project_fixture()
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      {:ok, _task} =
+        project.id
+        |> task_fixture(%{title: "Arrived late"})
+        |> Tasks.set_attention(:agent_question, "which retention window?")
+
+      refute render(view) =~ "Arrived late"
+
+      send(view.pid, :refresh)
+      assert render(view) =~ "Arrived late"
+    end
+  end
+end

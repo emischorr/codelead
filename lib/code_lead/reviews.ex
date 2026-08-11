@@ -121,6 +121,7 @@ defmodule CodeLead.Reviews do
 
   defp run_reviewer(task, %Agent{} = reviewer, cycle, artifact) do
     started_at = DateTime.utc_now(:second)
+    monotonic_start = System.monotonic_time(:millisecond)
     prompt = review_prompt(task, artifact)
     context = review_context(task, reviewer)
 
@@ -156,7 +157,8 @@ defmodule CodeLead.Reviews do
       usage: Costs.with_cost(result[:usage], reviewer.model_variant),
       status: result.status,
       started_at: started_at,
-      finished_at: DateTime.utc_now(:second)
+      finished_at: DateTime.utc_now(:second),
+      duration_ms: System.monotonic_time(:millisecond) - monotonic_start
     })
 
     review = record_review(task, reviewer, cycle, verdict, findings, step.id)
