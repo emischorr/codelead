@@ -11,7 +11,8 @@ note is the "how it works today" map.
 | `CodeLead.Accounts` | organization singleton, users (no auth flows yet) |
 | `CodeLead.Projects` | projects, repositories, encrypted env store |
 | `CodeLead.Agents` | providers (encrypted config), agent personas, eligibility rules, default reviewers, provider env for harnesses |
-| `CodeLead.Tasks` | the task state machine (spec §4), task steps, task reviewers, attention, board queries |
+| `CodeLead.Workflow` | the declarative workflow definition (spec §4.1) — stages with a `stage_type`, transitions with trigger/context/worktree policies. Pure data; one built-in, named by `tasks.workflow_key` |
+| `CodeLead.Tasks` | the task state machine (spec §4) driven by that definition, task steps, task reviewers, attention, board queries |
 | `CodeLead.Planning` | planning-assistant chat (`planning_messages`) |
 | `CodeLead.AgentFeed` | the executor transcript (`agent_events`) behind the Agent tab — see [ADR-0002](adr/0002-persist-agent-transcript.md); **not in the architecture spec's data model**, a deliberate addition |
 | `CodeLead.Reviews` | review cycles, fan-out, advisory verdicts |
@@ -23,13 +24,18 @@ note is the "how it works today" map.
 |---|---|---|
 | `CodeLead.AgentDriver` | `Acp` (harness over ACP, ADR-0001), `LlmApi` (one completion) | — (driver-independent of executor) |
 | `CodeLead.Executor` | `LocalSubprocess` (worktree/folder + Ports) | `DockerContainer` |
-| `CodeLead.Scheduler` | `PassThrough` (budget + capacity) | `Windowed` |
+| `CodeLead.Scheduler` | `PassThrough` — an ordered `CodeLead.Scheduler.Gate` list (schedule → budget → capacity) | a `WindowGate` in the same list |
 
 ## Runtime (processes)
 
 - `CodeLead.Runtime` — human-facing run control (start/cancel/retry,
   request_changes, send_back_to_planning, approve, permissions, queue
-  kick). The LiveViews call these.
+  kick). The LiveViews call these. Each column move goes through
+  `advance/3`, which resolves the edge in the task's `CodeLead.Workflow`
+  and runs the target stage's effects around the write.
+- `CodeLead.Runtime.StageEffects` — the only stage-type → behaviour
+  map: `prepare/2` before the state is written (finalization, which can
+  veto) and `on_enter/3` after it (dispatch, reviewer fan-out).
 - `CodeLead.Runtime.TaskRunner` — one GenServer per active run
   (DynamicSupervisor + Registry), consumes driver events, persists the
   transcript through `CodeLead.AgentFeed` (which broadcasts
@@ -43,7 +49,9 @@ note is the "how it works today" map.
   LlmApi calls, terminal commands, queue kicks.
 - `CodeLead.Finalizer` — the system executor behind Approve → Done.
 - `CodeLead.Vault` — Cloak encryption (provider config, project env).
-- Oban — `rollups` queue, nightly `Costs.RollupWorker` cron.
+- Oban — `rollups` queue (nightly `Costs.RollupWorker` cron) and
+  `dispatch` queue (`Runtime.ScheduledDispatchWorker` wake-ups for
+  scheduled runs).
 
 ## Support
 

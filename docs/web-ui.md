@@ -112,7 +112,11 @@ The theme script in `root.html.heex` resolves "system" to a concrete
   `attention_banner`, `timestamp`, `timeline_start`, `timeline_entry`,
   `tab_nav`, `kanban_column`,
   `task_card` (shell + column-specific `footer` slot), `chat_bubble`,
-  `empty_state`, `fab`, `stat_tile` (icon chip + headline number +
+  `empty_state`, `schedule_modal` (the "start at (UTC)" dialog shared by
+  `BoardLive` and `TaskLive`; the caller owns the `schedule_task` /
+  `close_schedule` events, and `CodeLeadWeb.ScheduleForm` supplies the
+  schemaless changeset behind it),
+  `fab`, `stat_tile` (icon chip + headline number +
   detail, five tones, optional `navigate` and `meter` slot) and
   `meter` (a value against a limit; renders nothing without one —
   `Layouts.budget_card` and the dashboard both draw their bars with it).
@@ -197,11 +201,19 @@ whether the point is today.
 Plain assigns (whole-board reload); `Tasks.subscribe_board/1` +
 `{:board_changed, _, _}` → `load_board/1`, which batch-loads
 `Costs.spend_by_task/1`, `Reviews.verdicts_by_task/1`,
-`Tasks.commit_notes/1`, and queue positions from `Tasks.queued_tasks/0`.
+`Tasks.commit_notes/1`, and queue positions from `Tasks.queued_tasks/0`
+(tasks waiting on a future `scheduled_at` are excluded from the
+numbering — they are not in line behind anything).
 No drag & drop — explicit Start (planning footer) and Archive (done
-footer) actions. Mobile: segmented one-column switcher + FAB (DOM ids
-prefixed `m-`). New-task modal validates work_type against
-`Agents.eligible_executors/2`.
+footer) actions. The planning footer's Start is a split control: the
+clock button opens the shared `schedule_modal` and starts the run at a
+chosen UTC time instead of now. A queued task with a future
+`scheduled_at` shows `⏱ starts …` in place of the `⏸ queued · #N`
+badge, derived from the task rather than from a persisted hold reason.
+Mobile: segmented one-column switcher + FAB (DOM ids
+prefixed `m-`); card button ids are derived from the card's own id so
+the two renderings do not collide. New-task modal validates work_type
+against `Agents.eligible_executors/2`.
 
 ## TaskLive
 
@@ -210,6 +222,13 @@ review→diff, done→task). Tab bodies are plain `Phoenix.Component`
 modules under `task_live/` (`TaskTab`, `AgentTab`, `DiffTab`,
 `TerminalTab`). All actions go through `CodeLead.Runtime`; errors map
 to flashes.
+
+Header actions are chosen by `{state, run_state}` plus a precomputed
+`scheduled?` flag: planning offers **Schedule** (`#action-schedule-run`,
+opening the shared `schedule_modal`) alongside **Start run**, and a
+queued task whose start time has not arrived offers **Run now**
+(`#action-run-now`, `Runtime.run_now/1`) beside Cancel run. A
+`#scheduled-hint` badge next to the state badge shows the start time.
 
 - **Task tab** — attention banner (with Allow/Deny when a permission
   `ref` is stored), description/spec (edit form in planning via

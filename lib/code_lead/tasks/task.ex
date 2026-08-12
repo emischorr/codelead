@@ -6,11 +6,15 @@ defmodule CodeLead.Tasks.Task do
   agents, picks the review renderer) and `target` (where work lands —
   `:repo` = worktree + feature branch, `:folder` = task folder).
   `state` is the Kanban column; `run_state` tracks execution inside
-  Running. `archived_at` is orthogonal to `state`.
+  Running. `archived_at` is orthogonal to `state`. `workflow_key` names
+  the `CodeLead.Workflow` definition whose stages those columns are and
+  whose edges the transitions must follow.
 
   `archived_at` and `completed_at` are set by the context alone — they
   appear in no changeset, because a caller-supplied value would corrupt
-  the throughput readouts derived from them.
+  the throughput readouts derived from them. `scheduled_at` is set the
+  same way, from the transition opts: it is authorisation the human
+  gave when moving the card, not an editable attribute of the task.
   """
 
   use Ecto.Schema
@@ -36,6 +40,7 @@ defmodule CodeLead.Tasks.Task do
     field :work_type, Ecto.Enum, values: @work_types
     field :target, Ecto.Enum, values: [:repo, :folder]
     field :priority, Ecto.Enum, values: @priorities, default: :normal
+    field :workflow_key, :string, default: "builtin.default"
     field :state, Ecto.Enum, values: @states, default: :planning
     field :run_state, Ecto.Enum, values: @run_states, default: :idle
     field :ready_flag, :boolean, default: false
@@ -44,6 +49,7 @@ defmodule CodeLead.Tasks.Task do
     field :branch_name, :string
     field :acp_session_id, :string
     field :next_prompt, :string
+    field :scheduled_at, :utc_datetime
     field :assignee_id, :id
     field :archived_at, :utc_datetime
     field :completed_at, :utc_datetime
@@ -55,6 +61,16 @@ defmodule CodeLead.Tasks.Task do
 
     timestamps(type: :utc_datetime)
   end
+
+  @doc """
+  Is the task waiting on a start time that has not arrived yet?
+
+  The scheduler's admission gate and the queued badge both derive from
+  this, so what the UI says and what the scheduler does cannot drift.
+  """
+  @spec scheduled?(t()) :: boolean()
+  def scheduled?(%__MODULE__{scheduled_at: nil}), do: false
+  def scheduled?(%__MODULE__{scheduled_at: at}), do: DateTime.after?(at, DateTime.utc_now())
 
   @doc """
   Changeset for creating a task in Planning. `project_id` is set

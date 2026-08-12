@@ -197,6 +197,13 @@ defmodule CodeLead.Reviews do
 
   # For :repo targets the artifact is the branch diff; for :folder the
   # file listing plus text file contents (truncated).
+
+  # A repo task can reach Review with its context already torn down;
+  # `review_context/2` below allows for it, and `Git.diff/2` would raise
+  # on the nil path rather than fail the review.
+  defp artifact_for_review(%Task{target: :repo, worktree_path: nil}),
+    do: "Diff unavailable: no worktree provisioned."
+
   defp artifact_for_review(%Task{target: :repo} = task) do
     repository = Projects.get_repository!(task.repository_id)
 

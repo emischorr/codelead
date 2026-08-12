@@ -1,16 +1,39 @@
 # Task workflow (last updated: 2026-08-11)
 
-Implementation of architecture spec §4 in `CodeLead.Tasks`
+Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
 (planning/running/review/done/cancelled), `run_state` tracks execution
 inside Running (idle/queued/dispatched/executing/failed). `archived_at`
 is orthogonal to `state`.
 
+## The definition drives the machine
+
+The column transitions are not hardcoded. `CodeLead.Workflow`
+(lib/code_lead/workflow.ex) holds one declarative `%Workflow{}` — the
+built-in, keyed `"builtin.default"`, named per task by
+`tasks.workflow_key` — and everything else looks moves up in it:
+
+| Module | Role |
+|---|---|
+| `CodeLead.Workflow` | `built_in/0`, `fetch!/1`, `stage/2`, `fetch_transition/3`, `outgoing/2`. Pure data, no dependencies. |
+| `CodeLead.Workflow.Stage` | `key` (the `tasks.state` value), `name`, `position`, `stage_type` (`:plan`/`:execute`/`:review`/`:finalize`/`:custom`, defaulting to the inert `:custom`). |
+| `CodeLead.Workflow.Transition` | `from`, `to`, `trigger` (`:human`/`:auto`), `context_policy` (`:carry`/`:reset`), `worktree_policy` (`:keep`/`:discard`). |
+| `Tasks.apply_transition/3` | Takes the edge as `{from, to}`; derives every field change from the edge's policies and the target stage's type; writes, records the step, broadcasts. |
+| `Runtime.advance/3` | The same edge plus side effects: `prepare` → write → worktree policy → `on_enter`. |
+| `Runtime.StageEffects` | The only stage-type → behaviour map: `prepare/2` (pre-commit, may veto) and `on_enter/3` (post-commit). |
+
+The named functions below name an edge and supply the audit summary;
+they carry no column logic of their own. An edge the definition does
+not contain is `{:error, :invalid_state}`.
+
+`test/code_lead/workflow_test.exs` is the characterisation guardrail:
+it transcribes spec §4 and fails if the definition drifts from it.
+
 ## Transitions as implemented
 
 | Function | Actor | From (state, run_state) | To | Side effects |
 |---|---|---|---|---|
-| `move_to_running/1` | human | planning, idle | running, queued | executor guard (eligible `:execute` agent; repo target needs repository); clears `next_prompt` |
+| `move_to_running/1` | human | planning | running, queued | executor guard (eligible `:execute` agent; repo target needs repository); clears `next_prompt` |
 | `begin_dispatch/1` | system | running, queued | running, dispatched | runtime provisions context next |
 | `mark_executing/2` | system | running, dispatched | running, executing | persists `acp_session_id` when given |
 | `complete_run/1` | system | running, executing | review, idle | the one automatic column change (completion signal) |
@@ -25,6 +48,12 @@ is orthogonal to `state`.
 
 Every transition writes a `:transition` task step (denormalized actor).
 Invalid from-states return `{:error, :invalid_state}`.
+
+`begin_dispatch/1`, `mark_executing/2`, `fail_run/2` and `retry_run/1`
+move `run_state` inside the Running stage and are **not** workflow
+edges, so they keep their own from-state guards. `complete_run/1` is an
+edge but keeps a `run_state: :executing` guard on top of it: a queued
+or failed task is in the Running stage with nothing to hand to Review.
 
 ## Deviations / notes vs the spec
 
@@ -44,7 +73,22 @@ Invalid from-states return `{:error, :invalid_state}`.
   cycle completes (Step 11); until reviewers exist, entry into Review
   carries no attention.
 - `:cancelled` exists in the state enum (per spec §3) but no MVP
-  transition produces it — cancel returns to Planning per spec §4.
+  transition produces it — cancel returns to Planning per spec §4. It
+  is a terminal task state, **not** a workflow stage.
+- **The executor guard is keyed on the target stage type**, so
+  `request_changes/2` runs it too — Review → Running enters an
+  `:execute` stage. It can only bite if the executor was made
+  ineligible while the task sat in Review; previously that case slipped
+  through to a failed dispatch.
+- **`move_to_running/1` no longer requires `run_state: :idle`.** The
+  edge lookup rejects every from-state but `:planning`, and a Planning
+  task is always idle. The redundant guard went with the hand-written
+  transition bodies.
+- **`attention` clears on human edges only.** Every human handoff
+  resolves whatever flagged the card; the one `:auto` edge (completion)
+  leaves it to the Review stage's own fan-out, which raises
+  `:review_ready`. This is what the per-transition change maps did
+  before, now expressed as a rule.
 
 ## Two layers: Tasks (data) vs Runtime (side effects)
 
@@ -63,13 +107,57 @@ console) calls for those actions:
 | request changes from Review | `Runtime.request_changes(task, feedback)` |
 | send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
 | approve → Done (finalize: commit/push/PR or artifact) | `Runtime.approve(task)` |
+| run completed → Review (called by the runner) | `Runtime.complete_run(task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
 
-The scheduler (`CodeLead.Scheduler.PassThrough`) admits unless a
-budget limit is reached (`{:hold, :budget}`, via `Costs.check_budget/1`)
-or `max_concurrent_runs` live runners exist (`{:hold, :capacity}`);
-held tasks stay `run_state: :queued`. The queue is kicked after each
-run completes. Note: the capacity count has a benign single-node race
+Each of those is `Runtime.advance/3` with an edge and a summary. The
+order inside `advance/3` is load-bearing: the edge resolves first (an
+illegal move costs nothing), then the target stage's `prepare/2`, which
+can still veto — that is why finalization is a pre-commit hook, so a
+failed push leaves the task in Review rather than landing it in Done
+with nothing pushed. Only then is the state written, the edge's
+worktree policy applied (teardown for `:discard`), and the stage's
+`on_enter/3` fired: `:execute` asks the scheduler to dispatch,
+`:review` fans the reviewers out, `:finalize` records the commit step,
+`:plan` and `:custom` do nothing.
+
+`retry_task/1` is not on that path — a retry moves `run_state` inside
+the Running stage, so it calls `Tasks.retry_run/1` and re-dispatches
+directly. `cancel_task/1` terminates the agent before advancing;
+stopping a process is an exit effect, and the seam has no exit hook.
+
+The scheduler (`CodeLead.Scheduler.PassThrough`) runs an **ordered list
+of gates**, short-circuiting on the first hold; held tasks stay
+`run_state: :queued`. The queue is kicked after each run completes.
+
+| Gate | Holds when | Reason |
+|---|---|---|
+| `ScheduleGate` | `scheduled_at` is set and still in the future | `{:hold, {:scheduled, at}}` |
+| `BudgetGate` | a project/org limit is reached (`Costs.check_budget/1`) | `{:hold, :budget}` |
+| `CapacityGate` | `max_concurrent_runs` live runners exist | `{:hold, :capacity}` |
+
+Gates compose rather than exclude, which is the point: a scheduled run
+is still budget- and capacity-checked when its time comes. The planned
+subscription-window behaviour is a `WindowGate` added to that list, not
+a second `Scheduler` impl. Order matters — `ScheduleGate` first, so a
+task waiting on its clock says so instead of reporting a budget that
+may well change before it runs.
+
+**Scheduled runs.** `tasks.scheduled_at` defers dispatch only; the
+human still moves the card to Running, so no auto-transition exists and
+the executor guard fires at schedule time rather than unattended. When
+`ScheduleGate` holds, `StageEffects.try_dispatch/1` books an Oban
+wake-up (`Runtime.ScheduledDispatchWorker`, `:dispatch` queue). That
+job **re-runs `admit?`** instead of dispatching, and no-ops unless the
+task still exists, still sits queued in Running, and still carries the
+exact time embedded in its args — so cancel, reschedule, run-early and
+delete need no job cancellation. `scheduled_at` clears on dispatch and
+on entering a `:plan` stage. A past time dispatches immediately (it is
+a "not before" bound). If the server is down at T, Oban runs the job
+late on recovery; "skip if more than N late" is a deliberate non-goal,
+as is recurrence.
+
+Note: the capacity count has a benign single-node race
 under simultaneous dispatch. A crash of the runner process itself (not
 the agent — that is handled) can leave a task in `:executing` until a
 human cancels; runners are deliberately not restarted.

@@ -16,6 +16,7 @@ defmodule CodeLeadWeb.BoardLive do
   alias CodeLead.Tasks.Task
   alias CodeLeadWeb.FlashMessages
   alias CodeLeadWeb.NavContext
+  alias CodeLeadWeb.ScheduleForm
 
   @columns [planning: "Planning", running: "Running", review: "Review", done: "Done"]
   @work_types [Code: "code", Design: "design", Content: "content", File: "file"]
@@ -34,7 +35,9 @@ defmodule CodeLeadWeb.BoardLive do
         page_title: "Board",
         project: project,
         columns: @columns,
-        mobile_column: :planning
+        mobile_column: :planning,
+        scheduling_task: nil,
+        schedule_form: nil
       )
       |> load_board()
 
@@ -58,6 +61,36 @@ defmodule CodeLeadWeb.BoardLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, FlashMessages.transition_error(reason))}
+    end
+  end
+
+  def handle_event("open_schedule", %{"id" => id}, socket) do
+    {:noreply,
+     assign(socket, scheduling_task: Tasks.get_task!(id), schedule_form: ScheduleForm.new())}
+  end
+
+  def handle_event("close_schedule", _params, socket) do
+    {:noreply, close_schedule(socket)}
+  end
+
+  def handle_event("schedule_task", %{"schedule" => params}, socket) do
+    case ScheduleForm.parse(params) do
+      {:ok, scheduled_at} ->
+        socket.assigns.scheduling_task
+        |> Runtime.start_task(scheduled_at: scheduled_at)
+        |> case do
+          {:ok, _task} ->
+            {:noreply, socket |> close_schedule() |> load_board()}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> close_schedule()
+             |> put_flash(:error, FlashMessages.transition_error(reason))}
+        end
+
+      {:error, form} ->
+        {:noreply, assign(socket, schedule_form: form)}
     end
   end
 
@@ -101,6 +134,8 @@ defmodule CodeLeadWeb.BoardLive do
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
+  defp close_schedule(socket), do: assign(socket, scheduling_task: nil, schedule_form: nil)
+
   defp load_board(socket) do
     project = socket.assigns.project
     board = Tasks.board(project.id)
@@ -108,8 +143,12 @@ defmodule CodeLeadWeb.BoardLive do
     task_ids = Enum.map(tasks, & &1.id)
     review_ids = Enum.map(board.review, & &1.id)
 
+    # A task waiting on its own clock is not in line behind anything,
+    # so it takes no position — numbering it would leave gaps in the
+    # sequence the other cards show.
     queued_positions =
       Tasks.queued_tasks()
+      |> Enum.reject(&Task.scheduled?/1)
       |> Enum.with_index(1)
       |> Map.new(fn {task, position} -> {task.id, position} end)
 
@@ -230,6 +269,13 @@ defmodule CodeLeadWeb.BoardLive do
         repositories={@repositories}
         executors={@executors}
       />
+
+      <.schedule_modal
+        :if={@scheduling_task}
+        form={@schedule_form}
+        task_title={@scheduling_task.title}
+        min={ScheduleForm.now_input_value()}
+      />
     </Layouts.app>
     """
   end
@@ -316,7 +362,7 @@ defmodule CodeLeadWeb.BoardLive do
         <.badge variant={:warn}>{attention_badge(@task.attention.type)}</.badge>
       </:corner>
       <:footer>
-        <.card_footer task={@task} column={@column} ctx={@ctx} />
+        <.card_footer task={@task} column={@column} ctx={@ctx} card_id={@id} />
       </:footer>
     </.task_card>
     """
@@ -331,29 +377,59 @@ defmodule CodeLeadWeb.BoardLive do
   attr :task, :map, required: true
   attr :column, :atom, required: true
   attr :ctx, :map, required: true
+  # The card's own id, so the desktop and mobile copies of a card don't
+  # give their buttons the same one.
+  attr :card_id, :string, required: true
 
   defp card_footer(%{column: :planning} = assigns) do
     ~H"""
     <div class="flex items-center gap-1.5 text-[11px] text-text3">
       <span class="font-mono">{@task.work_type} · {@task.target}</span>
       <span :if={@task.ready_flag} class="font-semibold text-ok">✓ Ready</span>
-      <button
-        type="button"
-        phx-click="start_task"
-        phx-value-id={@task.id}
-        class="ml-auto cursor-pointer rounded-md px-1.5 py-0.5 font-semibold text-accent hover:bg-accent-soft"
-      >
-        Start ▸
-      </button>
+      <div class="ml-auto flex items-center">
+        <button
+          type="button"
+          phx-click="start_task"
+          phx-value-id={@task.id}
+          id={"#{@card_id}-start"}
+          class="cursor-pointer rounded-l-md px-1.5 py-0.5 font-semibold text-accent hover:bg-accent-soft"
+        >
+          Start ▸
+        </button>
+        <button
+          type="button"
+          phx-click="open_schedule"
+          phx-value-id={@task.id}
+          id={"#{@card_id}-schedule"}
+          title="Schedule this run"
+          aria-label="Schedule this run"
+          class="cursor-pointer rounded-r-md border-l border-border px-1.5 py-0.5 text-accent hover:bg-accent-soft"
+        >
+          <.icon name="hero-clock" class="size-3.5" />
+        </button>
+      </div>
     </div>
     """
   end
 
   defp card_footer(%{column: :running, task: %{run_state: :queued}} = assigns) do
-    assigns = assign(assigns, :position, assigns.ctx.queued_positions[assigns.task.id])
+    assigns =
+      assign(assigns,
+        position: assigns.ctx.queued_positions[assigns.task.id],
+        scheduled?: Task.scheduled?(assigns.task)
+      )
 
     ~H"""
-    <span class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2">
+    <span
+      :if={@scheduled?}
+      class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2"
+    >
+      ⏱ starts {Format.absolute(@task.scheduled_at)}
+    </span>
+    <span
+      :if={!@scheduled?}
+      class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2"
+    >
       ⏸ queued{if @position, do: " · ##{@position}"}
     </span>
     """

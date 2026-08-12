@@ -2,6 +2,7 @@ defmodule CodeLead.RuntimeTest do
   # async: false — swaps harness config, concurrency caps, and uses the
   # shared Req.Test stub with runtime-supervised processes.
   use CodeLead.DataCase, async: false
+  use Oban.Testing, repo: CodeLead.Repo
 
   import CodeLead.AgentsFixtures
   import CodeLead.GitHelpers
@@ -13,6 +14,7 @@ defmodule CodeLead.RuntimeTest do
   alias CodeLead.Projects
   alias CodeLead.Runtime
   alias CodeLead.Runtime.RunSupervisor
+  alias CodeLead.Runtime.ScheduledDispatchWorker
   alias CodeLead.Tasks
 
   @script Path.expand("../support/fake_acp_agent.exs", __DIR__)
@@ -200,6 +202,84 @@ defmodule CodeLead.RuntimeTest do
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
       assert Tasks.get_task!(task.id).state == :review
+    end
+  end
+
+  describe "scheduled execution" do
+    test "a future start time queues the task and books its wake-up" do
+      %{task: task} = runnable_task_fixture()
+      at = DateTime.add(DateTime.utc_now(:second), 3600)
+
+      assert {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+
+      # The card moves now — that is the authorisation. Only dispatch waits.
+      assert task.state == :running
+      assert task.run_state == :queued
+      assert task.scheduled_at == at
+      assert RunSupervisor.whereis(task.id) == nil
+
+      assert_enqueued(worker: ScheduledDispatchWorker, args: %{task_id: task.id})
+    end
+
+    test "the executor guard still fires at schedule time" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "No executor"})
+
+      assert {:error, :no_executor} =
+               Runtime.start_task(task, scheduled_at: DateTime.add(DateTime.utc_now(:second), 60))
+
+      refute_enqueued(worker: ScheduledDispatchWorker)
+    end
+
+    test "kick_queue leaves a task whose time has not come" do
+      %{task: task} = runnable_task_fixture()
+      at = DateTime.add(DateTime.utc_now(:second), 3600)
+
+      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+      Runtime.kick_queue()
+
+      assert Tasks.get_task!(task.id).run_state == :queued
+      assert RunSupervisor.whereis(task.id) == nil
+    end
+
+    test "cancelling back to Planning drops the schedule" do
+      %{task: task} = runnable_task_fixture()
+      at = DateTime.add(DateTime.utc_now(:second), 3600)
+
+      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+
+      assert {:ok, task} = Runtime.cancel_task(task)
+      assert task.state == :planning
+      assert task.scheduled_at == nil
+    end
+
+    test "run_now clears the schedule so nothing holds the task back" do
+      %{task: task} = runnable_task_fixture()
+      at = DateTime.add(DateTime.utc_now(:second), 3600)
+
+      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+
+      # Held at capacity so the assertion is about the schedule, not
+      # about a real run starting.
+      Application.put_env(:code_lead, :max_concurrent_runs, 0)
+
+      assert {:ok, task} = Runtime.run_now(task)
+      assert task.scheduled_at == nil
+      assert task.run_state == :queued
+    end
+
+    test "no start time books no wake-up" do
+      %{task: task} = runnable_task_fixture()
+
+      # Held at capacity so this test is about the absence of scheduling,
+      # not about a run starting — dispatch is covered elsewhere.
+      Application.put_env(:code_lead, :max_concurrent_runs, 0)
+
+      assert {:ok, task} = Runtime.start_task(task)
+      assert task.run_state == :queued
+      assert task.scheduled_at == nil
+
+      refute_enqueued(worker: ScheduledDispatchWorker)
     end
   end
 

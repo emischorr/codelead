@@ -37,7 +37,7 @@ Key fields only. `enc` = encrypted at rest. `seam` = present for a future featur
 - **project_default_reviewers** — `project_id`, `work_type`, `agent_id`. Pre-fills a new task's reviewer set for that work type (editable per task).
 - **providers** — `name`, `kind` (`:anthropic_subscription` | `:anthropic_api` | `:openai` | `:ollama` | …), `config` *(enc: tokens/keys/endpoint)*. Instance-scoped.
 - **agents** — `name` (persona), `scope` (`:org` | `:project`), `project_id` (nullable), `roles` (array of `:execute` | `:review`), `work_type` (`:code`|`:design`|`:content`|`:file`), `driver` (`:acp` | `:llm_api`), `harness` (`:claude_code` | `:codex` | `nil`), `provider_id`, `model_variant`, `system_prompt`, `memory` *(jsonb, seam)*.
-- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `ready_flag` (bool), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `archived_at` (nullable — orthogonal to `state`).
+- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `ready_flag` (bool), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `archived_at` (nullable — orthogonal to `state`), `scheduled_at` (nullable — when a queued run may start; `NULL` = as soon as the scheduler admits it, see §5.3; recurrence via a future `schedule_rule` is a `seam`, not built).
 - **task_steps** — audit trail: `task_id`, `executor_type` (`:agent`|`:system`|`:human`), `executor_name`, `executor_ref` (nullable), `kind` (`:run`|`:review`|`:transition`|`:commit`|…), `summary`, `inserted_at`. **Denormalized** so agent deletion is graceful.
 - **task_reviewers** — `task_id`, `agent_id`. The reviewer set chosen for the task (each `agent_id` has `:review` in `roles` and matches the task's `work_type`).
 - **reviews** — one row per reviewer per review cycle: `task_id`, `agent_id`, `task_step_id`, `cycle` (int), `verdict` (`:pass`|`:concerns`|`:block`, **advisory**), `findings` (jsonb/text), `inserted_at`.
@@ -71,6 +71,44 @@ Key fields only. `enc` = encrypted at rest. `seam` = present for a future featur
 
 **Delete:** a task with no pushed artifacts (`:planning` or `:cancelled`) may be hard-deleted (cascade its planning messages, comments, task_steps). Distinct from archive, which retains a finished task. This is how a split umbrella task is discarded.
 
+### 4.1 Workflow definition & seam
+
+The table above is **data, not code**. The machine dispatches on an abstract **stage type** and on per-edge **policies**, never on column identity, so the four columns are one workflow definition rather than the definition.
+
+**Stage type** — `:plan | :execute | :review | :finalize | :custom`. It decides what *entering* a stage does; the stage's key, name, and position decide nothing. `:custom` is the default: a column declared without a type is an inert holding column, so a future stage added without an implementation is safe rather than dangerous.
+
+| stage (`tasks.state`) | `stage_type` | on entry |
+|---|---|---|
+| planning | `:plan` | nothing — the human workbench |
+| running | `:execute` | executor guard → `Scheduler.admit?` → provision by **target** → start the agent via `AgentDriver` |
+| review | `:review` | fan out one read-only run per selected reviewer |
+| done | `:finalize` | finalize by **target** (commit/push/optional MR-PR, or folder artifact) |
+
+**Edge policies** — every transition carries three:
+
+- `trigger` — `:human` (a person moves the card) or `:auto` (the system acts on a completion signal). Only running → review is `:auto`.
+- `context_policy` — `:carry` or `:reset`, governing the agent conversation (`acp_session_id`).
+- `worktree_policy` — `:keep` or `:discard`, governing the worktree and feature branch.
+
+The two policies are the generalisation of the rework distinction above: *request changes* is `:carry` + `:keep`, *send back to planning* is `:reset` + `:discard`. The built-in workflow in the new vocabulary:
+
+| from | to | `trigger` | `context_policy` | `worktree_policy` |
+|---|---|---|---|---|
+| planning | running | `:human` | `:carry` | `:keep` |
+| running | review | `:auto` | `:carry` | `:keep` |
+| running | planning | `:human` | `:carry` | `:keep` |
+| review | done | `:human` | `:carry` | `:keep` |
+| review | running | `:human` | `:carry` | `:keep` |
+| review | planning | `:human` | `:reset` | `:discard` |
+
+An (from, to) pair absent from the definition is `{:error, :invalid_state}` — the definition, not the code, is the authority on which moves are legal. Field changes are **derived** from the edge and the target stage, not written per column: target `:execute` ⇒ `run_state := :queued` (everything else `:idle`) and `next_prompt := ` the run's prompt; `trigger: :human` ⇒ `attention := nil` (an `:auto` signal leaves it to the entering stage's effects); `context_policy: :reset` ⇒ clear `acp_session_id`; `worktree_policy: :discard` ⇒ drop the worktree/branch references and tear them down; target `:finalize` ⇒ stamp `completed_at`.
+
+`run_state` is deliberately **outside** the graph. Dispatch (`queued → dispatched → executing`) is the `:execute` stage's on-entry effect, and run failure changes `run_state` and `attention` with no column change — neither is an edge.
+
+**The seam.** `%CodeLead.Workflow{stages: [%Stage{key, name, position, stage_type}], transitions: [%Transition{from, to, trigger, context_policy, worktree_policy}]}` is the stable interface. `tasks.workflow_key` names a task's definition; MVP registers exactly one, built in code.
+
+**Known future migration (the honest MVP boundary).** `tasks.state` is still a fixed Ecto enum and the definition still lives in code. Custom / multi-stage workflows generalise `state` into a stage reference and add a persistence + loader layer producing the *same* struct from the database; the machine will not change. There is deliberately no reachability or cycle validator — with one hand-written definition it would guard nothing, and it belongs to that deferred feature.
+
 ---
 
 ## 5. Abstractions (behaviours)
@@ -95,12 +133,31 @@ Callbacks: `provision(task) -> context`, `spawn(context, command) -> process`, `
 
 Callbacks: `admit?(task) -> :ok | {:hold, reason}`, `dispatch(task)`. **Bound to the task's provider connection**, not global.
 
-- **`PassThrough` (MVP):** `admit?` returns `:ok` unless a **budget limit** is exceeded (limit check lives here); dispatch immediately.
-- **`Windowed` (later):** for subscription token windows — hold until reset, then auto-dispatch.
+`admit?` is an **ordered composition of gates** (`CodeLead.Scheduler.Gate`, one `check(task) -> :ok | {:hold, reason}` each), not a single check. The first hold wins and short-circuits. Gates compose where separate impls would exclude: a run can be held by a wall clock *and* still be budget-enforced when that clock runs out — a `Scheduled`-vs-`PassThrough` split could not express that without duplicating the budget check.
 
-`queued` is a **sub-state shown in the Running column** with a badge, not a new column. Cross-project ordering / priority is iteration two.
+| Gate | Holds when | Reason |
+|---|---|---|
+| `ScheduleGate` | `scheduled_at` is set and still in the future | `{:hold, {:scheduled, at}}` |
+| `BudgetGate` | a project or org token/cost limit is reached | `{:hold, :budget}` |
+| `CapacityGate` | `:max_concurrent_runs` runners are already live | `{:hold, :capacity}` |
+| `WindowGate` *(later)* | subscription token window not yet reset | `{:hold, {:window, at}}` |
 
-**Executor guard:** planning→running is blocked unless the task has an `agent_id` (an executor whose `roles` include `:execute` and whose `work_type` matches). If no eligible agent exists, the UI routes the user to create one rather than dead-ending.
+Order is part of the contract. `ScheduleGate` runs first because before the start time the truthful reason a task waits is the clock, and budget is dynamic enough that checking it *at* dispatch is both more correct and sufficient. Hold reasons carry data where the UI needs it, hence the tuple.
+
+- **`PassThrough` (MVP):** run the list, dispatch when every gate passes. Subscription-window behaviour is a `WindowGate` **added to the list**, not a second impl.
+
+`queued` is a **sub-state shown in the Running column** with a badge, not a new column. Cross-project ordering / priority is iteration two. Held tasks are retried by `Runtime.kick_queue/0`, which runs after every completed run; a task held on a start time additionally books an Oban wake-up for that moment (see **scheduled execution** below).
+
+**Executor guard:** entering an `:execute` **stage** is blocked unless the task has an `agent_id` (an executor whose `roles` include `:execute` and whose `work_type` matches) and, for `:repo` targets, a `repository_id`. Keyed on stage type rather than on a single edge, so review→running inherits it. If no eligible agent exists, the UI routes the user to create one rather than dead-ending.
+
+**Scheduled execution.** A nullable `tasks.scheduled_at` defers *dispatch*, never the workflow move: the human moves the card to Running — that is the authorisation — and it waits in `queued` with a "starts …" badge until its time comes. No auto-transition is involved, and the executor guard therefore fires when the human schedules rather than unattended at 2am.
+
+- The wake-up is an Oban job (`CodeLead.Runtime.ScheduledDispatchWorker`, `:dispatch` queue) enqueued from the single `admit?` call site when `ScheduleGate` holds. It is **idempotent** (unique on task + time across the pending states).
+- On firing it **re-runs `admit?`** rather than dispatching, so budget and capacity still gate an unattended run.
+- It is **self-verifying**: the scheduled time is embedded in the job args and the job no-ops unless the task still exists, still sits queued in Running, and still carries that exact time. Cancel, reschedule, run-early and delete all fall out of that check — nothing races Oban to withdraw a job.
+- `scheduled_at` is cleared on dispatch and on entering a `:plan` stage (cancel, send-back). A time already in the past passes the gate and dispatches immediately — it is a "not before" bound, not an appointment.
+- **Missed schedule:** if the server is down at T, Oban runs the job late on recovery. Skipping a run that is more than N late is a later refinement, deliberately not built.
+- Recurrence (a `schedule_rule` cron/RRULE field) is an additive seam, not in MVP — recurring wall-clock times get genuinely fiddly across DST.
 
 ### 5.4 Reviewers
 
@@ -154,7 +211,7 @@ Auth stays on the host/volume; credentials are not baked into the agent image be
 - **Source:** the ACP result/usage message per run (prompt/completion/total tokens, cost); `llm_api` runs report usage from the provider response.
 - **Persist** per run in `agent_runs` (prunable). Roll up nightly (Oban) into `daily_metrics` per project per day.
 - **Per-task cost** = sum of its `agent_runs` (executor runs **and** each reviewer run — N reviewers multiply per-cycle review cost).
-- **Budgets:** organization and project carry optional token/cost limits; the scheduler's `admit?` enforces them (over-limit → `{:hold, :budget}`, task stays queued with a badge).
+- **Budgets:** organization and project carry optional token/cost limits; the scheduler's `BudgetGate` enforces them inside `admit?` (over-limit → `{:hold, :budget}`, task stays queued with a badge). Held tasks are retried by `Runtime.kick_queue/0` after every completed run. A **scheduled** run re-enters the whole gate list when its start time arrives, so an unattended dispatch is budget-checked exactly like an attended one — the limit cannot be sidestepped by scheduling around it.
 - MVP surfaces minimal display (per-task total, current budget usage); dashboards/graphs are iteration two on the same tables.
 
 ---
@@ -200,7 +257,8 @@ The task view auto-selects the tab matching `tasks.state`; Agent/Review/Develope
 
 | Future feature | Seam already present in MVP |
 |---|---|
-| Subscription-window queuing | `Scheduler` behaviour (`Windowed` impl) + provider binding + `queued` run_state |
+| Subscription-window queuing | a `WindowGate` added to the `admit?` gate list (§5.3) + provider binding + `queued` run_state |
+| Recurring scheduled runs | a `schedule_rule` (cron/RRULE) field beside `tasks.scheduled_at`; the wake-up job re-enqueues the next occurrence |
 | Container / selectable executor | `Executor` behaviour (`DockerContainer` impl) |
 | Review walkthrough | `llm_api` driver reading the diff |
 | Agent memory | `agents.memory` field + system-prompt composition |
@@ -212,3 +270,6 @@ The task view auto-selects the tab matching `tasks.state`; Agent/Review/Develope
 | Search across archived tasks | archived `tasks` retained in Postgres + future full-text / vector index |
 | Agent access to past tasks | an ACP/MCP tool exposing archived task history (spec, diffs, reviews) |
 | Task splitting / sub-tasks / epics | `tasks.parent_id` (nullable) — MVP leaves it null; splitting is manual |
+| Custom / multi-stage workflows | the `%CodeLead.Workflow{}` struct (§4.1) + `tasks.workflow_key` — a future DB loader produces the same struct |
+| Generalised auto-transitions | `trigger: :auto` on transitions — today only running → review carries it |
+| Per-stage context reset for multi-execute pipelines | `context_policy` is already per-edge, not per-workflow |

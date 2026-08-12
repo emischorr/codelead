@@ -104,19 +104,78 @@ defmodule CodeLead.Executor.LocalSubprocess do
     :ok
   end
 
+  # The base clone's own worktree registry — not the mere presence of a
+  # directory — decides whether the path can be reused, because
+  # `Workspace.worktree_path/1` is keyed on the task id alone: `mix
+  # ecto.reset` reissues ids while the workspace volume survives, so
+  # `worktrees/task-<id>` can be a leftover from an earlier generation,
+  # and even a worktree of an entirely different repository. Reusing one
+  # unchecked runs the agent in the wrong repo.
   defp ensure_worktree(task, repository, base_path) do
-    branch = task.branch_name || "codelead/task-#{task.id}-#{Workspace.slug(task.title)}"
     worktree_path = task.worktree_path || Workspace.worktree_path(task.id)
 
-    if File.dir?(worktree_path) do
-      {:ok, task, worktree_path, branch}
+    # The registry alone is not enough: it keeps listing a worktree
+    # whose directory was removed until something prunes it.
+    with true <- File.dir?(worktree_path),
+         {:ok, branch} <- Git.worktree_branch(base_path, worktree_path) do
+      adopt_worktree(task, worktree_path, branch)
     else
-      with {:ok, _} <-
-             Git.create_worktree(base_path, worktree_path, branch, repository.default_branch),
-           {:ok, task} <- Tasks.set_execution_context(task, worktree_path, branch) do
-        {:ok, task, worktree_path, branch}
-      end
+      _not_ours -> provision_worktree(task, repository, base_path, worktree_path)
     end
+  end
+
+  # Persisted on every provisioning, not just the first: a run whose
+  # context is missing from the task leaves the diff, the terminal, the
+  # reviewers, and the finalizer with nothing to work from. The branch
+  # is the one git reports rather than a recomputed slug, so a task
+  # renamed between runs keeps the branch its commits are on.
+  defp adopt_worktree(task, worktree_path, branch) do
+    with {:ok, task} <- Tasks.set_execution_context(task, worktree_path, branch) do
+      {:ok, task, worktree_path, branch}
+    end
+  end
+
+  defp provision_worktree(task, repository, base_path, worktree_path) do
+    # A no-op when the path is free; clears the orphan when it is not.
+    Git.remove_worktree(base_path, worktree_path)
+
+    with {:ok, _} <- add_worktree(task, repository, base_path, worktree_path) do
+      adopt_worktree(task, worktree_path, worktree_branch(task))
+    end
+  end
+
+  # A recorded branch may carry commits the task still needs, so it is
+  # checked out rather than recreated. An unrecorded one can only be an
+  # abandoned leftover under the same name, so it goes.
+  defp add_worktree(%Task{branch_name: branch} = task, repository, base_path, worktree_path)
+       when is_binary(branch) do
+    case Git.attach_worktree(base_path, worktree_path, branch) do
+      {:ok, path} ->
+        {:ok, path}
+
+      {:error, _output} ->
+        create_worktree(task, repository, base_path, worktree_path)
+    end
+  end
+
+  defp add_worktree(task, repository, base_path, worktree_path) do
+    Git.delete_branch(base_path, worktree_branch(task))
+    create_worktree(task, repository, base_path, worktree_path)
+  end
+
+  defp create_worktree(task, repository, base_path, worktree_path) do
+    Git.create_worktree(
+      base_path,
+      worktree_path,
+      worktree_branch(task),
+      repository.default_branch
+    )
+  end
+
+  defp worktree_branch(%Task{branch_name: branch}) when is_binary(branch), do: branch
+
+  defp worktree_branch(%Task{id: id, title: title}) do
+    "codelead/task-#{id}-#{Workspace.slug(title)}"
   end
 
   # A bare git failure cannot tell the operator what to do about it, so

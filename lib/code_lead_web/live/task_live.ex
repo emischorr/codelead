@@ -23,6 +23,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLeadWeb.DiffComponents
   alias CodeLeadWeb.FlashMessages
   alias CodeLeadWeb.NavContext
+  alias CodeLeadWeb.ScheduleForm
   alias CodeLeadWeb.TaskLive.AgentFeedBlocks
   alias CodeLeadWeb.TaskLive.AgentTab
   alias CodeLeadWeb.TaskLive.DiffTab
@@ -56,6 +57,7 @@ defmodule CodeLeadWeb.TaskLive do
         all_runs?: false,
         chat_pending?: false,
         show_feedback?: false,
+        schedule_form: nil,
         diff_files: nil,
         diff_stats: nil,
         diff_error: nil,
@@ -106,6 +108,32 @@ defmodule CodeLeadWeb.TaskLive do
 
   def handle_event("cancel_run", _params, socket) do
     socket.assigns.task |> Runtime.cancel_task() |> after_action(socket)
+  end
+
+  def handle_event("run_now", _params, socket) do
+    socket.assigns.task |> Runtime.run_now() |> after_action(socket)
+  end
+
+  def handle_event("open_schedule", _params, socket) do
+    {:noreply, assign(socket, schedule_form: ScheduleForm.new())}
+  end
+
+  def handle_event("close_schedule", _params, socket) do
+    {:noreply, assign(socket, schedule_form: nil)}
+  end
+
+  def handle_event("schedule_task", %{"schedule" => params}, socket) do
+    case ScheduleForm.parse(params) do
+      {:ok, scheduled_at} ->
+        socket = assign(socket, schedule_form: nil)
+
+        socket.assigns.task
+        |> Runtime.start_task(scheduled_at: scheduled_at)
+        |> after_action(socket)
+
+      {:error, form} ->
+        {:noreply, assign(socket, schedule_form: form)}
+    end
   end
 
   def handle_event("retry_run", _params, socket) do
@@ -758,6 +786,13 @@ defmodule CodeLeadWeb.TaskLive do
             {@task.title}
           </h1>
           <.state_badge state={@task.state} run_state={@task.run_state} />
+          <span
+            :if={Task.scheduled?(@task)}
+            id="scheduled-hint"
+            class="hidden items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2 sm:inline-flex"
+          >
+            ⏱ starts {Format.absolute(@task.scheduled_at)}
+          </span>
           <.agent_pill :if={@executor} name={@executor.name} harness={@executor.harness} />
           <.cost_stat
             cost_cents={@task_stat.cost_cents}
@@ -769,7 +804,7 @@ defmodule CodeLeadWeb.TaskLive do
           />
           <div class="flex-1" />
           <div class="hidden items-center gap-2 lg:flex">
-            <.header_actions task={@task} />
+            <.header_actions task={@task} scheduled?={Task.scheduled?(@task)} />
           </div>
         </div>
         <.tab_nav tabs={tab_links(@project, @task)} active={@tab} class="mt-3 px-4 sm:px-6" />
@@ -821,10 +856,17 @@ defmodule CodeLeadWeb.TaskLive do
       </div>
 
       <div class="fixed inset-x-0 bottom-0 z-30 flex gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden">
-        <.header_actions task={@task} mobile />
+        <.header_actions task={@task} scheduled?={Task.scheduled?(@task)} mobile />
       </div>
 
       <.feedback_modal :if={@show_feedback?} />
+
+      <.schedule_modal
+        :if={@schedule_form}
+        form={@schedule_form}
+        task_title={@task.title}
+        min={ScheduleForm.now_input_value()}
+      />
     </Layouts.app>
     """
   end
@@ -846,9 +888,18 @@ defmodule CodeLeadWeb.TaskLive do
 
   attr :task, :map, required: true
   attr :mobile, :boolean, default: false
+  attr :scheduled?, :boolean, default: false
 
   defp header_actions(%{task: %{state: :planning}} = assigns) do
     ~H"""
+    <.button
+      phx-click="open_schedule"
+      id={action_id("schedule-run", @mobile)}
+      title="Schedule this run"
+    >
+      <.icon name="hero-clock" class="size-3.5" />
+      <span class={@mobile && "hidden!"}>Schedule</span>
+    </.button>
     <.button
       variant="primary"
       phx-click="start_run"
@@ -857,6 +908,20 @@ defmodule CodeLeadWeb.TaskLive do
     >
       Start run
     </.button>
+    """
+  end
+
+  defp header_actions(%{task: %{state: :running, run_state: :queued}, scheduled?: true} = assigns) do
+    ~H"""
+    <.button
+      variant="primary"
+      phx-click="run_now"
+      class={@mobile && "flex-1"}
+      id={action_id("run-now", @mobile)}
+    >
+      Run now
+    </.button>
+    <.button phx-click="cancel_run" id={action_id("cancel-run", @mobile)}>Cancel run</.button>
     """
   end
 

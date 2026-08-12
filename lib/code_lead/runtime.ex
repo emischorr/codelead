@@ -2,24 +2,76 @@ defmodule CodeLead.Runtime do
   @moduledoc """
   Human-facing run control: the workflow transitions that carry runtime
   side effects (dispatching agents, terminating processes, tearing down
-  contexts). Pure data transitions stay in `CodeLead.Tasks`; the future
-  LiveView calls these functions.
+  contexts). Pure data transitions stay in `CodeLead.Tasks`; the
+  LiveViews and the IEx console call these functions.
+
+  `advance/3` is the machine. It resolves the requested edge in the
+  task's `CodeLead.Workflow` definition, runs the target stage's
+  effects around the write, and applies the edge's worktree policy —
+  all dispatched on the stage's `stage_type`, so nothing here knows a
+  column by name. The functions below name edges and supply summaries.
   """
 
-  alias CodeLead.Runtime.RunSupervisor
+  alias CodeLead.Runtime.StageEffects
   alias CodeLead.Runtime.TaskRunner
-  alias CodeLead.Scheduler
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
+  alias CodeLead.Workflow
+
+  @doc """
+  Moves a task along one edge of its workflow, with side effects.
+
+  Ordering is load-bearing: the edge is resolved first, so an illegal
+  move costs nothing; the target stage's `prepare/2` runs next and can
+  still veto (a failed push leaves the task in Review); only then is
+  the state written, the worktree policy applied, and the stage's
+  `on_enter/3` fired. Returns the reloaded task plus whatever
+  `prepare/2` produced.
+  """
+  @spec advance(Task.t(), {atom(), atom()}, keyword()) ::
+          {:ok, Task.t(), term()} | {:error, term()}
+  def advance(%Task{} = task, {_from, to} = edge_keys, opts) do
+    workflow = Workflow.fetch!(task.workflow_key)
+    target = Workflow.stage(workflow, to)
+
+    with {:ok, edge} <- fetch_edge(workflow, task, edge_keys),
+         {:ok, prepared} <- StageEffects.prepare(target.stage_type, task),
+         {:ok, updated} <- Tasks.apply_transition(task, edge_keys, opts) do
+      apply_worktree_policy(task, edge.worktree_policy)
+      StageEffects.on_enter(target.stage_type, updated, prepared)
+      {:ok, Tasks.get_task!(task.id), prepared}
+    end
+  end
 
   @doc """
   Planning → Running: enqueues the task and lets the scheduler admit
   and dispatch it. Returns the task (queued or already dispatching).
+
+  `:scheduled_at` defers *dispatch*, not the move — the card enters
+  Running now, because moving it is the authorisation, and waits there
+  until its time comes. The executor guard therefore fires when the
+  human schedules rather than at 2am.
   """
-  @spec start_task(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def start_task(%Task{} = task) do
-    with {:ok, task} <- Tasks.move_to_running(task) do
-      try_dispatch(task)
+  @spec start_task(Task.t(), keyword()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def start_task(%Task{} = task, opts \\ []) do
+    summary =
+      case Keyword.get(opts, :scheduled_at) do
+        nil -> "moved to Running (queued)"
+        at -> "moved to Running — scheduled for #{DateTime.to_iso8601(at)}"
+      end
+
+    task
+    |> advance({:planning, :running}, Keyword.merge(opts, actor: :human, summary: summary))
+    |> drop_prepared()
+  end
+
+  @doc """
+  Drops a queued task's start time and dispatches it immediately.
+  """
+  @spec run_now(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def run_now(%Task{} = task) do
+    with {:ok, task} <- Tasks.clear_schedule(task) do
+      StageEffects.try_dispatch(task)
       {:ok, Tasks.get_task!(task.id)}
     end
   end
@@ -31,16 +83,24 @@ defmodule CodeLead.Runtime do
   @spec cancel_task(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
   def cancel_task(%Task{} = task) do
     _ = TaskRunner.cancel(task.id)
-    Tasks.cancel_run(task)
+
+    task
+    |> advance({:running, :planning},
+      actor: :human,
+      summary: "run cancelled — back to Planning (worktree kept)"
+    )
+    |> drop_prepared()
   end
 
   @doc """
-  Re-queues a failed run and kicks the scheduler.
+  Re-queues a failed run and kicks the scheduler. A retry stays inside
+  the Running stage — it moves `run_state`, not the card — so it is not
+  a workflow edge.
   """
   @spec retry_task(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
   def retry_task(%Task{} = task) do
     with {:ok, task} <- Tasks.retry_run(task) do
-      try_dispatch(task)
+      StageEffects.try_dispatch(task)
       {:ok, Tasks.get_task!(task.id)}
     end
   end
@@ -59,10 +119,13 @@ defmodule CodeLead.Runtime do
   """
   @spec request_changes(Task.t(), String.t()) :: {:ok, Task.t()} | Tasks.transition_error()
   def request_changes(%Task{} = task, feedback) do
-    with {:ok, task} <- Tasks.request_changes(task, feedback) do
-      try_dispatch(task)
-      {:ok, Tasks.get_task!(task.id)}
-    end
+    task
+    |> advance({:review, :running},
+      actor: :human,
+      prompt: feedback,
+      summary: "changes requested: #{feedback}"
+    )
+    |> drop_prepared()
   end
 
   @doc """
@@ -72,10 +135,27 @@ defmodule CodeLead.Runtime do
   """
   @spec send_back_to_planning(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
   def send_back_to_planning(%Task{} = task) do
-    with {:ok, updated} <- Tasks.send_back_to_planning(task) do
-      teardown_context(task)
-      {:ok, updated}
-    end
+    task
+    |> advance({:review, :planning},
+      actor: :human,
+      summary: "sent back to Planning — worktree, branch, and session discarded"
+    )
+    |> drop_prepared()
+  end
+
+  @doc """
+  Running → Review on successful completion — the workflow's one
+  automatic edge. Fans out the reviewers on entry. Called by the task
+  runner, not by a human.
+  """
+  @spec complete_run(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def complete_run(%Task{} = task) do
+    task
+    |> advance({:running, :review},
+      actor: :system,
+      summary: "run completed — moved to Review"
+    )
+    |> drop_prepared()
   end
 
   @doc """
@@ -88,15 +168,9 @@ defmodule CodeLead.Runtime do
           {:ok, Task.t(), CodeLead.Finalizer.outcome()}
           | {:error, term()}
           | Tasks.transition_error()
-  def approve(%Task{state: :review} = task) do
-    with {:ok, outcome} <- CodeLead.Finalizer.finalize(task),
-         {:ok, task} <- Tasks.approve(task) do
-      Tasks.record_step(task.id, :commit, :system, "finalizer", outcome.note)
-      {:ok, task, outcome}
-    end
+  def approve(%Task{} = task) do
+    advance(task, {:review, :done}, actor: :human, summary: "approved — Done")
   end
-
-  def approve(%Task{}), do: {:error, :invalid_state}
 
   @doc """
   Attempts to dispatch every queued task (in priority order) that the
@@ -105,8 +179,23 @@ defmodule CodeLead.Runtime do
   """
   @spec kick_queue() :: :ok
   def kick_queue do
-    Enum.each(Tasks.queued_tasks(), &try_dispatch/1)
+    Enum.each(Tasks.queued_tasks(), &StageEffects.try_dispatch/1)
   end
+
+  # The task must sit at the edge's from-stage; `Tasks.apply_transition/3`
+  # checks this again, but the edge has to resolve before `prepare/2`
+  # runs so an illegal move never reaches a side effect.
+  defp fetch_edge(workflow, %Task{state: state}, {from, to}) when state == from do
+    case Workflow.fetch_transition(workflow, from, to) do
+      {:ok, edge} -> {:ok, edge}
+      :error -> {:error, :invalid_state}
+    end
+  end
+
+  defp fetch_edge(_workflow, %Task{}, _edge_keys), do: {:error, :invalid_state}
+
+  defp apply_worktree_policy(%Task{} = task, :discard), do: teardown_context(task)
+  defp apply_worktree_policy(%Task{}, :keep), do: :ok
 
   defp teardown_context(%Task{worktree_path: nil, target: :repo}), do: :ok
 
@@ -134,12 +223,8 @@ defmodule CodeLead.Runtime do
     CodeLead.Executor.impl().teardown(context, keep: false)
   end
 
-  defp try_dispatch(%Task{} = task) do
-    if RunSupervisor.whereis(task.id) == nil do
-      case Scheduler.impl().admit?(task) do
-        :ok -> Scheduler.impl().dispatch(task)
-        {:hold, _reason} -> :hold
-      end
-    end
-  end
+  # Only `approve/1` surfaces what the stage prepared; the rest keep the
+  # two-tuple their callers pattern-match on.
+  defp drop_prepared({:ok, task, _prepared}), do: {:ok, task}
+  defp drop_prepared({:error, reason}), do: {:error, reason}
 end

@@ -23,6 +23,15 @@ defmodule CodeLeadWeb.TaskLiveTest do
     if tab, do: "#{base}?tab=#{tab}", else: base
   end
 
+  # What a `datetime-local` input posts: minute precision, no zone. The
+  # time is on the minute so the round trip is lossless.
+  defp input_value(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%dT%H:%M")
+
+  defp in_an_hour do
+    at = DateTime.add(DateTime.utc_now(:second), 3600)
+    %{at | second: 0}
+  end
+
   describe "tab defaulting" do
     test "planning tasks open on the Task tab", %{conn: conn} do
       project = project_fixture()
@@ -105,6 +114,57 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert [%{id: reviewer_id}] = Tasks.reviewers(task.id)
       assert reviewer_id == reviewer.id
+    end
+  end
+
+  describe "scheduled runs" do
+    test "scheduling from the task page queues the run", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      at = in_an_hour()
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      view |> element("#action-schedule-run") |> render_click()
+
+      view
+      |> form("#schedule-form", schedule: %{scheduled_at: input_value(at)})
+      |> render_submit()
+
+      task = Tasks.get_task!(task.id)
+      assert task.state == :running
+      assert task.run_state == :queued
+      assert task.scheduled_at == at
+    end
+
+    test "a queued scheduled task offers Run now, which clears the schedule", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      task =
+        put_context!(task, %{
+          state: :running,
+          run_state: :queued,
+          scheduled_at: in_an_hour()
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#scheduled-hint")
+      assert has_element?(view, "#action-run-now")
+
+      view |> element("#action-run-now") |> render_click()
+
+      assert Tasks.get_task!(task.id).scheduled_at == nil
+      refute has_element?(view, "#action-run-now")
+    end
+
+    test "a queued task with no schedule offers no Run now", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = put_context!(task, %{state: :running, run_state: :queued})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      refute has_element?(view, "#action-run-now")
+      refute has_element?(view, "#scheduled-hint")
     end
   end
 

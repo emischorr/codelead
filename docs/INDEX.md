@@ -16,8 +16,8 @@ Map of the repo's documentation. Design notes describe how things work
 
 - [`architecture.md`](architecture.md) — module map: contexts, behaviours, runtime processes.
 - [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout, git credentials (and how to read a forge's refusal), harness prerequisites, the Docker image.
-- [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: transition table, deviations, IEx usage.
-- [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches, diff/commit/push, forge tokens, executor provisioning.
+- [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: the `CodeLead.Workflow` definition it runs on (stage types, edge policies), transition table, stage effects, the scheduler's admission gates and scheduled runs, deviations, IEx usage.
+- [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches (including when an existing directory may be reused), diff/commit/push, forge tokens, executor provisioning, `mix code_lead.workspace.clean`.
 - [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations, preflight.
 - [`cost-tracking.md`](cost-tracking.md) — agent_runs (token split, duration), where ACP reports tokens vs money, nightly rollups, pricing precedence, billing modes, spend queries, budget gate.
 - [`reviews.md`](reviews.md) — reviewer fan-out, advisory verdicts, read-only ACP posture, rework loop.

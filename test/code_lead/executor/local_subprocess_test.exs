@@ -11,6 +11,7 @@ defmodule CodeLead.Executor.LocalSubprocessTest do
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Tasks
+  alias CodeLead.Workspace
 
   defp repo_task_setup do
     project = project_fixture()
@@ -62,6 +63,66 @@ defmodule CodeLead.Executor.LocalSubprocessTest do
       assert {:ok, context2} = LocalSubprocess.provision(task)
       assert context2.path == context1.path
       assert File.exists?(Path.join(context2.path, "new.txt"))
+    end
+
+    test "adopts an existing worktree the task has no record of, and persists it" do
+      %{task: task} = repo_task_setup()
+
+      {:ok, context} = LocalSubprocess.provision(task)
+      File.write!(Path.join(context.path, "earlier.txt"), "work from an earlier run")
+
+      # The directory outlives the record the way it does when the
+      # database is dropped and recreated.
+      {:ok, task} = Tasks.set_execution_context(Tasks.get_task!(task.id), nil, nil)
+
+      assert {:ok, adopted} = LocalSubprocess.provision(task)
+      assert adopted.path == context.path
+      assert adopted.branch_name == context.branch_name
+      assert File.exists?(Path.join(adopted.path, "earlier.txt"))
+
+      task = Tasks.get_task!(task.id)
+      assert task.worktree_path == context.path
+      assert task.branch_name == context.branch_name
+    end
+
+    test "discards a worktree belonging to another repository" do
+      %{task: task, repository: repository} = repo_task_setup()
+
+      # A leftover at this task's path from an earlier database
+      # generation, checked out from an unrelated repository.
+      other_clone = Path.join([Workspace.root(), "test_origins", "other-#{task.id}"])
+      {:ok, _} = Git.ensure_clone(create_origin!(), other_clone)
+      orphan = Workspace.worktree_path(task.id)
+
+      {:ok, _} =
+        Git.create_worktree(other_clone, orphan, "codelead/task-#{task.id}-stale", "main")
+
+      File.write!(Path.join(orphan, "stale.txt"), "from another repository")
+
+      assert {:ok, context} = LocalSubprocess.provision(task)
+      assert context.path == orphan
+      refute File.exists?(Path.join(context.path, "stale.txt"))
+      assert context.branch_name == "codelead/task-#{task.id}-add-pricing-page"
+
+      {:ok, worktrees} = Git.git(context.base_clone_path, ["worktree", "list"])
+      assert worktrees =~ context.path
+
+      assert Tasks.get_task!(task.id).worktree_path == context.path
+      refute Projects.get_repository!(repository.id).base_clone_path == other_clone
+    end
+
+    test "re-attaches a recorded branch whose worktree directory is gone" do
+      %{task: task} = repo_task_setup()
+      {:ok, context} = LocalSubprocess.provision(task)
+
+      File.write!(Path.join(context.path, "pricing.html"), "<h1>Pricing</h1>\n")
+      {:ok, _} = Git.commit_all(context.path, "Add pricing page")
+      File.rm_rf!(context.path)
+
+      assert {:ok, restored} = LocalSubprocess.provision(Tasks.get_task!(task.id))
+      assert restored.path == context.path
+      assert restored.branch_name == context.branch_name
+      assert File.exists?(Path.join(restored.path, "pricing.html"))
     end
 
     test "project env is injected into the context" do

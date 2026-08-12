@@ -39,7 +39,7 @@ mix test test/path/file_test.exs:42     # single test by line
 
 mix precommit                 # compile --warnings-as-errors + deps.unlock --unused + format + test
 mix credo                     # not part of precommit — run separately
-mix ecto.reset                # drop + create + migrate + seed
+mix ecto.reset                # drop + wipe per-task workspace state + create + migrate + seed
 ```
 
 `mix precommit` runs in `MIX_ENV=test` (set via `preferred_envs`). Run it when you're done with a change and fix anything it reports.
@@ -53,6 +53,8 @@ Toolchain is pinned in `.tool-versions` (Erlang 27.3.4.14, Elixir 1.18.4-otp-27)
 CodeLead is a self-hosted, human-in-the-loop platform where a product owner directs a team of AI agents. The organizing principle: **humans own every handoff between workflow states.** Automation that bypasses a human decision point is a design failure. The single exception is Running→Review on success, which is a completion signal rather than a decision.
 
 **Workflow.** A Kanban board of four columns — Planning → Running → Review → Done — where `tasks.state` is the column and `tasks.run_state` (`:idle`/`:queued`/`:dispatched`/`:executing`/`:failed`) tracks execution inside Running. Every transition, its trigger, actor, and side effects are tabulated in the architecture spec §4; consult it rather than inferring. The subtlety worth internalizing: *request changes* (Review→Running) preserves the worktree, branch, and ACP session so commits accumulate, while *send back to Planning* discards all three because the spec it was built on is being rewritten.
+
+That table is **data, not code**: the machine dispatches on a stage's `stage_type` (`:plan`/`:execute`/`:review`/`:finalize`/`:custom`) and on per-edge policies (`trigger`, `context_policy`, `worktree_policy`) held in a single declarative `%CodeLead.Workflow{}`, never on column identity — see spec §4.1 and `docs/task-workflow.md`. Add a transition by editing the definition, not by adding a branch.
 
 **Two independent axes** describe a task. `work_type` (`code`/`design`/`content`/`file`) filters which agents are selectable and picks the review renderer; `target` (`:repo`/`:folder`) decides where work lands and what Done does. They are deliberately decoupled — a `content` task can target a repo and go through the branch/PR flow.
 
@@ -68,7 +70,7 @@ Reviewers are deliberately **not** a separate abstraction — they are ordinary 
 
 **Gating.** Every browser request passes two gates in order: `CodeLeadWeb.SetupGate` (redirects to `/setup` until `organizations.settings["setup_done"]` is true) and `CodeLeadWeb.UserAuth` (redirects to `/users/log-in`). Each is both a plug *and* an `on_mount` hook, because live navigation inside a `live_session` skips router pipelines. Read `docs/setup-and-auth.md` before touching the router, `CodeLead.Accounts`, or the auth LiveViews.
 
-**Planned dependencies not yet in `mix.exs`:** Oban (background jobs, nightly cost rollups). Cloak.Ecto has landed — `CodeLead.Vault` encrypts provider credentials and the project env store, keyed by an instance `ENCRYPTION_KEY`. The project env store is also where git/forge access tokens live (`GITHUB_TOKEN`/`GITLAB_TOKEN`); see `docs/configuration.md`.
+**Background jobs:** Oban is installed and supervised — queues `rollups` (nightly cost rollups) and `dispatch` (scheduled-run wake-ups). Cloak.Ecto has landed — `CodeLead.Vault` encrypts provider credentials and the project env store, keyed by an instance `ENCRYPTION_KEY`. The project env store is also where git/forge access tokens live (`GITHUB_TOKEN`/`GITLAB_TOKEN`); see `docs/configuration.md`.
 
 `:req` is the HTTP client — do not add HTTPoison, Tesla, or `:httpc`.
 

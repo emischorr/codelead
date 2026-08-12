@@ -9,7 +9,7 @@ defmodule CodeLeadWeb.UIComponents do
   """
   use Phoenix.Component
 
-  import CodeLeadWeb.CoreComponents, only: [icon: 1]
+  import CodeLeadWeb.CoreComponents, only: [button: 1, icon: 1, input: 1]
 
   alias CodeLeadWeb.Format
 
@@ -544,6 +544,69 @@ defmodule CodeLeadWeb.UIComponents do
       <.icon name={@icon} class="size-6 text-text3" />
       <span class="text-[13px] font-medium text-text2">{@title}</span>
       <span :if={@inner_block != []} class="text-xs text-text3">{render_slot(@inner_block)}</span>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders the "schedule this run" dialog.
+
+  The caller owns the events: `schedule_task` on submit,
+  `close_schedule` on dismiss. Times are UTC, like every other
+  timestamp in the app.
+  """
+  attr :form, :any, required: true
+  attr :task_title, :string, required: true
+  attr :min, :string, required: true
+
+  def schedule_modal(assigns) do
+    ~H"""
+    <div
+      class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[12vh]"
+      id="schedule-modal"
+      phx-window-keydown="close_schedule"
+      phx-key="escape"
+    >
+      <button
+        type="button"
+        phx-click="close_schedule"
+        class="absolute inset-0 cursor-default"
+        aria-label="Close"
+      >
+        <span class="sr-only">Close</span>
+      </button>
+      <div class="relative w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+        <div class="mb-1 flex items-center justify-between">
+          <h2 class="text-[15px] font-bold text-text">Schedule run</h2>
+          <button
+            type="button"
+            phx-click="close_schedule"
+            class="flex size-8 cursor-pointer items-center justify-center rounded-lg text-text3 hover:bg-surface2"
+            aria-label="Close"
+          >
+            <.icon name="hero-x-mark" class="size-4" />
+          </button>
+        </div>
+        <p class="mb-4 truncate text-[12.5px] text-text2">{@task_title}</p>
+        <.form for={@form} id="schedule-form" phx-submit="schedule_task">
+          <.input
+            field={@form[:scheduled_at]}
+            type="datetime-local"
+            label="Start at (UTC)"
+            min={@min}
+          />
+          <p class="mt-1 text-[11.5px] text-text3">
+            The card moves to Running now and waits there. Budget and capacity
+            are checked again when it starts.
+          </p>
+          <div class="mt-4 flex justify-end gap-2">
+            <.button type="button" phx-click="close_schedule">Cancel</.button>
+            <.button variant="primary" type="submit" phx-disable-with="Scheduling…">
+              Schedule
+            </.button>
+          </div>
+        </.form>
+      </div>
     </div>
     """
   end

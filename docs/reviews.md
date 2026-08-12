@@ -1,4 +1,4 @@
-# Review cycle (last updated: 2026-08-10)
+# Review cycle (last updated: 2026-08-11)
 
 Implemented in `CodeLead.Reviews`. Reviewers are ordinary agents with
 `:review` in `roles`, matched to the task's work type, selected per
@@ -6,7 +6,13 @@ task (pre-filled from project defaults) — not a separate abstraction.
 
 ## Fan-out
 
-On Running → Review the `TaskRunner` calls `Reviews.start_cycle/1`:
+The fan-out is the on-entry effect of a `:review` **stage**, not of the
+Review column: `Runtime.StageEffects.on_enter/3` calls
+`Reviews.start_cycle/1` whenever a task enters a stage of that type
+(see [`task-workflow.md`](task-workflow.md)). Today the only such entry
+is Running → Review, driven by the `TaskRunner` on a successful result.
+
+`Reviews.start_cycle/1` itself is unchanged by that indirection:
 
 - **No reviewers selected** → Review is human-only; attention
   `:review_ready` is raised immediately (cycle 0).

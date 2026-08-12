@@ -310,8 +310,9 @@ defmodule CodeLead.Runtime.TaskRunner do
 
     case result.status do
       :ok ->
-        {:ok, task} = Tasks.complete_run(task)
-        {:ok, task} = on_review_entry(task)
+        # The workflow's one automatic edge; entering the Review stage
+        # is what fans the reviewers out.
+        {:ok, task} = CodeLead.Runtime.complete_run(task)
 
         record_row(state, %{
           kind: :result,
@@ -466,11 +467,6 @@ defmodule CodeLead.Runtime.TaskRunner do
   defp elapsed_ms(_state), do: nil
 
   ## Internals
-
-  defp on_review_entry(task) do
-    {:ok, _cycle} = CodeLead.Reviews.start_cycle(task)
-    {:ok, task}
-  end
 
   defp build_prompt(%Task{next_prompt: feedback}) when is_binary(feedback), do: feedback
 

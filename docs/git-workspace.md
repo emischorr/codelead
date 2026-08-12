@@ -1,4 +1,4 @@
-# Git plumbing & workspace (last updated: 2026-08-10)
+# Git plumbing & workspace (last updated: 2026-08-11)
 
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
@@ -18,9 +18,29 @@ tasks use a task folder and skip the branch/push flow.
   when it already exists), then a worktree on branch
   `codelead/task-<id>-<slug>` starting from `origin/<default_branch>`.
   Worktree path + branch are persisted on the task
-  (`Tasks.set_execution_context/3`); the base clone path on the
-  repository. Provisioning is idempotent — multi-run reuses the
-  existing worktree.
+  (`Tasks.set_execution_context/3`) on **every** provisioning, not just
+  the first — a run whose context is missing from the task leaves the
+  Diff tab, the Terminal tab, the reviewers, and the finalizer with
+  nothing to work from. The base clone path is persisted on the
+  repository.
+- Provisioning is idempotent, but a directory at the expected path is
+  **not** on its own grounds for reuse. `Git.worktree_branch/2` asks the
+  base clone's own worktree registry whether it owns that path, and
+  reuse adopts the branch git reports there. Anything else — a
+  directory the clone does not know, one whose registration is stale —
+  is removed and reprovisioned. Worktree paths are keyed on the task id
+  alone while `mix ecto.reset` reissues ids and leaves the workspace
+  volume standing, so `worktrees/task-<id>` may well be a leftover from
+  an earlier generation, on an unrelated repository; reusing one
+  unchecked runs the agent in the wrong repo and reports nothing. `mix
+  code_lead.workspace.clean` (wired into the `ecto.reset` alias) drops
+  `worktrees/` and `tasks/` and prunes the base clones, so a reset stops
+  leaving orphans behind.
+- A task whose recorded branch survives but whose worktree directory is
+  gone is re-attached to that branch (`Git.attach_worktree/3`) rather
+  than branched afresh — its commits are still wanted. A branch bearing
+  the computed name that *no* task records is an abandoned leftover and
+  is deleted before the worktree is created.
 - `diff/2` computes the full delta (committed + uncommitted; untracked
   visible via `git add -N`) against the merge-base with the default
   branch. The intent-to-add pass runs against a throwaway index seeded

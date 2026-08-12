@@ -3,16 +3,28 @@ defmodule CodeLead.Tasks do
   The task workflow: Planning → Running → Review → Done, with
   `run_state` tracking execution inside Running.
 
-  Every transition function validates the from-state per the
-  architecture spec §4 and records a `:transition` task step. Human
-  gates own every handoff; the single automatic transition is
+  The column transitions are **not** hardcoded here. `apply_transition/3`
+  looks the requested edge up in the task's `CodeLead.Workflow`
+  definition and derives every field change from that edge's policies
+  and the target stage's `stage_type`; an edge the definition does not
+  contain is `{:error, :invalid_state}`. The functions below name
+  specific edges and supply the audit summary — they carry no
+  column-specific logic of their own. Every transition records a
+  `:transition` task step.
+
+  Human gates own every handoff; the single `trigger: :auto` edge is
   Running → Review on successful completion (`complete_run/1`).
+
+  `run_state` is deliberately outside the workflow graph: dispatch
+  (`begin_dispatch/1`, `mark_executing/2`) and failure (`fail_run/2`,
+  `retry_run/1`) move a task *within* the Running stage and are not
+  edges.
 
   Transition map (see `docs/task-workflow.md`):
 
   | Function | From | To |
   |---|---|---|
-  | `move_to_running/1` (human) | planning, idle | running, queued |
+  | `move_to_running/1` (human) | planning | running, queued |
   | `begin_dispatch/1` (system) | running, queued | running, dispatched |
   | `mark_executing/2` (system) | running, dispatched | running, executing |
   | `complete_run/1` (system) | running, executing | review, idle |
@@ -22,6 +34,10 @@ defmodule CodeLead.Tasks do
   | `request_changes/2` (human) | review | running, queued (context kept) |
   | `send_back_to_planning/1` (human) | review | planning (context discarded) |
   | `approve/1` (human) | review | done |
+
+  Side effects that accompany a transition (dispatching the agent,
+  fanning out reviewers, finalizing) live in `CodeLead.Runtime`, which
+  dispatches them on the same stage types.
   """
 
   import Ecto.Query
@@ -33,6 +49,8 @@ defmodule CodeLead.Tasks do
   alias CodeLead.Tasks.Task
   alias CodeLead.Tasks.TaskReviewer
   alias CodeLead.Tasks.TaskStep
+  alias CodeLead.Workflow
+  alias CodeLead.Workflow.Stage
 
   @type transition_error ::
           {:error, :invalid_state}
@@ -179,6 +197,35 @@ defmodule CodeLead.Tasks do
     )
   end
 
+  ## The workflow machine
+
+  @doc """
+  Moves a task along one edge of its workflow.
+
+  The edge is given as `{from, to}` stage keys and must exist in the
+  task's definition — anything else is `{:error, :invalid_state}`,
+  which is what makes the definition, not this module, the authority on
+  which moves are legal. Naming the edge rather than just the target
+  matters where two edges share a target: Running → Planning (cancel,
+  context kept) and Review → Planning (send back, context discarded).
+
+  Every field change follows from the edge's policies and the target
+  stage's type; callers supply only `:actor`, the audit `:summary`,
+  and — entering an `:execute` stage — the `:prompt` for the next run.
+  """
+  @spec apply_transition(Task.t(), {atom(), atom()}, keyword()) ::
+          {:ok, Task.t()} | transition_error()
+  def apply_transition(%Task{} = task, {from, to}, opts) do
+    workflow = Workflow.fetch!(task.workflow_key)
+
+    with :ok <- check_from_stage(task, from),
+         {:ok, edge} <- fetch_edge(workflow, from, to),
+         target = Workflow.stage(workflow, to),
+         :ok <- check_stage_entry(task, target.stage_type) do
+      transition(task, transition_changes(edge, target, opts), opts)
+    end
+  end
+
   ## Human transitions
 
   @doc """
@@ -187,31 +234,24 @@ defmodule CodeLead.Tasks do
   :queued`); the scheduler picks it up from there.
   """
   @spec move_to_running(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def move_to_running(%Task{state: :planning, run_state: :idle} = task) do
-    with :ok <- check_executor(task),
-         :ok <- check_repository(task) do
-      transition(task, %{state: :running, run_state: :queued, next_prompt: nil},
-        actor: :human,
-        summary: "moved to Running (queued)"
-      )
-    end
+  def move_to_running(%Task{} = task) do
+    apply_transition(task, {:planning, :running},
+      actor: :human,
+      summary: "moved to Running (queued)"
+    )
   end
-
-  def move_to_running(%Task{}), do: {:error, :invalid_state}
 
   @doc """
   Aborts a run: Running → Planning. The worktree/branch/session are
   kept for inspection; the agent process is terminated by the runtime.
   """
   @spec cancel_run(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def cancel_run(%Task{state: :running} = task) do
-    transition(task, %{state: :planning, run_state: :idle, attention: nil},
+  def cancel_run(%Task{} = task) do
+    apply_transition(task, {:running, :planning},
       actor: :human,
       summary: "run cancelled — back to Planning (worktree kept)"
     )
   end
-
-  def cancel_run(%Task{}), do: {:error, :invalid_state}
 
   @doc """
   Re-dispatches a failed run.
@@ -227,71 +267,61 @@ defmodule CodeLead.Tasks do
   def retry_run(%Task{}), do: {:error, :invalid_state}
 
   @doc """
+  Drops a queued task's start time so it can be dispatched now. The
+  pending wake-up job no-ops on its own once the time no longer
+  matches — nothing has to chase it.
+  """
+  @spec clear_schedule(Task.t()) :: {:ok, Task.t()} | transition_error()
+  def clear_schedule(%Task{state: :running, run_state: :queued} = task) do
+    transition(task, %{scheduled_at: nil},
+      actor: :human,
+      summary: "schedule cleared — running now"
+    )
+  end
+
+  def clear_schedule(%Task{}), do: {:error, :invalid_state}
+
+  @doc """
   Review → Running with the same agent, worktree, branch, and session.
   The feedback becomes the next prompt; commits accumulate.
   """
   @spec request_changes(Task.t(), String.t()) :: {:ok, Task.t()} | transition_error()
-  def request_changes(%Task{state: :review} = task, feedback) do
-    transition(
-      task,
-      %{state: :running, run_state: :queued, next_prompt: feedback, attention: nil},
+  def request_changes(%Task{} = task, feedback) do
+    apply_transition(task, {:review, :running},
       actor: :human,
+      prompt: feedback,
       summary: "changes requested: #{feedback}"
     )
   end
 
-  def request_changes(%Task{}, _feedback), do: {:error, :invalid_state}
-
   @doc """
   Review → Planning, discarding the execution context: worktree
   removed, branch deleted, session cleared. The runtime performs the
-  filesystem teardown; here the references are dropped.
+  filesystem teardown; here the references are dropped — the edge's
+  `:reset` context policy and `:discard` worktree policy say so.
   """
   @spec send_back_to_planning(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def send_back_to_planning(%Task{state: :review} = task) do
-    transition(
-      task,
-      %{
-        state: :planning,
-        run_state: :idle,
-        worktree_path: nil,
-        branch_name: nil,
-        acp_session_id: nil,
-        next_prompt: nil,
-        attention: nil
-      },
+  def send_back_to_planning(%Task{} = task) do
+    apply_transition(task, {:review, :planning},
       actor: :human,
       summary: "sent back to Planning — worktree, branch, and session discarded"
     )
   end
 
-  def send_back_to_planning(%Task{}), do: {:error, :invalid_state}
-
   @doc """
   Review → Done. Finalization (commit/push/PR or artifact) is performed
   by the system executor around this transition.
 
-  Stamps `completed_at`, the only completion timestamp the model has.
-  It is written exactly once: nothing reopens a Done task today, so
-  nothing clears it. A future reopen transition must set it back to nil
-  or throughput will double-count.
+  Entering a `:finalize` stage stamps `completed_at`, the only
+  completion timestamp the model has. It is written exactly once:
+  nothing reopens a Done task today, so nothing clears it. A future
+  reopen transition must set it back to nil or throughput will
+  double-count.
   """
   @spec approve(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def approve(%Task{state: :review} = task) do
-    transition(
-      task,
-      %{
-        state: :done,
-        run_state: :idle,
-        attention: nil,
-        completed_at: DateTime.utc_now(:second)
-      },
-      actor: :human,
-      summary: "approved — Done"
-    )
+  def approve(%Task{} = task) do
+    apply_transition(task, {:review, :done}, actor: :human, summary: "approved — Done")
   end
-
-  def approve(%Task{}), do: {:error, :invalid_state}
 
   @doc """
   Hides a Done task from board/list queries without deleting it.
@@ -325,11 +355,13 @@ defmodule CodeLead.Tasks do
   ## System transitions (called by the runtime)
 
   @doc """
-  Scheduler admitted the task; provisioning starts.
+  Scheduler admitted the task; provisioning starts. Clears
+  `scheduled_at` — the schedule is spent once dispatch begins, so a
+  late wake-up job finds nothing left to act on.
   """
   @spec begin_dispatch(Task.t()) :: {:ok, Task.t()} | transition_error()
   def begin_dispatch(%Task{state: :running, run_state: :queued} = task) do
-    transition(task, %{run_state: :dispatched},
+    transition(task, %{run_state: :dispatched, scheduled_at: nil},
       actor: :system,
       summary: "dispatched — provisioning execution context"
     )
@@ -357,11 +389,15 @@ defmodule CodeLead.Tasks do
 
   @doc """
   Successful completion: Running → Review. A completion signal, not a
-  human decision — the one automatic column change.
+  human decision — the workflow's one `trigger: :auto` edge.
+
+  Only a live run can complete, so this keeps a `run_state` guard on
+  top of the edge lookup: a queued or failed task is in the Running
+  stage but has nothing to hand to Review.
   """
   @spec complete_run(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def complete_run(%Task{state: :running, run_state: :executing} = task) do
-    transition(task, %{state: :review, run_state: :idle},
+  def complete_run(%Task{run_state: :executing} = task) do
+    apply_transition(task, {:running, :review},
       actor: :system,
       summary: "run completed — moved to Review"
     )
@@ -486,6 +522,13 @@ defmodule CodeLead.Tasks do
 
   @spec get_task!(pos_integer()) :: Task.t()
   def get_task!(id), do: Repo.get!(Task, id)
+
+  @doc """
+  Non-raising lookup, for callers that can outlive the task — a
+  scheduled wake-up job may fire after the task was deleted.
+  """
+  @spec get_task(pos_integer()) :: Task.t() | nil
+  def get_task(id), do: Repo.get(Task, id)
 
   @doc """
   The Kanban board for a project: non-archived tasks grouped by column.
@@ -796,6 +839,87 @@ defmodule CodeLead.Tasks do
 
     Ecto.Changeset.put_embed(changeset, :attention, attention)
   end
+
+  defp check_from_stage(%Task{state: state}, state), do: :ok
+  defp check_from_stage(%Task{}, _from), do: {:error, :invalid_state}
+
+  defp fetch_edge(workflow, from, to) do
+    case Workflow.fetch_transition(workflow, from, to) do
+      {:ok, edge} -> {:ok, edge}
+      :error -> {:error, :invalid_state}
+    end
+  end
+
+  # Entering an `:execute` stage is the one guarded entry (spec §5.3):
+  # there has to be an agent that can actually do the work, and a repo
+  # for it to land in. Keyed on the stage type, so any future execute
+  # stage inherits it.
+  defp check_stage_entry(%Task{} = task, :execute) do
+    with :ok <- check_executor(task), do: check_repository(task)
+  end
+
+  defp check_stage_entry(%Task{}, _stage_type), do: :ok
+
+  # Every field change follows from the edge's policies and the target
+  # stage's type — there is no per-column change map anywhere.
+  defp transition_changes(edge, %Stage{key: key, stage_type: stage_type}, opts) do
+    %{state: key, run_state: run_state_for(stage_type)}
+    |> put_attention_policy(edge.trigger)
+    |> put_context_policy(edge.context_policy)
+    |> put_worktree_policy(edge.worktree_policy)
+    |> put_stage_entry(stage_type, opts)
+  end
+
+  # A stage that runs work enqueues; every other stage is at rest.
+  defp run_state_for(:execute), do: :queued
+  defp run_state_for(_stage_type), do: :idle
+
+  # A human acting on the card has resolved whatever flagged it. An
+  # automatic completion signal has not — it leaves attention to the
+  # entering stage's own effects (the review fan-out raises
+  # `:review_ready` when the cycle finishes).
+  defp put_attention_policy(changes, :human), do: Map.put(changes, :attention, nil)
+  defp put_attention_policy(changes, :auto), do: changes
+
+  defp put_context_policy(changes, :reset) do
+    Map.merge(changes, %{acp_session_id: nil, next_prompt: nil})
+  end
+
+  defp put_context_policy(changes, :carry), do: changes
+
+  # The filesystem teardown is the runtime's; here the references drop.
+  defp put_worktree_policy(changes, :discard) do
+    Map.merge(changes, %{worktree_path: nil, branch_name: nil})
+  end
+
+  defp put_worktree_policy(changes, :keep), do: changes
+
+  # Entering an execute stage sets the prompt for the run about to
+  # start — the feedback on a rework edge, nothing on a fresh start, so
+  # a stale prompt is never replayed. `scheduled_at` rides the same
+  # rail: absent from the opts means "now", which also clears a value
+  # left over from an earlier pass through this stage.
+  defp put_stage_entry(changes, :execute, opts) do
+    Map.merge(changes, %{
+      next_prompt: Keyword.get(opts, :prompt),
+      scheduled_at: opts |> Keyword.get(:scheduled_at) |> to_second_precision()
+    })
+  end
+
+  defp put_stage_entry(changes, :finalize, _opts) do
+    Map.put(changes, :completed_at, DateTime.utc_now(:second))
+  end
+
+  # Back to a planning stage: whatever start time was authorised no
+  # longer applies to a spec that is being rewritten.
+  defp put_stage_entry(changes, :plan, _opts), do: Map.put(changes, :scheduled_at, nil)
+
+  defp put_stage_entry(changes, _stage_type, _opts), do: changes
+
+  # `:utc_datetime` refuses microseconds; callers should not have to
+  # know that to hand us a timestamp.
+  defp to_second_precision(nil), do: nil
+  defp to_second_precision(%DateTime{} = at), do: DateTime.truncate(at, :second)
 
   defp check_executor(%Task{agent_id: nil}), do: {:error, :no_executor}
 

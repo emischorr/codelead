@@ -10,6 +10,15 @@ defmodule CodeLeadWeb.BoardLiveTest do
 
   setup :register_and_log_in_user
 
+  # What a `datetime-local` input posts: minute precision, no zone.
+  defp input_value(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%dT%H:%M")
+
+  # On the minute, so the round trip through the input is lossless.
+  defp in_an_hour do
+    at = DateTime.add(DateTime.utc_now(:second), 3600)
+    %{at | second: 0}
+  end
+
   describe "rendering" do
     test "shows all four columns with task cards", %{conn: conn} do
       project = project_fixture()
@@ -91,6 +100,43 @@ defmodule CodeLeadWeb.BoardLiveTest do
       |> render_click()
 
       assert render(view) =~ "Select an executor agent"
+    end
+
+    test "scheduling a run moves the card to Running and shows the start time", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      at = in_an_hour()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      view |> element("#task-card-#{task.id}-schedule") |> render_click()
+      assert has_element?(view, "#schedule-form")
+
+      view
+      |> form("#schedule-form", schedule: %{scheduled_at: input_value(at)})
+      |> render_submit()
+
+      refute has_element?(view, "#schedule-form")
+
+      task = Tasks.get_task!(task.id)
+      assert task.state == :running
+      assert task.run_state == :queued
+      assert task.scheduled_at == at
+      assert render(view) =~ "starts"
+    end
+
+    test "a schedule without a time keeps the modal open", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      view |> element("#task-card-#{task.id}-schedule") |> render_click()
+
+      view
+      |> form("#schedule-form", schedule: %{scheduled_at: ""})
+      |> render_submit()
+
+      assert has_element?(view, "#schedule-form")
+      assert Tasks.get_task!(task.id).state == :planning
     end
 
     test "archive removes a done card from the board", %{conn: conn} do

@@ -121,6 +121,44 @@ defmodule CodeLead.Git do
   end
 
   @doc """
+  Adds a worktree at `worktree_path` checking out the *existing*
+  `branch` — the recovery path for a branch whose worktree directory is
+  gone but whose commits are not.
+  """
+  @spec attach_worktree(String.t(), String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def attach_worktree(base_clone_path, worktree_path, branch) do
+    File.mkdir_p!(Path.dirname(worktree_path))
+
+    with {:ok, _} <- git(base_clone_path, ["worktree", "add", worktree_path, branch]) do
+      {:ok, worktree_path}
+    end
+  end
+
+  @doc """
+  The branch checked out at `worktree_path`, if this clone registers a
+  worktree there.
+
+  `:error` covers every way the path is not ours: no directory, a
+  directory this clone knows nothing about (a leftover from another
+  clone or an earlier database generation), or a detached HEAD.
+  """
+  @spec worktree_branch(String.t(), String.t()) :: {:ok, String.t()} | :error
+  def worktree_branch(base_clone_path, worktree_path) do
+    wanted = Path.expand(worktree_path)
+
+    case git(base_clone_path, ["worktree", "list", "--porcelain"]) do
+      {:ok, output} ->
+        output
+        |> String.split(~r/\n\s*\n/, trim: true)
+        |> Enum.find_value(:error, &registered_branch(&1, wanted))
+
+      {:error, _output} ->
+        :error
+    end
+  end
+
+  @doc """
   Removes a worktree and prunes stale registrations.
   """
   @spec remove_worktree(String.t(), String.t()) :: :ok
@@ -290,6 +328,21 @@ defmodule CodeLead.Git do
       "-c",
       "credential.helper=" <> @credential_helper
     ]
+  end
+
+  # One `--porcelain` block: a `worktree` line, then `HEAD`, then either
+  # `branch refs/heads/<name>` or the bare word `detached`.
+  defp registered_branch(block, wanted) do
+    lines = String.split(block, "\n", trim: true)
+
+    with ["worktree " <> path] <- Enum.filter(lines, &String.starts_with?(&1, "worktree ")),
+         true <- Path.expand(String.trim(path)) == wanted,
+         ["branch refs/heads/" <> branch] <-
+           Enum.filter(lines, &String.starts_with?(&1, "branch refs/heads/")) do
+      {:ok, String.trim(branch)}
+    else
+      _other -> nil
+    end
   end
 
   defp merge_base(worktree_path, base_branch) do

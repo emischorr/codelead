@@ -32,8 +32,10 @@ Local dev secrets live in `.envrc` (gitignored, direnv).
   rates, so a derived figure understates cache-heavy runs. Token counts
   are unaffected either way. See
   [`cost-tracking.md`](cost-tracking.md).
-- `Oban` — queues: `rollups` (nightly cost rollups). Test uses
-  `testing: :manual`; drain with `Oban.drain_queue/1`.
+- `Oban` — queues: `rollups` (nightly cost rollups) and `dispatch`
+  (wake-ups for scheduled runs). Test uses `testing: :manual`; drain
+  with `Oban.drain_queue/1` (pass `with_scheduled: true` to fire a
+  scheduled run's wake-up early).
 - `:git_access_check` — `{module, function}` the first-run wizard calls
   to verify a forge token, default `{CodeLead.Git, :check_access}`. Test
   points it at `CodeLead.GitHelpers` so the suite stays off the network.

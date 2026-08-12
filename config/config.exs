@@ -43,7 +43,7 @@ config :code_lead, CodeLeadWeb.Endpoint,
 config :code_lead, Oban,
   engine: Oban.Engines.Basic,
   repo: CodeLead.Repo,
-  queues: [rollups: 1],
+  queues: [rollups: 1, dispatch: 5],
   plugins: [
     {Oban.Plugins.Cron, crontab: [{"0 2 * * *", CodeLead.Costs.RollupWorker}]}
   ]
