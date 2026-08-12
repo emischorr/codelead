@@ -6,13 +6,14 @@
 #   elixir fake_acp_agent.exs tool_updates # one tool call across three status updates
 #   elixir fake_acp_agent.exs writes_file  # asks the client to write hello.txt
 #   elixir fake_acp_agent.exs permission   # escalating permission request (outside path)
+#   elixir fake_acp_agent.exs elicitation  # asks the human a form question, if the client allows it
 #   elixir fake_acp_agent.exs terminal     # runs `echo hi` through the client terminal
 #   elixir fake_acp_agent.exs crash        # exits mid-prompt without a response
 #   elixir fake_acp_agent.exs resume       # advertises loadSession; succeeds session/load
 
 defmodule FakeAcpAgent do
   def main([scenario]) do
-    loop(%{scenario: scenario, session_counter: 0})
+    loop(%{scenario: scenario, session_counter: 0, capabilities: %{}})
   end
 
   defp loop(state) do
@@ -25,13 +26,15 @@ defmodule FakeAcpAgent do
 
   # --- client → agent requests ---
 
-  defp handle(state, %{"method" => "initialize", "id" => id}) do
+  # The real harness gates which tools it offers on what the client
+  # advertises, so scenarios need to see the capabilities too.
+  defp handle(state, %{"method" => "initialize", "id" => id} = frame) do
     respond(id, %{
       protocolVersion: 1,
       agentCapabilities: %{loadSession: state.scenario == "resume"}
     })
 
-    state
+    %{state | capabilities: get_in(frame, ["params", "clientCapabilities"]) || %{}}
   end
 
   defp handle(state, %{"method" => "session/new", "id" => id}) do
@@ -51,7 +54,7 @@ defmodule FakeAcpAgent do
 
   defp handle(state, %{"method" => "session/prompt", "id" => id, "params" => params}) do
     session_id = params["sessionId"]
-    prompt(state.scenario, id, session_id)
+    prompt(state, id, session_id)
     state
   end
 
@@ -66,7 +69,7 @@ defmodule FakeAcpAgent do
 
   # --- scenarios ---
 
-  defp prompt("happy", id, session_id) do
+  defp prompt(%{scenario: "happy"}, id, session_id) do
     chunk(session_id, "Working on it. ")
 
     notify("session/update", %{
@@ -108,7 +111,7 @@ defmodule FakeAcpAgent do
 
   # A harness that spells usage the Anthropic/OpenAI way and reports no
   # money — the fallback path in `extract_usage/1`.
-  defp prompt("snake_usage", id, session_id) do
+  defp prompt(%{scenario: "snake_usage"}, id, session_id) do
     chunk(session_id, "Done.")
 
     respond(id, %{
@@ -119,7 +122,7 @@ defmodule FakeAcpAgent do
 
   # One logical tool call announced across three updates, the way a real
   # harness does it: only the first carries a title.
-  defp prompt("tool_updates", id, session_id) do
+  defp prompt(%{scenario: "tool_updates"}, id, session_id) do
     tool_update(session_id, %{
       sessionUpdate: "tool_call",
       toolCallId: "tc-1",
@@ -145,7 +148,7 @@ defmodule FakeAcpAgent do
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
   end
 
-  defp prompt("writes_file", id, session_id) do
+  defp prompt(%{scenario: "writes_file"}, id, session_id) do
     request(50, "fs/write_text_file", %{
       sessionId: session_id,
       path: Path.join(File.cwd!(), "hello.txt"),
@@ -157,7 +160,7 @@ defmodule FakeAcpAgent do
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 10, output_tokens: 5}})
   end
 
-  defp prompt("permission", id, session_id) do
+  defp prompt(%{scenario: "permission"}, id, session_id) do
     request(60, "session/request_permission", %{
       sessionId: session_id,
       toolCall: %{
@@ -178,7 +181,74 @@ defmodule FakeAcpAgent do
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
   end
 
-  defp prompt("terminal", id, session_id) do
+  # Mirrors the real adapter's gate: the ask-the-human tool only exists
+  # when the client advertised form elicitation, so without it the agent
+  # can only say so in prose — which is the bug this scenario guards.
+  defp prompt(%{scenario: "elicitation", capabilities: capabilities}, id, session_id) do
+    if get_in(capabilities, ["elicitation", "form"]) do
+      tool_update(session_id, %{
+        sessionUpdate: "tool_call",
+        toolCallId: "tc-ask",
+        title: "AskUserQuestion",
+        kind: "think",
+        status: "pending"
+      })
+
+      request(80, "elicitation/create", %{
+        mode: "form",
+        sessionId: session_id,
+        toolCallId: "tc-ask",
+        message: "Which approach should I take?",
+        requestedSchema: %{
+          type: "object",
+          properties: %{
+            question_0: %{
+              type: "string",
+              title: "Approach",
+              oneOf: [
+                %{
+                  const: "Refactor first",
+                  title: "Refactor first",
+                  description: "Clean up, then build"
+                },
+                %{const: "Ship it", title: "Ship it"}
+              ]
+            },
+            question_0_custom: %{
+              type: "string",
+              title: "Other",
+              description: "Type your own answer instead of choosing an option above (optional).",
+              _meta: %{
+                "_askUserQuestionCustomAnswer" => %{
+                  questionId: "question_0",
+                  isCustomAnswer: true
+                }
+              }
+            },
+            question_1: %{
+              type: "array",
+              title: "Areas",
+              description: "Which areas?",
+              items: %{anyOf: [%{const: "api", title: "API"}, %{const: "ui", title: "UI"}]}
+            }
+          }
+        }
+      })
+
+      case await_response(80) do
+        # A cancelled elicitation aborts the tool call, and with it the
+        # turn — the client has already hung up, so say nothing more.
+        %{"action" => "cancel"} -> System.halt(0)
+        answer -> chunk(session_id, "answered: #{JSON.encode!(answer)}")
+      end
+    else
+      chunk(session_id, "no elicitation support")
+    end
+
+    respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
+  end
+
+  defp prompt(%{scenario: "terminal"}, id, session_id) do
     request(70, "terminal/create", %{
       sessionId: session_id,
       command: "sh",
@@ -197,12 +267,12 @@ defmodule FakeAcpAgent do
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
   end
 
-  defp prompt("crash", _id, session_id) do
+  defp prompt(%{scenario: "crash"}, _id, session_id) do
     chunk(session_id, "about to crash")
     System.halt(3)
   end
 
-  defp prompt("resume", id, session_id) do
+  defp prompt(%{scenario: "resume"}, id, session_id) do
     chunk(session_id, "continuing where we left off")
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 20, output_tokens: 10}})
   end

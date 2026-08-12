@@ -1,4 +1,4 @@
-# Console API walkthrough (last updated: 2026-08-10)
+# Console API walkthrough (last updated: 2026-08-12)
 
 The MVP has no web UI yet — the human interface is the IEx console.
 Everything below uses the exact context functions the future LiveView
@@ -81,8 +81,9 @@ Tasks.board(project.id)                  # kanban columns
 Tasks.attention_tasks(project.id)        # attention counter
 Tasks.steps(task.id)                     # audit trail
 Costs.task_spend(task.id)                # executor + reviewer runs
-Costs.project_spend(project.id)
-Projects.update_project(project, %{budget_limit_cents: 500})  # budget gate
+Costs.project_spend(project.id)                               # lifetime
+Costs.project_spend_month(project.id)                         # what the gate reads
+Projects.update_project(project, %{budget_limit_cents: 500})  # budget gate, per month
 
 {:ok, task} = Tasks.archive(task)        # hide from board; reversible
 ```

@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-11)
+# Task workflow (last updated: 2026-08-12)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -42,7 +42,7 @@ it transcribes spec §4 and fails if the definition drifts from it.
 | `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process |
 | `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session; feedback stored in `next_prompt` |
 | `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch |
-| `approve/1` | human | review | done, idle | stamps `completed_at`; finalizer (commit/push/PR or artifact) runs around this |
+| `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned |
 | `archive/1` / `unarchive/1` | human | done | (state unchanged) | sets/clears `archived_at`; board/list exclude archived |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 
@@ -106,7 +106,7 @@ console) calls for those actions:
 | approve/deny a permission escalation | `Runtime.answer_permission(task, request_id, true/false)` |
 | request changes from Review | `Runtime.request_changes(task, feedback)` |
 | send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
-| approve → Done (finalize: commit/push/PR or artifact) | `Runtime.approve(task)` |
+| approve → Done (finalize by mode: PR, merge, squash, artifact, commit-to-path) | `Runtime.approve(task)` |
 | run completed → Review (called by the runner) | `Runtime.complete_run(task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
 
@@ -119,12 +119,52 @@ with nothing pushed. Only then is the state written, the edge's
 worktree policy applied (teardown for `:discard`), and the stage's
 `on_enter/3` fired: `:execute` asks the scheduler to dispatch,
 `:review` fans the reviewers out, `:finalize` records the commit step,
-`:plan` and `:custom` do nothing.
+stores the forge link it produced (`pr_url`/`pr_url_kind`), and prunes
+the execution context if the outcome asked it to, `:plan` and
+`:custom` do nothing.
 
 `retry_task/1` is not on that path — a retry moves `run_state` inside
 the Running stage, so it calls `Tasks.retry_run/1` and re-dispatches
 directly. `cancel_task/1` terminates the agent before advancing;
 stopping a process is an exit effect, and the seam has no exit hook.
+
+## Finalize modes
+
+What Approve → Done *does* is a **mode**, resolved from three sources
+in order — the task's own `finalize_mode`, the project default, the
+target's built-in:
+
+```
+Projects.finalize_defaults(project_id)   # parses projects.settings["finalize"]
+Tasks.finalize_mode(task)                # the one place all three are joined
+Finalizer.resolve_mode(target, task_mode, project_mode)   # pure, DB-free
+```
+
+`resolve_mode/3` is pure so the Approve button can be labelled with the
+very value the finalizer will run (`Format.finalize_action/2`); the
+label and the behaviour cannot drift. The two mode sets are disjoint per
+target, which is what lets a mode stranded by a Planning target change
+be *skipped* rather than rejected.
+
+| target | mode | Done |
+|---|---|---|
+| `:repo` | `:pull_request` (default) | commit remainder, push branch, open PR/MR or return a compare link |
+| `:repo` | `:merge` | …then merge the branch into the default branch and push it |
+| `:repo` | `:squash` | …the same, as a single commit |
+| `:folder` | `:artifact` (default) | the task folder is the download — **empty is `{:error, :no_artifact}`**, since the folder is provisioned before the run and an agent that answered in chat leaves one behind that exists and holds nothing |
+| `:folder` | `:commit_to_path` | commit the folder into a repository path on its own branch |
+
+**Cleanup is outcome data, not edge policy.** Every outcome carries
+`cleanup: :keep_context | :prune_context`, and `on_enter(:finalize, …)`
+acts on it *after* the write. The `review → done` edge stays
+`worktree_policy: :keep` on purpose: the policy fires before the
+finalizer has run, so it cannot know whether the merge succeeded or
+which mode ran, and on a `:folder` target it would delete the artifact
+Done just produced. `:repo` modes prune (the work is on the remote
+either way, and merge/squash have already deleted the remote branch);
+folder modes keep. `branch_name` survives pruning — it still names what
+was pushed or merged. There is a named test guarding this in
+`workflow_test.exs`; see architecture spec §4.1.
 
 The scheduler (`CodeLead.Scheduler.PassThrough`) runs an **ordered list
 of gates**, short-circuiting on the first hold; held tasks stay
@@ -133,7 +173,7 @@ of gates**, short-circuiting on the first hold; held tasks stay
 | Gate | Holds when | Reason |
 |---|---|---|
 | `ScheduleGate` | `scheduled_at` is set and still in the future | `{:hold, {:scheduled, at}}` |
-| `BudgetGate` | a project/org limit is reached (`Costs.check_budget/1`) | `{:hold, :budget}` |
+| `BudgetGate` | a project/org limit is reached month-to-date (`Costs.check_budget/1`) | `{:hold, :budget}` |
 | `CapacityGate` | `max_concurrent_runs` live runners exist | `{:hold, :capacity}` |
 
 Gates compose rather than exclude, which is the point: a scheduled run
@@ -177,7 +217,7 @@ result, and broadcasts run events over PubSub:
   travels only this way; there is no `:task_event` for it.
 
 **Two per-task logs, deliberately separate.** `task_steps` is the
-workflow audit trail (`:transition`/`:run`/`:review`/`:commit`), what
+workflow audit trail (`:transition`/`:run`/`:review`/`:plan`/`:commit`), what
 the Task tab's timeline shows. `agent_events` is the executor
 transcript — what the agent said and did — behind the Agent tab. They
 were briefly conflated (the Agent tab used to seed itself from task
@@ -200,6 +240,17 @@ A `permission_request` additionally stores the JSON-RPC request id in
 `task.attention.ref` (stringified; the `Acp` driver keys its pending
 map by string), so the UI can answer via
 `Runtime.answer_permission(task, ref, granted?)` even after a reload.
+An `agent_question` stores its `ref` the same way, answered with
+`Runtime.answer_question(task, ref, {:accept, answers} | :decline |
+:cancel)`.
+
+Both are **blocking** escalations: the agent's prompt turn is held open
+on the wire, so the run stays `run_state: :executing` and cannot reach
+the automatic Running→Review edge until a human settles it (or cancels
+the run, whose human-triggered edge clears the attention flag on its
+way to Planning). Because two can be open at once, answering one
+re-points `attention` at the oldest still-pending escalation rather
+than clearing it outright.
 
 ## Console usage (IEx)
 
@@ -215,6 +266,8 @@ Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
 flush()                                      # watch the live event stream
 
 {:ok, task} = Runtime.request_changes(task, "please add tests")
+{:ok, _task} = Tasks.set_finalize_mode(task, "squash")  # or "" to inherit
+Tasks.finalize_mode(task)                     # what Approve will run
 {:ok, task, outcome} = Runtime.approve(task)  # finalize → done
 Tasks.board(project_id)
 Tasks.steps(task.id)

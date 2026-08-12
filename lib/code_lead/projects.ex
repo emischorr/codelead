@@ -2,6 +2,12 @@ defmodule CodeLead.Projects do
   @moduledoc """
   Projects, their linked repositories, and the encrypted project env
   store.
+
+  `projects.settings` is a free-form jsonb column; the one key this
+  module gives meaning to is `"finalize"`, holding the project's Done
+  defaults. Those are read back through `finalize_defaults/1` and
+  written through `put_finalize_defaults/2` rather than through the
+  changeset, so a form editing them cannot clobber unrelated keys.
   """
 
   import Ecto.Query
@@ -13,6 +19,8 @@ defmodule CodeLead.Projects do
   alias CodeLead.Projects.Repository
   alias CodeLead.Repo
   alias CodeLead.Tasks.Task
+
+  @default_commit_path "artifacts"
 
   @doc """
   Creates a project under the organization singleton.
@@ -217,6 +225,78 @@ defmodule CodeLead.Projects do
   @spec forge_token(pos_integer(), :github | :gitlab) :: String.t() | nil
   def forge_token(project_id, kind) do
     env_var(project_id, Git.token_var(kind))
+  end
+
+  @doc """
+  The project's Done defaults. A mode a target cannot use — or anything
+  else the column happens to hold — comes back as `nil`, so a hand-edited
+  or stale setting degrades to the built-in default instead of reaching
+  the finalizer.
+  """
+  @spec finalize_defaults(pos_integer()) :: %{
+          repo: Task.finalize_mode() | nil,
+          folder: Task.finalize_mode() | nil,
+          commit_path: String.t()
+        }
+  def finalize_defaults(project_id) do
+    settings = Repo.one(from p in Project, where: p.id == ^project_id, select: p.settings) || %{}
+    finalize = Map.get(settings, "finalize", %{})
+
+    %{
+      repo: stored_mode(finalize, "repo", :repo),
+      folder: stored_mode(finalize, "folder", :folder),
+      commit_path: stored_commit_path(finalize)
+    }
+  end
+
+  @doc """
+  Merges Done defaults into `settings`, leaving every other key alone.
+  Blank values are dropped rather than stored, so clearing a select in
+  the UI returns that target to the built-in default.
+  """
+  @spec put_finalize_defaults(Project.t(), map()) ::
+          {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
+  def put_finalize_defaults(%Project{settings: settings} = project, attrs) do
+    finalize =
+      %{
+        "repo" => attrs["repo"],
+        "folder" => attrs["folder"],
+        "commit_path" => attrs["commit_path"]
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    project
+    |> Ecto.Changeset.change(settings: Map.put(settings || %{}, "finalize", finalize))
+    |> Repo.update()
+  end
+
+  @doc """
+  Where a `:commit_to_path` finalize lands its artifact when the project
+  has not said otherwise.
+  """
+  @spec default_commit_path() :: String.t()
+  def default_commit_path, do: @default_commit_path
+
+  # jsonb round-trips as string keys, and the value is operator-editable
+  # data rather than application input — so it is matched against the
+  # known atoms rather than converted into one.
+  defp stored_mode(finalize, key, target) do
+    stored = Map.get(finalize, key)
+    Enum.find(Task.finalize_modes(target), &(Atom.to_string(&1) == stored))
+  end
+
+  defp stored_commit_path(finalize) do
+    case Map.get(finalize, "commit_path") do
+      path when is_binary(path) ->
+        case String.trim(path) do
+          "" -> @default_commit_path
+          trimmed -> trimmed
+        end
+
+      _absent ->
+        @default_commit_path
+    end
   end
 
   defp maybe_link_repository(_project, nil), do: {:ok, nil}

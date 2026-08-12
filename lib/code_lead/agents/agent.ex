@@ -3,6 +3,12 @@ defmodule CodeLead.Agents.Agent do
   A reusable worker persona: role(s), work type, driver, provider +
   model, and system prompt. Lives at org level (shared) or project
   level. `memory` is a schema seam, unused in MVP logic.
+
+  A role is the *slot* the agent fills — `:execute`, `:review`, or
+  `:plan` — and is independent of the driver, which decides what the
+  agent can do in that slot. A `:plan` agent on `:llm_api` refines the
+  spec from text alone; the same role on `:acp` surveys the repository
+  read-only. See `CodeLead.Planning`.
   """
 
   use Ecto.Schema
@@ -13,7 +19,7 @@ defmodule CodeLead.Agents.Agent do
 
   @type t :: %__MODULE__{}
 
-  @roles [:execute, :review]
+  @roles [:execute, :review, :plan]
   @work_types [:code, :design, :content, :file]
 
   schema "agents" do

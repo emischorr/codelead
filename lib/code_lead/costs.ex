@@ -2,8 +2,9 @@ defmodule CodeLead.Costs do
   @moduledoc """
   Usage/cost capture and budgets. Every run's tokens land in
   `agent_runs` (prunable); a nightly Oban job rolls completed days into
-  permanent `daily_metrics`. Spend = rolled-up days + today's raw runs.
-  Budgets are cumulative totals (no period) in MVP.
+  permanent `daily_metrics`. Spend merges both tables per day, the
+  rollup winning. Budgets run on the calendar month (UTC) — every limit
+  is compared against month-to-date spend and resets on the 1st.
   """
 
   import Ecto.Query
@@ -76,62 +77,31 @@ defmodule CodeLead.Costs do
   end
 
   @doc """
-  Cumulative spend for a project: permanent rollups plus today's
-  not-yet-rolled runs.
+  Lifetime spend for a project.
   """
   @spec project_spend(pos_integer()) :: spend()
-  def project_spend(project_id) do
-    rolled =
-      Repo.one(
-        from m in DailyMetric,
-          where: m.project_id == ^project_id,
-          select: %{
-            tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
-            cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer)
-          }
-      )
-
-    fresh =
-      Repo.one(
-        from r in AgentRun,
-          join: t in Task,
-          on: t.id == r.task_id,
-          where: t.project_id == ^project_id and r.started_at >= ^today_start(),
-          select: %{
-            tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
-            cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
-          }
-      )
-
-    add_spend(rolled, fresh)
-  end
+  def project_spend(project_id), do: spend_since(nil, project_id)
 
   @doc """
-  Cumulative spend across the organization.
+  Lifetime spend across the organization.
   """
   @spec org_spend() :: spend()
-  def org_spend do
-    rolled =
-      Repo.one(
-        from m in DailyMetric,
-          select: %{
-            tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
-            cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer)
-          }
-      )
+  def org_spend, do: spend_since(nil, nil)
 
-    fresh =
-      Repo.one(
-        from r in AgentRun,
-          where: r.started_at >= ^today_start(),
-          select: %{
-            tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
-            cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
-          }
-      )
+  @doc """
+  Month-to-date spend for a project — the sidebar's budget tile and the
+  project half of the budget gate. `from_date` is the window start;
+  tests pass it explicitly to stay off the calendar's clock.
+  """
+  @spec project_spend_month(pos_integer(), Date.t()) :: spend()
+  def project_spend_month(project_id, from_date \\ month_start()),
+    do: spend_since(from_date, project_id)
 
-    add_spend(rolled, fresh)
-  end
+  @doc """
+  Month-to-date spend across the organization.
+  """
+  @spec org_spend_month(Date.t()) :: spend()
+  def org_spend_month(from_date \\ month_start()), do: spend_since(from_date, nil)
 
   @doc """
   Today's not-yet-rolled-up spend across the organization.
@@ -149,18 +119,19 @@ defmodule CodeLead.Costs do
   end
 
   @doc """
-  Cumulative spend per project — rollups plus today's runs — in two
-  queries regardless of how many projects exist. Projects that have
-  never spent anything are absent.
+  Month-to-date spend per project in two queries regardless of how many
+  projects exist. Projects that have spent nothing this month are
+  absent.
   """
-  @spec spend_by_project() :: %{pos_integer() => spend()}
-  def spend_by_project do
+  @spec spend_by_project_month(Date.t()) :: %{pos_integer() => spend()}
+  def spend_by_project_month(from_date \\ month_start()) do
     rolled =
       Repo.all(
         from m in DailyMetric,
-          group_by: m.project_id,
+          where: m.date >= ^from_date,
+          group_by: [m.project_id, m.date],
           select:
-            {m.project_id,
+            {{m.project_id, m.date},
              %{
                tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
                cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer)
@@ -168,15 +139,15 @@ defmodule CodeLead.Costs do
       )
       |> Map.new()
 
-    fresh =
+    raw =
       Repo.all(
         from r in AgentRun,
           join: t in Task,
           on: t.id == r.task_id,
-          where: r.started_at >= ^today_start(),
-          group_by: t.project_id,
+          where: r.started_at >= ^day_start(from_date),
+          group_by: [t.project_id, fragment("date(?)", r.started_at)],
           select:
-            {t.project_id,
+            {{t.project_id, fragment("date(?)", r.started_at)},
              %{
                tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
                cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
@@ -184,7 +155,11 @@ defmodule CodeLead.Costs do
       )
       |> Map.new()
 
-    Map.merge(rolled, fresh, fn _project_id, a, b -> add_spend(a, b) end)
+    raw
+    |> Map.merge(rolled)
+    |> Enum.reduce(%{}, fn {{project_id, _date}, spend}, acc ->
+      Map.update(acc, project_id, spend, &add_spend(&1, spend))
+    end)
   end
 
   @doc """
@@ -205,7 +180,7 @@ defmodule CodeLead.Costs do
     raw =
       Repo.all(
         from r in AgentRun,
-          where: r.started_at >= ^DateTime.new!(from_date, ~T[00:00:00], "Etc/UTC"),
+          where: r.started_at >= ^day_start(from_date),
           group_by: fragment("date(?)", r.started_at),
           select:
             {fragment("date(?)", r.started_at),
@@ -250,14 +225,15 @@ defmodule CodeLead.Costs do
 
   @doc """
   Budget gate for the scheduler: `:ok` or `{:hold, :budget}` when the
-  project's or the organization's cost/token limit is reached.
+  project's or the organization's cost/token limit is reached. Limits
+  are month-to-date, so a hold lifts by itself on the 1st.
   """
   @spec check_budget(pos_integer()) :: :ok | {:hold, :budget}
   def check_budget(project_id) do
     project = CodeLead.Projects.get_project!(project_id)
     organization = Accounts.get_organization!()
-    project_spend = project_spend(project_id)
-    org_spend = org_spend()
+    project_spend = project_spend_month(project_id)
+    org_spend = org_spend_month()
 
     over? =
       over_limit?(project_spend.cost_cents, project.budget_limit_cents) or
@@ -418,11 +394,80 @@ defmodule CodeLead.Costs do
   defp over_limit?(_spent, nil), do: false
   defp over_limit?(spent, limit), do: spent >= limit
 
+  # Spend from `from_date` on (nil = lifetime), for one project or, with
+  # a nil `project_id`, the whole organization. Both tables are grouped
+  # by day and merged with the rollup winning — see `daily_series/1` for
+  # why a day present in both must not be summed. Assuming instead that
+  # everything before today is already rolled loses every completed day
+  # the nightly job has not reached yet.
+  defp spend_since(from_date, project_id) do
+    rolled = rolled_by_date(from_date, project_id)
+    raw = raw_by_date(from_date, project_id)
+
+    raw
+    |> Map.merge(rolled)
+    |> Enum.reduce(%{tokens: 0, cost_cents: 0}, fn {_date, spend}, acc ->
+      add_spend(acc, spend)
+    end)
+  end
+
+  defp rolled_by_date(from_date, project_id) do
+    DailyMetric
+    |> since_date(from_date)
+    |> for_project(project_id)
+    |> group_by([m], m.date)
+    |> select(
+      [m],
+      {m.date,
+       %{
+         tokens: type(coalesce(sum(m.total_tokens), 0), :integer),
+         cost_cents: type(coalesce(sum(m.cost_cents), 0), :integer)
+       }}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp raw_by_date(from_date, project_id) do
+    AgentRun
+    |> since_datetime(from_date)
+    |> runs_for_project(project_id)
+    |> group_by([r], fragment("date(?)", r.started_at))
+    |> select(
+      [r],
+      {fragment("date(?)", r.started_at),
+       %{
+         tokens: type(coalesce(sum(r.total_tokens), 0), :integer),
+         cost_cents: type(coalesce(sum(r.cost_cents), 0), :integer)
+       }}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp since_date(query, nil), do: query
+  defp since_date(query, from_date), do: where(query, [m], m.date >= ^from_date)
+
+  defp since_datetime(query, nil), do: query
+
+  defp since_datetime(query, from_date),
+    do: where(query, [r], r.started_at >= ^day_start(from_date))
+
+  defp for_project(query, nil), do: query
+  defp for_project(query, project_id), do: where(query, [m], m.project_id == ^project_id)
+
+  defp runs_for_project(query, nil), do: query
+
+  defp runs_for_project(query, project_id),
+    do: join(query, :inner, [r], t in Task, on: t.id == r.task_id and t.project_id == ^project_id)
+
   defp add_spend(a, b) do
     %{tokens: a.tokens + b.tokens, cost_cents: a.cost_cents + b.cost_cents}
   end
 
-  defp today_start do
-    DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
-  end
+  defp month_start, do: Date.beginning_of_month(Date.utc_today())
+
+  defp today_start, do: day_start(Date.utc_today())
+
+  defp day_start(date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
 end

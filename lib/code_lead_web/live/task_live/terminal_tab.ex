@@ -30,7 +30,9 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
             cd {@task.worktree_path}
           </p>
           <p :if={!@task.worktree_path} class="mt-1 text-term-text/60">
-            A worktree is provisioned when a repo-targeted run starts.
+            {if @task.state == :done,
+              do: "The worktree was pruned when this task was finalized.",
+              else: "A worktree is provisioned when a repo-targeted run starts."}
           </p>
         </div>
       </div>

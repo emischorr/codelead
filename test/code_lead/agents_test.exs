@@ -278,6 +278,33 @@ defmodule CodeLead.AgentsTest do
       refute Agents.eligible?(review_only, :code, project.id, :execute)
       refute Agents.eligible?(org_coder, :content, project.id, :execute)
     end
+
+    test "planners are filtered by the :plan role, independent of driver" do
+      project = project_fixture()
+
+      surveyor =
+        agent_fixture(%{
+          roles: [:plan],
+          work_type: :code,
+          driver: :acp,
+          harness: :claude_code
+        })
+
+      coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+      _content_planner = agent_fixture(%{roles: [:plan], work_type: :content})
+      executor = agent_fixture(%{roles: [:execute], work_type: :code})
+
+      planner_ids = Agents.eligible_planners(:code, project.id) |> Enum.map(& &1.id)
+      assert Enum.sort(planner_ids) == Enum.sort([surveyor.id, coach.id])
+
+      assert Agents.eligible?(surveyor, :code, project.id, :plan)
+      assert Agents.eligible?(coach, :code, project.id, :plan)
+      refute Agents.eligible?(executor, :code, project.id, :plan)
+
+      # A planner is not an executor — the Planning → Running guard is
+      # keyed on :execute and must not be widened by this role.
+      refute Agents.eligible?(surveyor, :code, project.id, :execute)
+    end
   end
 
   describe "default reviewers" do

@@ -47,7 +47,7 @@ from — LiveViews never assemble navigation themselves:
   scope: :project | :general, # is this page inside a project?
   current: :dashboard | :board | :settings | :account | nil,
   attention_count: 0,
-  spend: nil                  # %{cost_cents: _, tokens: _} | nil
+  spend: nil                  # month-to-date %{cost_cents: _, tokens: _} | nil
 }
 ```
 
@@ -68,6 +68,11 @@ from — LiveViews never assemble navigation themselves:
   `NavContext` stays free of the costs/tasks domains. `DashboardLive`
   deliberately does not: it is org-wide, and both readouts are
   project-scoped.
+- `spend` is **month-to-date** (`Costs.project_spend_month/1`), because
+  the budget tile's headline names the current month and the limit it
+  is measured against runs on the calendar month too. The board header's
+  separate "today" figure (`Costs.project_spend_today/1`) is the shorter
+  window, not the same number rendered twice.
 
 Every page therefore renders the identical call, the task page adding only
 the rail variant:

@@ -11,6 +11,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.AgentFeed
   alias CodeLead.Agents
   alias CodeLead.Costs
+  alias CodeLead.Finalizer
   alias CodeLead.Git
   alias CodeLead.Git.DiffFile
   alias CodeLead.Planning
@@ -22,6 +23,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Workspace
   alias CodeLeadWeb.DiffComponents
   alias CodeLeadWeb.FlashMessages
+  alias CodeLeadWeb.Format
   alias CodeLeadWeb.NavContext
   alias CodeLeadWeb.ScheduleForm
   alias CodeLeadWeb.TaskLive.AgentFeedBlocks
@@ -56,7 +58,9 @@ defmodule CodeLeadWeb.TaskLive do
         feed_blocks: [],
         all_runs?: false,
         chat_pending?: false,
+        survey_pending?: false,
         show_feedback?: false,
+        editing?: false,
         schedule_form: nil,
         diff_files: nil,
         diff_stats: nil,
@@ -146,7 +150,18 @@ defmodule CodeLeadWeb.TaskLive do
         {:noreply, socket |> put_flash(:info, outcome.note) |> load_task()}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, approve_error(reason))}
+        {:noreply, put_flash(socket, :error, FlashMessages.finalize_error(reason))}
+    end
+  end
+
+  def handle_event("set_finalize_mode", %{"finalize_mode" => mode}, socket) do
+    case Tasks.set_finalize_mode(socket.assigns.task, mode) do
+      {:ok, _task} ->
+        {:noreply, load_task(socket)}
+
+      {:error, _changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "That finalize mode does not fit this task's target.")}
     end
   end
 
@@ -177,6 +192,14 @@ defmodule CodeLeadWeb.TaskLive do
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Couldn't answer the request: #{inspect(reason)}")}
     end
+  end
+
+  def handle_event("answer_question", %{"ref" => ref} = params, socket) do
+    submit_answer(socket, ref, {:accept, Map.get(params, "answer", %{})})
+  end
+
+  def handle_event("skip_question", %{"ref" => ref}, socket) do
+    submit_answer(socket, ref, :decline)
   end
 
   def handle_event("archive", _params, socket) do
@@ -228,6 +251,13 @@ defmodule CodeLeadWeb.TaskLive do
 
   ## Planning: edits, executor/reviewers, chat
 
+  # Edit mode is server state, not a `JS.toggle`: a re-render — a save, a
+  # board broadcast, an agent event — would otherwise leave the form open
+  # over stale values.
+  def handle_event("toggle_edit", _params, socket) do
+    {:noreply, assign(socket, editing?: !socket.assigns.editing?) |> reset_edit_form()}
+  end
+
   def handle_event("validate_edit", %{"task" => params}, socket) do
     changeset = Task.planning_changeset(socket.assigns.task, params)
     {:noreply, assign(socket, edit_form: to_form(changeset, action: :validate))}
@@ -236,10 +266,23 @@ defmodule CodeLeadWeb.TaskLive do
   def handle_event("save_edit", %{"task" => params}, socket) do
     case Tasks.update_task(socket.assigns.task, params) do
       {:ok, _task} ->
-        {:noreply, socket |> put_flash(:info, "Task updated.") |> load_task()}
+        {:noreply,
+         socket |> assign(editing?: false) |> put_flash(:info, "Task updated.") |> load_task()}
 
       {:error, changeset} ->
         {:noreply, assign(socket, edit_form: to_form(changeset))}
+    end
+  end
+
+  # The target form is a bare `phx-change` form, so `repository_id` is
+  # simply absent while the target is `:folder`.
+  def handle_event("set_target", params, socket) do
+    case Tasks.update_task(socket.assigns.task, Map.take(params, ["target", "repository_id"])) do
+      {:ok, _task} ->
+        {:noreply, load_task(socket)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not update the target.")}
     end
   end
 
@@ -263,21 +306,43 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
-  def handle_event("send_chat", %{"message" => message}, socket) do
-    %{task: task, assistant_agent: assistant} = socket.assigns
+  def handle_event("set_planner", %{"agent_id" => agent_id}, socket) do
+    planner = Enum.find(socket.assigns.eligible_planners, &(to_string(&1.id) == agent_id))
 
-    case {String.trim(message), assistant} do
-      {"", _assistant} ->
+    {:noreply, assign(socket, selected_planner: planner || socket.assigns.selected_planner)}
+  end
+
+  def handle_event("send_chat", %{"message" => message}, socket) do
+    %{task: task, selected_planner: planner} = socket.assigns
+
+    case {String.trim(message), planner} do
+      {"", _planner} ->
         {:noreply, socket}
 
       {_message, nil} ->
-        {:noreply, put_flash(socket, :error, "No planning assistant (LLM agent) is configured.")}
+        {:noreply,
+         put_flash(socket, :error, "No planning agent is configured for this work type.")}
 
-      {content, assistant} ->
+      {content, planner} ->
         {:noreply,
          socket
          |> assign(chat_pending?: true, pending_chat: content)
-         |> start_async(:chat_reply, fn -> Planning.send_message(task, assistant.id, content) end)}
+         |> start_async(:chat_reply, fn -> Planning.send_message(task, planner.id, content) end)}
+    end
+  end
+
+  def handle_event("run_survey", _params, socket) do
+    %{task: task, selected_planner: planner} = socket.assigns
+
+    case planner && Planning.start_survey(task, planner.id) do
+      {:ok, :started} ->
+        {:noreply, assign(socket, survey_pending?: true)}
+
+      nil ->
+        {:noreply, put_flash(socket, :error, FlashMessages.survey_error(:no_planner))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.survey_error(reason))}
     end
   end
 
@@ -379,6 +444,7 @@ defmodule CodeLeadWeb.TaskLive do
     planning? = task.state == :planning
 
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
+    finalize = finalize_context(task, repository)
     agents = Map.new(Agents.list_agents(project.id), &{&1.id, &1})
     steps = Tasks.steps(task.id)
     runs = Costs.task_runs(task.id)
@@ -388,6 +454,9 @@ defmodule CodeLeadWeb.TaskLive do
       task: task,
       page_title: task.title,
       repository: repository,
+      finalize_mode: finalize.mode,
+      project_finalize_mode: finalize.project_mode,
+      forge_known?: finalize.forge_known?,
       executor: task.agent_id && agents[task.agent_id],
       agents: agents,
       steps: steps,
@@ -399,19 +468,50 @@ defmodule CodeLeadWeb.TaskLive do
       cost_mode: runs |> Enum.map(& &1.provider_kind) |> Agents.billing_mode(),
       runs: runs,
       messages: Planning.list_messages(task.id),
-      assistant_agent: assistant_agent(project.id),
       eligible_executors:
         (planning? && Agents.eligible_executors(task.work_type, project.id)) || [],
       eligible_reviewers:
         (planning? && Agents.eligible_reviewers(task.work_type, project.id)) || [],
-      edit_form: to_form(Task.planning_changeset(task, %{}))
+      repositories: (planning? && Projects.list_repositories(project.id)) || []
     )
+    |> maybe_reset_edit_form()
+    |> load_planners(task, project.id, planning?)
     |> NavContext.put_stats(
       length(Tasks.attention_tasks(project.id)),
-      Costs.project_spend(project.id)
+      Costs.project_spend_month(project.id)
     )
     |> drop_stale_live_usage()
     |> reschedule_tick()
+  end
+
+  # Everything the Approve button and the finalize selector need. The
+  # mode the finalizer would actually run, the mode the *project* would
+  # run (what the selector's "Project default" option names, so the
+  # task's own override has to be taken out of it), and whether the
+  # remote has a forge convention at all — one that has none can be
+  # pushed to but not opened a PR on, which is a different promise.
+  defp finalize_context(task, repository) do
+    project_mode =
+      Finalizer.resolve_mode(
+        task.target,
+        nil,
+        Map.fetch!(Projects.finalize_defaults(task.project_id), task.target)
+      )
+
+    %{
+      mode: Tasks.finalize_mode(task),
+      project_mode: project_mode,
+      forge_known?: repository != nil and Git.forge(repository.git_url) != :other
+    }
+  end
+
+  # A reload that lands mid-edit — a board broadcast, an agent event —
+  # must not throw away what the user has typed.
+  defp maybe_reset_edit_form(%{assigns: %{editing?: true}} = socket), do: socket
+  defp maybe_reset_edit_form(socket), do: reset_edit_form(socket)
+
+  defp reset_edit_form(socket) do
+    assign(socket, edit_form: to_form(Task.planning_changeset(socket.assigns.task, %{})))
   end
 
   # Once the run's own `agent_runs` row exists, `task_spend` already
@@ -434,8 +534,17 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
-  defp assistant_agent(project_id) do
-    project_id |> Agents.list_agents() |> Enum.find(&(&1.driver == :llm_api))
+  # Which agent the human is planning *with* is a tool choice, not task
+  # state, so it lives in the socket. A reload keeps the current pick as
+  # long as it is still eligible.
+  defp load_planners(socket, task, project_id, planning?) do
+    planners = (planning? && Agents.eligible_planners(task.work_type, project_id)) || []
+    previous = socket.assigns[:selected_planner]
+
+    selected =
+      Enum.find(planners, List.first(planners), &(previous && &1.id == previous.id))
+
+    assign(socket, eligible_planners: planners, selected_planner: selected)
   end
 
   ## Elapsed counter
@@ -612,15 +721,8 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp track_follow_path(socket, _row), do: socket
 
-  defp worktree_relative(_locations, nil), do: nil
-
-  defp worktree_relative(locations, worktree_path) do
-    root = Path.expand(worktree_path)
-
-    locations
-    |> Enum.map(&Path.relative_to(Path.expand(&1, root), root))
-    |> Enum.find(&(not String.starts_with?(&1, "/")))
-  end
+  defp worktree_relative(locations, worktree_path),
+    do: Enum.find_value(locations, &Format.project_path(&1, worktree_path))
 
   # Scrolls only when the agent moves to a different file: re-anchoring on
   # every refresh would yank the viewport back through ten edits of the
@@ -726,6 +828,10 @@ defmodule CodeLeadWeb.TaskLive do
     socket |> assign(live_usage: snapshot) |> put_task_stat()
   end
 
+  defp ingest_event(socket, {:survey_completed, _summary}) do
+    assign(socket, survey_pending?: false)
+  end
+
   defp ingest_event(socket, _event), do: socket
 
   @state_bearing_events [
@@ -736,7 +842,8 @@ defmodule CodeLeadWeb.TaskLive do
     :question,
     :permission_request,
     :review_completed,
-    :review_cycle_completed
+    :review_cycle_completed,
+    :survey_completed
   ]
 
   defp state_bearing?(event) when is_tuple(event), do: elem(event, 0) in @state_bearing_events
@@ -751,6 +858,18 @@ defmodule CodeLeadWeb.TaskLive do
     if executing?(socket.assigns.task), do: socket, else: unfollow(socket)
   end
 
+  # The resolved row broadcasts itself back through `:agent_feed`, so the
+  # card re-renders without any stream bookkeeping here.
+  defp submit_answer(socket, ref, answer) do
+    case Runtime.answer_question(socket.assigns.task, ref, answer) do
+      :ok ->
+        {:noreply, load_task(socket)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Couldn't send the answer: #{inspect(reason)}")}
+    end
+  end
+
   defp after_action(result, socket) do
     case result do
       {:ok, _task} ->
@@ -760,11 +879,6 @@ defmodule CodeLeadWeb.TaskLive do
         {:noreply, put_flash(socket, :error, FlashMessages.transition_error(reason))}
     end
   end
-
-  defp approve_error(reason) when reason in [:invalid_state],
-    do: FlashMessages.transition_error(reason)
-
-  defp approve_error(reason), do: "Finalization failed: #{inspect(reason)}"
 
   ## Template
 
@@ -804,7 +918,13 @@ defmodule CodeLeadWeb.TaskLive do
           />
           <div class="flex-1" />
           <div class="hidden items-center gap-2 lg:flex">
-            <.header_actions task={@task} scheduled?={Task.scheduled?(@task)} />
+            <.header_actions
+              task={@task}
+              scheduled?={Task.scheduled?(@task)}
+              finalize_mode={@finalize_mode}
+              forge_known?={@forge_known?}
+              base_branch={@repository && @repository.default_branch}
+            />
           </div>
         </div>
         <.tab_nav tabs={tab_links(@project, @task)} active={@tab} class="mt-3 px-4 sm:px-6" />
@@ -815,20 +935,27 @@ defmodule CodeLeadWeb.TaskLive do
           :if={@tab == :task}
           task={@task}
           repository={@repository}
+          repositories={@repositories}
           executor={@executor}
+          agents={@agents}
           steps={@steps}
           reviewers={@reviewers}
           reviews={@reviews}
           runs={@runs}
           task_stat={@task_stat}
           messages={@messages}
-          assistant_agent={@assistant_agent}
+          eligible_planners={@eligible_planners}
+          selected_planner={@selected_planner}
           chat_pending?={@chat_pending?}
+          survey_pending?={@survey_pending?}
           pending_chat={assigns[:pending_chat]}
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
           edit_form={@edit_form}
+          editing?={@editing?}
           show_feedback?={@show_feedback?}
+          finalize_mode={@finalize_mode}
+          project_finalize_mode={@project_finalize_mode}
         />
         <AgentTab.agent_tab
           :if={@tab == :agent}
@@ -856,7 +983,14 @@ defmodule CodeLeadWeb.TaskLive do
       </div>
 
       <div class="fixed inset-x-0 bottom-0 z-30 flex gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden">
-        <.header_actions task={@task} scheduled?={Task.scheduled?(@task)} mobile />
+        <.header_actions
+          task={@task}
+          scheduled?={Task.scheduled?(@task)}
+          finalize_mode={@finalize_mode}
+          forge_known?={@forge_known?}
+          base_branch={@repository && @repository.default_branch}
+          mobile
+        />
       </div>
 
       <.feedback_modal :if={@show_feedback?} />
@@ -889,6 +1023,9 @@ defmodule CodeLeadWeb.TaskLive do
   attr :task, :map, required: true
   attr :mobile, :boolean, default: false
   attr :scheduled?, :boolean, default: false
+  attr :finalize_mode, :atom, default: :pull_request
+  attr :forge_known?, :boolean, default: false
+  attr :base_branch, :string, default: nil
 
   defp header_actions(%{task: %{state: :planning}} = assigns) do
     ~H"""
@@ -963,16 +1100,38 @@ defmodule CodeLeadWeb.TaskLive do
     <.button
       variant="primary"
       phx-click="approve"
+      phx-disable-with="Finalizing…"
+      title={Format.finalize_hint(@finalize_mode, @base_branch)}
       class={@mobile && "flex-1"}
       id={action_id("approve", @mobile)}
     >
-      Approve & merge
+      {if @mobile,
+        do: Format.finalize_action_short(@finalize_mode),
+        else: Format.finalize_action(@finalize_mode, @forge_known?)}
     </.button>
     """
   end
 
   defp header_actions(%{task: %{state: :done, archived_at: nil}} = assigns) do
     ~H"""
+    <.button
+      :if={@task.pr_url}
+      href={@task.pr_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      id={action_id("open-pr", @mobile)}
+    >
+      <.icon name="hero-arrow-top-right-on-square" class="size-4" />
+      {Format.forge_link(@task.pr_url_kind)}
+    </.button>
+    <.button
+      :if={@task.target == :folder}
+      href={~p"/projects/#{@task.project_id}/tasks/#{@task.id}/artifact"}
+      download
+      id={action_id("download-artifact", @mobile)}
+    >
+      <.icon name="hero-arrow-down-tray" class="size-4" /> Download
+    </.button>
     <.button phx-click="archive" class={@mobile && "flex-1"} id={action_id("archive", @mobile)}>
       Archive
     </.button>

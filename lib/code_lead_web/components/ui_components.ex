@@ -515,10 +515,17 @@ defmodule CodeLeadWeb.UIComponents do
   """
   attr :role, :atom, required: true, doc: ":user | :assistant"
   attr :content, :string, required: true
+  attr :label, :string, default: nil, doc: "provenance caption, e.g. a repo survey's agent"
 
   def chat_bubble(assigns) do
     ~H"""
-    <div class={["flex", @role == :user && "justify-end"]}>
+    <div class={["flex flex-col gap-1", @role == :user && "items-end"]}>
+      <span
+        :if={@label}
+        class="text-[10.5px] font-semibold uppercase tracking-wider text-text3"
+      >
+        {@label}
+      </span>
       <div
         class={[
           "max-w-[85%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed",

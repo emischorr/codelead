@@ -55,6 +55,29 @@ defmodule CodeLeadWeb.BoardLiveTest do
       assert render(element(view, "#task-card-#{review_task.id}")) =~ "1 pass"
       assert render(element(view, "#task-card-#{done_task.id}")) =~ "pushed task-branch"
     end
+
+    test "a done card links to the pull request the finalizer opened", %{conn: conn} do
+      project = project_fixture()
+
+      linked =
+        task_fixture(project.id)
+        |> put_context!(%{
+          state: :done,
+          pr_url: "https://github.com/acme/site/pull/7",
+          pr_url_kind: :pull_request
+        })
+
+      unlinked = task_fixture(project.id) |> put_context!(%{state: :done})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(
+               view,
+               ~s(#task-card-#{linked.id}-forge-link[href="https://github.com/acme/site/pull/7"][target="_blank"])
+             )
+
+      refute has_element?(view, "#task-card-#{unlinked.id}-forge-link")
+    end
   end
 
   describe "new-task modal" do

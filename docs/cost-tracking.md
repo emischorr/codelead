@@ -1,4 +1,4 @@
-# Cost, token & duration tracking (last updated: 2026-08-11)
+# Cost, token & duration tracking (last updated: 2026-08-12)
 
 Implemented in `CodeLead.Costs`.
 
@@ -19,26 +19,40 @@ Implemented in `CodeLead.Costs`.
   (per project per day) with recompute-upserts, then prunes old runs.
   The rollup keeps tokens and money only — the split and the duration
   live and die with the raw rows.
-- **Spend** = daily_metrics totals + today's not-yet-rolled runs:
-  `project_spend/1`, `org_spend/0`, `task_spend/1`. `task_duration_ms/1`
-  and `task_runs/1` cover the per-task page; `spend_by_task/1` batches
-  spend, duration and the distinct provider kinds for board cards.
-- **Dashboard readouts** (`org_spend_today/0`, `spend_by_project/0`,
-  `daily_series/1`) are org-wide and grouped — `spend_by_project/0` is
-  two queries no matter how many projects exist, not one per project.
-  `daily_series/1` merges the two sources with **the rollup winning**
-  over raw runs for the same day: between the nightly job and the
-  14-day prune a completed day exists in both tables, and the metric
+- **Spend** groups both tables by day and merges them with **the rollup
+  winning** over raw runs for the same day: between the nightly job and
+  the 14-day prune a completed day exists in both tables, and the metric
   was computed from those very runs, so summing them doubles the day.
-  Days with no activity are zero-filled by the query, not the caller.
+  Every spend query goes through one private `spend_since/2` (window
+  start + optional project), so none of them can drift apart. Reading it
+  the other way — rollups plus *today's* runs — silently drops each
+  completed day the nightly job has not reached yet, which locally is
+  all of them; that bug made the sidebar's monthly tile read as a daily
+  figure until 2026-08-12.
+- Lifetime: `project_spend/1`, `org_spend/0`. Month-to-date:
+  `project_spend_month/2`, `org_spend_month/1`,
+  `spend_by_project_month/1` — each takes the window start as an
+  optional argument that defaults to the 1st of the current UTC month,
+  so tests can pin a window instead of depending on the calendar day.
+  Per task: `task_spend/1`, `task_duration_ms/1`, `task_runs/1`, and
+  `spend_by_task/1`, which batches spend, duration and the distinct
+  provider kinds for board cards.
+- **Dashboard readouts** (`org_spend_today/0`, `spend_by_project_month/1`,
+  `daily_series/1`) are org-wide and grouped —
+  `spend_by_project_month/1` is two queries no matter how many projects
+  exist, not one per project. In `daily_series/1` days with no activity
+  are zero-filled by the query, not the caller.
 - `record_run/1` **broadcasts nothing**. Nothing on the cost side has a
   PubSub topic, so any surface showing live spend has to poll — that is
   why `DashboardLive` carries a 30s tick alongside its task
   subscription.
-- **Budgets** are cumulative totals (no period) in MVP:
-  `check_budget/1` returns `{:hold, :budget}` when a project or org
-  cost/token limit is reached — this backs the scheduler's `admit?`.
-  Review runs are cost-tracked but not budget-held.
+- **Budgets** run on the **calendar month (UTC)**: `check_budget/1`
+  compares month-to-date spend against the project and org cost/token
+  limits and returns `{:hold, :budget}` when one is reached — this backs
+  the scheduler's `admit?`. A hold therefore lifts by itself on the 1st.
+  The limits are stored as plain integers on `projects`/`organizations`;
+  the period lives in the query, not the schema. Review runs are
+  cost-tracked but not budget-held.
 
 ## Where the numbers come from
 

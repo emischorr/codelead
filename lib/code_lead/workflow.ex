@@ -84,7 +84,11 @@ defmodule CodeLead.Workflow do
           context_policy: :carry,
           worktree_policy: :keep
         },
-        # Approve.
+        # Approve. `:keep` is deliberate even though Done *does* prune the
+        # worktree: the policy fires before the finalizer has run and
+        # cannot know the finalize mode, and on a `:folder` target it
+        # would delete the artifact Done just produced. Pruning is data on
+        # the finalize outcome instead — architecture spec §4.1.
         %Transition{
           from: :review,
           to: :done,

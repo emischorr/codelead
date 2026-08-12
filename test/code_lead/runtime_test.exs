@@ -58,6 +58,10 @@ defmodule CodeLead.RuntimeTest do
     Phoenix.PubSub.subscribe(CodeLead.PubSub, "project:#{task.project_id}")
   end
 
+  defp latest_question_row(task_id) do
+    task_id |> AgentFeed.list_run() |> Enum.filter(&(&1.kind == :question)) |> List.last()
+  end
+
   defp await_runner_down(task_id) do
     case RunSupervisor.whereis(task_id) do
       nil ->
@@ -320,6 +324,84 @@ defmodule CodeLead.RuntimeTest do
 
       task = Tasks.get_task!(task.id)
       assert task.state == :review
+    end
+
+    test "an agent question holds the run and completes it once answered" do
+      use_scenario("elicitation")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:question, %{id: request_id}}}, 15_000
+
+      # The turn is blocked on the human, so the run must not have taken
+      # the automatic completion edge into Review.
+      task = Tasks.get_task!(task.id)
+      assert task.state == :running
+      assert task.run_state == :executing
+      assert task.attention.type == :agent_question
+      assert task.attention.detail == "Which approach should I take?"
+      assert task.attention.ref == to_string(request_id)
+
+      row = latest_question_row(task.id)
+      assert row.external_id == to_string(request_id)
+      assert is_nil(row.data["resolved"])
+
+      # Reloaded from jsonb, so every key here is proof the row was
+      # written string-keyed all the way down.
+      assert [%{"key" => "question_0", "type" => "select", "options" => options} | _rest] =
+               row.data["fields"]
+
+      assert [%{"value" => "Refactor first", "label" => "Refactor first"} | _] = options
+
+      assert :ok =
+               Runtime.answer_question(task, request_id, {:accept, %{"question_0" => "Ship it"}})
+
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      task = Tasks.get_task!(task.id)
+      assert task.state == :review
+      assert is_nil(task.attention) or task.attention.type == :review_ready
+
+      row = latest_question_row(task.id)
+      assert row.data["resolved"] == "answered"
+      assert row.data["answers"] == %{"question_0" => "Ship it"}
+      assert row.data["fields"] != nil
+    end
+
+    test "skipping a question lets the run finish without an answer" do
+      use_scenario("elicitation")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:question, %{id: request_id}}}, 15_000
+
+      task = Tasks.get_task!(task.id)
+      assert :ok = Runtime.answer_question(task, request_id, :decline)
+
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      assert latest_question_row(task.id).data["resolved"] == "skipped"
+      assert Tasks.get_task!(task.id).state == :review
+    end
+
+    test "cancel_task releases a run blocked on a question" do
+      use_scenario("elicitation")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:question, _question}}, 15_000
+
+      task = Tasks.get_task!(task.id)
+      assert {:ok, task} = Runtime.cancel_task(task)
+      assert task.state == :planning
+      assert is_nil(task.attention)
+
+      await_runner_down(task.id)
     end
 
     test "agent crash marks the run failed with attention; retry succeeds" do

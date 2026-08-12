@@ -100,6 +100,31 @@ seed_agent.(%{
 })
 
 seed_agent.(%{
+  name: "Survey (Repo-aware Planner)",
+  scope: :org,
+  roles: [:plan],
+  work_type: :code,
+  driver: :acp,
+  harness: :claude_code,
+  provider_id: anthropic.id,
+  model_variant: "claude-sonnet-5",
+  system_prompt:
+    "You survey existing codebases to find what a task's spec leaves out. You are read-only: you never write code, branches, or commits. Cite files and be concrete about what is missing."
+})
+
+seed_agent.(%{
+  name: "Spec Coach",
+  scope: :org,
+  roles: [:plan],
+  work_type: :code,
+  driver: :llm_api,
+  provider_id: anthropic.id,
+  model_variant: "claude-sonnet-5",
+  system_prompt:
+    "You help a product owner turn a rough task into a clear spec with acceptance criteria. Ask for what is missing rather than inventing it."
+})
+
+seed_agent.(%{
   name: "Copywriter",
   scope: :org,
   roles: [:execute, :review],
@@ -111,7 +136,7 @@ seed_agent.(%{
     "You write clear, concise product copy in the project's voice. Prefer short sentences and concrete benefits."
 })
 
-IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 3 agents")
+IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 5 agents")
 
 # Demo project with tasks across the board (skipped if it exists).
 alias CodeLead.Projects

@@ -13,9 +13,10 @@ note is the "how it works today" map.
 | `CodeLead.Agents` | providers (encrypted config), agent personas, eligibility rules, default reviewers, provider env for harnesses |
 | `CodeLead.Workflow` | the declarative workflow definition (spec §4.1) — stages with a `stage_type`, transitions with trigger/context/worktree policies. Pure data; one built-in, named by `tasks.workflow_key` |
 | `CodeLead.Tasks` | the task state machine (spec §4) driven by that definition, task steps, task reviewers, attention, board queries |
-| `CodeLead.Planning` | planning-assistant chat (`planning_messages`) |
+| `CodeLead.Planning` | the planning surface (`planning_messages`): `llm_api` spec refinement and the `acp` repo-aware survey |
+| `CodeLead.AdvisoryRun` | one read-only agent run — reviewers and planning surveys share it; raises attention on escalations, owns its deadline |
 | `CodeLead.AgentFeed` | the executor transcript (`agent_events`) behind the Agent tab — see [ADR-0002](adr/0002-persist-agent-transcript.md); **not in the architecture spec's data model**, a deliberate addition |
-| `CodeLead.Reviews` | review cycles, fan-out, advisory verdicts |
+| `CodeLead.Reviews` | review cycles, fan-out, advisory verdicts (over `CodeLead.AdvisoryRun`) |
 | `CodeLead.Costs` | agent_runs, daily_metrics rollup (Oban), pricing, budget gate |
 
 ## Behaviours (extension points, one MVP impl each)
@@ -35,7 +36,10 @@ note is the "how it works today" map.
   and runs the target stage's effects around the write.
 - `CodeLead.Runtime.StageEffects` — the only stage-type → behaviour
   map: `prepare/2` before the state is written (finalization, which can
-  veto) and `on_enter/3` after it (dispatch, reviewer fan-out).
+  veto) and `on_enter/3` after it (dispatch, reviewer fan-out, and the
+  post-finalize teardown a finalize outcome asks for). It also owns
+  `discard_context/1`, the one teardown both the `:discard` worktree
+  policy and that outcome go through.
 - `CodeLead.Runtime.TaskRunner` — one GenServer per active run
   (DynamicSupervisor + Registry), consumes driver events, persists the
   transcript through `CodeLead.AgentFeed` (which broadcasts
@@ -47,7 +51,9 @@ note is the "how it works today" map.
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.
-- `CodeLead.Finalizer` — the system executor behind Approve → Done.
+- `CodeLead.Finalizer` — the system executor behind Approve → Done,
+  dispatched on the task's target and its resolved finalize mode (PR,
+  merge, squash, artifact, commit-to-path).
 - `CodeLead.Vault` — Cloak encryption (provider config, project env).
 - Oban — `rollups` queue (nightly `Costs.RollupWorker` cron) and
   `dispatch` queue (`Runtime.ScheduledDispatchWorker` wake-ups for

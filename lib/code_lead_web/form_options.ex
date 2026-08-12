@@ -58,6 +58,39 @@ defmodule CodeLeadWeb.FormOptions do
   @spec work_type_values() :: [atom()]
   def work_type_values, do: [:code, :design, :content, :file]
 
+  @spec targets() :: [{String.t(), String.t()}]
+  def targets, do: [{"Repository", "repo"}, {"Folder", "folder"}]
+
+  @doc """
+  Finalize modes a target can use, labelled with what each one does.
+  """
+  @spec finalize_modes(:repo | :folder) :: [{String.t(), String.t()}]
+  def finalize_modes(:repo) do
+    [
+      {"Pull request — push the branch, open a PR/MR", "pull_request"},
+      {"Merge — merge into the default branch", "merge"},
+      {"Squash — land it as a single commit", "squash"}
+    ]
+  end
+
+  def finalize_modes(:folder) do
+    [
+      {"Artifact — hand the task folder over as a download", "artifact"},
+      {"Commit to path — push the folder into a repository", "commit_to_path"}
+    ]
+  end
+
+  @doc """
+  The short label for a finalize mode — for naming the inherited project
+  default in a select.
+  """
+  @spec finalize_mode_label(atom()) :: String.t()
+  def finalize_mode_label(:pull_request), do: "Pull request"
+  def finalize_mode_label(:merge), do: "Merge"
+  def finalize_mode_label(:squash), do: "Squash"
+  def finalize_mode_label(:artifact), do: "Artifact"
+  def finalize_mode_label(:commit_to_path), do: "Commit to path"
+
   @spec roles() :: [{String.t(), String.t()}]
   def roles do
     [

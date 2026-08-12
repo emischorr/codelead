@@ -90,7 +90,7 @@ defmodule CodeLeadWeb.SettingsLive.Projects do
               <:meta>
                 <span>{task_line(project.task_count)}</span>
                 <span :if={project.budget_limit_cents} class="font-mono">
-                  {Format.cents(project.budget_limit_cents)} cap
+                  {Format.cents(project.budget_limit_cents)}/mo
                 </span>
               </:meta>
               <:actions>

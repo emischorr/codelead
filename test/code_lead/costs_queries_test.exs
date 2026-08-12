@@ -26,6 +26,16 @@ defmodule CodeLead.CostsQueriesTest do
     run
   end
 
+  defp insert_metric!(project_id, date, tokens, cost_cents) do
+    Repo.insert!(%DailyMetric{
+      project_id: project_id,
+      date: date,
+      total_tokens: tokens,
+      cost_cents: cost_cents,
+      run_count: 1
+    })
+  end
+
   test "spend_by_task/1 sums runs per task in one query" do
     project = project_fixture()
     task_a = task_fixture(project.id)
@@ -99,7 +109,7 @@ defmodule CodeLead.CostsQueriesTest do
     assert Costs.org_spend_today() == %{tokens: 100, cost_cents: 10}
   end
 
-  test "spend_by_project/0 merges rollups with today's runs, per project" do
+  test "spend_by_project_month/1 merges rollups with raw runs per project, inside the window" do
     project_a = project_fixture()
     project_b = project_fixture()
     quiet_project = project_fixture()
@@ -107,19 +117,89 @@ defmodule CodeLead.CostsQueriesTest do
     record_run!(task_fixture(project_a.id).id, %{usage: %{total_tokens: 40, cost_cents: 4}})
     record_run!(task_fixture(project_b.id).id, %{usage: %{total_tokens: 7, cost_cents: 1}})
 
-    Repo.insert!(%DailyMetric{
-      project_id: project_a.id,
-      date: Date.add(Date.utc_today(), -3),
-      total_tokens: 100,
-      cost_cents: 10,
-      run_count: 2
-    })
+    insert_metric!(project_a.id, Date.add(Date.utc_today(), -3), 100, 10)
+    insert_metric!(project_a.id, Date.add(Date.utc_today(), -40), 999, 99)
 
-    spend = Costs.spend_by_project()
+    spend = Costs.spend_by_project_month(Date.add(Date.utc_today(), -30))
 
     assert spend[project_a.id] == %{tokens: 140, cost_cents: 14}
     assert spend[project_b.id] == %{tokens: 7, cost_cents: 1}
     refute Map.has_key?(spend, quiet_project.id)
+  end
+
+  # The regression the budget tile showed: assuming every day before today
+  # is already rolled up drops each completed day the nightly job has not
+  # reached yet — which, run locally, is all of them.
+  test "project_spend_month/2 counts completed days the rollup has not reached" do
+    project = project_fixture()
+    task = task_fixture(project.id)
+
+    record_run!(task.id, %{usage: %{total_tokens: 40, cost_cents: 4}})
+
+    record_run!(task.id, %{
+      usage: %{total_tokens: 25, cost_cents: 3},
+      started_at: DateTime.add(DateTime.utc_now(:second), -2, :day)
+    })
+
+    assert Costs.project_spend_month(project.id, Date.add(Date.utc_today(), -30)) ==
+             %{tokens: 65, cost_cents: 7}
+  end
+
+  test "project_spend_month/2 ignores spend before the window" do
+    project = project_fixture()
+    task = task_fixture(project.id)
+
+    record_run!(task.id, %{usage: %{total_tokens: 40, cost_cents: 4}})
+
+    record_run!(task.id, %{
+      usage: %{total_tokens: 999, cost_cents: 99},
+      started_at: DateTime.add(DateTime.utc_now(:second), -10, :day)
+    })
+
+    insert_metric!(project.id, Date.add(Date.utc_today(), -10), 999, 99)
+
+    assert Costs.project_spend_month(project.id, Date.add(Date.utc_today(), -3)) ==
+             %{tokens: 40, cost_cents: 4}
+  end
+
+  test "project_spend_month/2 counts a day present in both tables once" do
+    project = project_fixture()
+    task = task_fixture(project.id)
+    yesterday = Date.add(Date.utc_today(), -1)
+
+    record_run!(task.id, %{
+      usage: %{total_tokens: 100, cost_cents: 10},
+      started_at: DateTime.add(DateTime.utc_now(:second), -1, :day)
+    })
+
+    insert_metric!(project.id, yesterday, 100, 10)
+
+    assert Costs.project_spend_month(project.id, Date.add(Date.utc_today(), -30)) ==
+             %{tokens: 100, cost_cents: 10}
+  end
+
+  test "project_spend_month/1 defaults to the calendar month and counts today" do
+    project = project_fixture()
+    task = task_fixture(project.id)
+
+    record_run!(task.id, %{usage: %{total_tokens: 40, cost_cents: 4}})
+    insert_metric!(project.id, Date.add(Date.beginning_of_month(Date.utc_today()), -1), 999, 99)
+
+    assert Costs.project_spend_month(project.id) == %{tokens: 40, cost_cents: 4}
+  end
+
+  test "org_spend_month/1 sums the window across projects" do
+    project_a = project_fixture()
+    project_b = project_fixture()
+
+    record_run!(task_fixture(project_a.id).id, %{usage: %{total_tokens: 40, cost_cents: 4}})
+    record_run!(task_fixture(project_b.id).id, %{usage: %{total_tokens: 60, cost_cents: 6}})
+
+    insert_metric!(project_a.id, Date.add(Date.utc_today(), -3), 100, 10)
+    insert_metric!(project_b.id, Date.add(Date.utc_today(), -40), 999, 99)
+
+    assert Costs.org_spend_month(Date.add(Date.utc_today(), -30)) ==
+             %{tokens: 200, cost_cents: 20}
   end
 
   test "daily_series/1 returns one zero-filled entry per day, oldest first" do

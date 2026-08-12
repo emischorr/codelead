@@ -7,23 +7,31 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   use CodeLeadWeb, :html
 
   alias CodeLead.Agents
+  alias CodeLeadWeb.FormOptions
 
   attr :task, :map, required: true
   attr :repository, :map, default: nil
+  attr :repositories, :list, default: []
   attr :executor, :map, default: nil
+  attr :agents, :map, default: %{}
   attr :steps, :list, required: true
   attr :reviewers, :list, required: true
   attr :reviews, :list, required: true
   attr :runs, :list, required: true
   attr :task_stat, :map, required: true
   attr :messages, :list, required: true
-  attr :assistant_agent, :map, default: nil
+  attr :eligible_planners, :list, default: []
+  attr :selected_planner, :map, default: nil
   attr :chat_pending?, :boolean, default: false
+  attr :survey_pending?, :boolean, default: false
   attr :pending_chat, :string, default: nil
   attr :eligible_executors, :list, default: []
   attr :eligible_reviewers, :list, default: []
   attr :edit_form, :any, required: true
+  attr :editing?, :boolean, default: false
   attr :show_feedback?, :boolean, default: false
+  attr :finalize_mode, :atom, default: :pull_request
+  attr :project_finalize_mode, :atom, default: :pull_request
 
   def task_tab(assigns) do
     ~H"""
@@ -53,20 +61,41 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
               Deny
             </.button>
           </:actions>
+          <%!-- The form itself lives on the Agent tab beside the question,
+                where the agent's options and their descriptions are. --%>
+          <:actions :if={@task.attention.type == :agent_question && @task.attention.ref}>
+            <.button
+              variant="primary"
+              patch={~p"/projects/#{@task.project_id}/tasks/#{@task.id}?tab=agent"}
+              id="banner-answer-question"
+            >
+              Answer
+            </.button>
+            <.button
+              phx-click="skip_question"
+              phx-value-ref={@task.attention.ref}
+              id="banner-skip-question"
+            >
+              Skip
+            </.button>
+          </:actions>
         </.attention_banner>
 
         <.description_card
           task={@task}
-          repository={@repository}
           edit_form={@edit_form}
           editable?={@task.state == :planning}
+          editing?={@editing? && @task.state == :planning}
         />
 
         <.chat_card
           task={@task}
           messages={@messages}
-          assistant_agent={@assistant_agent}
+          agents={@agents}
+          eligible_planners={@eligible_planners}
+          selected_planner={@selected_planner}
           chat_pending?={@chat_pending?}
+          survey_pending?={@survey_pending?}
           pending_chat={@pending_chat}
         />
 
@@ -94,6 +123,13 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
         />
+        <.target_card
+          task={@task}
+          repository={@repository}
+          repositories={@repositories}
+          finalize_mode={@finalize_mode}
+          project_finalize_mode={@project_finalize_mode}
+        />
         <.cost_card runs={@runs} task_stat={@task_stat} />
       </div>
     </div>
@@ -101,17 +137,17 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   end
 
   attr :task, :map, required: true
-  attr :repository, :map, default: nil
   attr :edit_form, :any, required: true
   attr :editable?, :boolean, required: true
+  attr :editing?, :boolean, required: true
 
   defp description_card(assigns) do
     ~H"""
     <.section_card label="Description" id="description-card">
-      <:actions :if={@editable?}>
+      <:actions :if={@editable? && !@editing?}>
         <button
           type="button"
-          phx-click={JS.toggle(to: "#task-edit-form") |> JS.toggle(to: "#task-description-view")}
+          phx-click="toggle_edit"
           class="cursor-pointer text-xs font-semibold text-accent hover:underline"
           id="toggle-edit"
         >
@@ -119,7 +155,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         </button>
       </:actions>
 
-      <div id="task-description-view" class="flex flex-col gap-2.5">
+      <div :if={!@editing?} id="task-description-view" class="flex flex-col gap-2.5">
         <p class="whitespace-pre-wrap text-[13.5px] leading-relaxed text-text" phx-no-format>{@task.description || "No description yet."}</p>
         <div :if={@task.spec} class="flex flex-col gap-1.5">
           <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">
@@ -128,23 +164,9 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-text2" phx-no-format>{@task.spec}</p>
         </div>
         <div class="mt-0.5 flex flex-wrap gap-1.5">
+          <%!-- Target, repository and branch live in the Target card on the rail. --%>
           <span class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2">
             {@task.work_type}
-          </span>
-          <span class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2">
-            {@task.target}
-          </span>
-          <span
-            :if={@repository}
-            class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2"
-          >
-            repo: {@repository.name}
-          </span>
-          <span
-            :if={@task.branch_name}
-            class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2"
-          >
-            branch: {@task.branch_name}
           </span>
           <span class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2">
             {priority_label(@task.priority)}
@@ -159,34 +181,32 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
       </div>
 
       <.form
-        :if={@editable?}
+        :if={@editing?}
         for={@edit_form}
         id="task-edit-form"
         phx-change="validate_edit"
         phx-submit="save_edit"
-        class="hidden"
       >
         <.input field={@edit_form[:title]} type="text" label="Title" />
         <.input field={@edit_form[:description]} type="textarea" label="Description" rows="3" />
         <.input field={@edit_form[:spec]} type="textarea" label="Spec / acceptance criteria" rows="4" />
         <div class="grid grid-cols-2 gap-3">
           <.input
+            field={@edit_form[:work_type]}
+            type="select"
+            label="Work type"
+            options={FormOptions.work_types()}
+          />
+          <.input
             field={@edit_form[:priority]}
             type="select"
             label="Priority"
             options={[Low: "low", Normal: "normal", High: "high", Urgent: "urgent"]}
           />
-          <div class="flex items-end pb-2">
-            <.input field={@edit_form[:ready_flag]} type="checkbox" label="Ready to run" />
-          </div>
         </div>
+        <.input field={@edit_form[:ready_flag]} type="checkbox" label="Ready to run" />
         <div class="flex justify-end gap-2">
-          <.button
-            type="button"
-            phx-click={JS.toggle(to: "#task-edit-form") |> JS.toggle(to: "#task-description-view")}
-          >
-            Cancel
-          </.button>
+          <.button type="button" phx-click="toggle_edit" id="cancel-edit">Cancel</.button>
           <.button variant="primary" type="submit" phx-disable-with="Saving…">Save</.button>
         </div>
       </.form>
@@ -196,11 +216,16 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
 
   attr :task, :map, required: true
   attr :messages, :list, required: true
-  attr :assistant_agent, :map, default: nil
+  attr :agents, :map, default: %{}
+  attr :eligible_planners, :list, default: []
+  attr :selected_planner, :map, default: nil
   attr :chat_pending?, :boolean, required: true
+  attr :survey_pending?, :boolean, default: false
   attr :pending_chat, :string, default: nil
 
   defp chat_card(assigns) do
+    assigns = assign(assigns, :repo_aware?, repo_aware?(assigns.selected_planner))
+
     ~H"""
     <.section_card label="Planning assistant" id="chat-card">
       <div
@@ -208,10 +233,19 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         class="flex max-h-96 flex-col gap-2.5 overflow-y-auto"
         id="chat-messages"
       >
-        <.chat_bubble :for={message <- @messages} role={message.role} content={message.content} />
+        <.chat_bubble
+          :for={message <- @messages}
+          role={message.role}
+          content={message.content}
+          label={survey_label(message, @agents)}
+        />
         <.chat_bubble :if={@pending_chat} role={:user} content={@pending_chat} />
         <div :if={@chat_pending?} class="flex items-center gap-2 text-xs text-text3">
           <span class="size-1.5 animate-pulse rounded-full bg-accent" /> Assistant is thinking…
+        </div>
+        <div :if={@survey_pending?} class="flex items-center gap-2 text-xs text-text3">
+          <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+          Surveying the repository — this can take a few minutes…
         </div>
       </div>
       <p
@@ -221,29 +255,56 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         Sharpen the spec together before starting the run.
       </p>
 
-      <form
-        :if={@task.state == :planning}
-        id="chat-form"
-        phx-submit="send_chat"
-        class="flex gap-2"
-      >
-        <input
-          type="text"
-          name="message"
-          placeholder={chat_placeholder(@assistant_agent)}
-          disabled={@chat_pending? || is_nil(@assistant_agent)}
-          autocomplete="off"
-          class="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg px-3.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
-        />
+      <div :if={@task.state == :planning} class="flex flex-col gap-2">
+        <form id="planner-form" phx-change="set_planner">
+          <select
+            name="agent_id"
+            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+          >
+            <option :if={@eligible_planners == []} value="">
+              No planning agents for this work type
+            </option>
+            <option
+              :for={agent <- @eligible_planners}
+              value={agent.id}
+              selected={@selected_planner && @selected_planner.id == agent.id}
+            >
+              {agent.name} · {planner_capability(agent)}
+            </option>
+          </select>
+        </form>
+
         <button
-          type="submit"
-          disabled={@chat_pending? || is_nil(@assistant_agent)}
-          class="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-accent text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Send message"
+          :if={@repo_aware?}
+          type="button"
+          id="run-survey"
+          phx-click="run_survey"
+          disabled={@survey_pending? || is_nil(@task.repository_id)}
+          class="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-[13px] font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <.icon name="hero-paper-airplane" class="size-4" />
+          <.icon name="hero-magnifying-glass" class="size-4" />
+          {if @task.repository_id, do: "Run repo survey", else: "Link a repository to survey"}
         </button>
-      </form>
+
+        <form :if={!@repo_aware?} id="chat-form" phx-submit="send_chat" class="flex gap-2">
+          <input
+            type="text"
+            name="message"
+            placeholder={chat_placeholder(@selected_planner)}
+            disabled={@chat_pending? || is_nil(@selected_planner)}
+            autocomplete="off"
+            class="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg px-3.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
+          />
+          <button
+            type="submit"
+            disabled={@chat_pending? || is_nil(@selected_planner)}
+            class="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-accent text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Send message"
+          >
+            <.icon name="hero-paper-airplane" class="size-4" />
+          </button>
+        </form>
+      </div>
       <p :if={@task.state != :planning && @messages == []} class="text-[13px] text-text3">
         No planning conversation was recorded.
       </p>
@@ -251,8 +312,25 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
     """
   end
 
-  defp chat_placeholder(nil), do: "No LLM agent configured for planning"
-  defp chat_placeholder(_assistant), do: "Ask the assistant to refine the spec…"
+  # An ACP plan agent traverses the repo; an llm_api one reasons over
+  # the text it is given. Same slot, different capability.
+  defp repo_aware?(%{driver: :acp}), do: true
+  defp repo_aware?(_planner), do: false
+
+  defp planner_capability(%{driver: :acp}), do: "repo survey"
+  defp planner_capability(_agent), do: "spec refinement"
+
+  defp survey_label(%{kind: :survey} = message, agents) do
+    case agents[message.agent_id] do
+      nil -> "Repo survey"
+      agent -> "Repo survey · #{agent.name}"
+    end
+  end
+
+  defp survey_label(_message, _agents), do: nil
+
+  defp chat_placeholder(nil), do: "No planning agent for this work type"
+  defp chat_placeholder(_planner), do: "Ask the assistant to refine the spec…"
 
   attr :task, :map, required: true
   attr :executor, :map, default: nil
@@ -336,6 +414,126 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           No review-capable agents for this work type.
         </p>
       </form>
+    </.section_card>
+    """
+  end
+
+  attr :task, :map, required: true
+  attr :repository, :map, default: nil
+  attr :repositories, :list, default: []
+  attr :finalize_mode, :atom, default: :pull_request
+  attr :project_finalize_mode, :atom, default: nil
+
+  defp target_card(assigns) do
+    ~H"""
+    <.section_card label="Target" id="target-card">
+      <%!-- Planning is the only state where the execution shape is editable;
+            afterwards a worktree or task folder already exists for it. --%>
+      <form
+        :if={@task.state == :planning}
+        id="target-form"
+        phx-change="set_target"
+        class="flex flex-col gap-2.5"
+      >
+        <select
+          name="target"
+          class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+        >
+          <option
+            :for={{label, value} <- FormOptions.targets()}
+            value={value}
+            selected={to_string(@task.target) == value}
+          >
+            {label}
+          </option>
+        </select>
+        <select
+          :if={@task.target == :repo}
+          name="repository_id"
+          class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+        >
+          <option value="">Choose repository…</option>
+          <option
+            :for={repository <- @repositories}
+            value={repository.id}
+            selected={@task.repository_id == repository.id}
+          >
+            {repository.name}
+          </option>
+        </select>
+      </form>
+
+      <div :if={@task.state != :planning} class="flex flex-col gap-2 text-[13px]">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-text3">Target</span>
+          <span class="font-mono text-[12px] text-text">{@task.target}</span>
+        </div>
+        <div :if={@repository} class="flex items-center justify-between gap-2">
+          <span class="shrink-0 text-text3">Repository</span>
+          <span class="min-w-0 truncate font-mono text-[12px] text-text">{@repository.name}</span>
+        </div>
+      </div>
+
+      <p :if={@task.target == :repo && is_nil(@task.repository_id)} class="text-[13px] text-warn">
+        Pick a repository before running this task.
+      </p>
+
+      <%!-- What Approve will do. It lives here rather than in the action
+            bar because it is a property of where the work lands, and the
+            bar stays a single primary button. --%>
+      <div :if={@task.state != :done && is_nil(@task.archived_at)} class="flex flex-col gap-2">
+        <div class="h-px bg-border" />
+        <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">
+          On approve
+        </span>
+        <form id="finalize-form" phx-change="set_finalize_mode">
+          <select
+            name="finalize_mode"
+            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+          >
+            <option value="" selected={is_nil(@task.finalize_mode)}>
+              Project default · {FormOptions.finalize_mode_label(@project_finalize_mode)}
+            </option>
+            <option
+              :for={{label, value} <- FormOptions.finalize_modes(@task.target)}
+              value={value}
+              selected={to_string(@task.finalize_mode) == value}
+            >
+              {label}
+            </option>
+          </select>
+        </form>
+        <p class="text-[12px] leading-relaxed text-text3">
+          {Format.finalize_hint(@finalize_mode, @repository && @repository.default_branch)}
+        </p>
+        <p
+          :if={@finalize_mode == :commit_to_path && is_nil(@task.repository_id)}
+          class="text-[13px] text-warn"
+        >
+          This mode commits the artifact into a repository, but none is linked.
+        </p>
+      </div>
+
+      <div :if={@task.branch_name} class="flex flex-col gap-1">
+        <div class="h-px bg-border" />
+        <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">Branch</span>
+        <span class="truncate font-mono text-[11.5px] text-text2" title={@task.branch_name}>
+          {@task.branch_name}
+        </span>
+      </div>
+
+      <div :if={@task.target == :folder && @task.state == :done} class="flex flex-col gap-1">
+        <div class="h-px bg-border" />
+        <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">Artifact</span>
+        <.link
+          href={~p"/projects/#{@task.project_id}/tasks/#{@task.id}/artifact"}
+          download
+          id="task-artifact-link"
+          class="inline-flex items-center gap-1.5 text-[12.5px] text-accent hover:underline"
+        >
+          <.icon name="hero-arrow-down-tray" class="size-3.5" /> task-{@task.id}.zip
+        </.link>
+      </div>
     </.section_card>
     """
   end

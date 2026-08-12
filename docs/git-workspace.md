@@ -1,4 +1,4 @@
-# Git plumbing & workspace (last updated: 2026-08-11)
+# Git plumbing & workspace (last updated: 2026-08-12)
 
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
@@ -10,6 +10,8 @@ tasks use a task folder and skip the branch/push flow.
   repos/<name>-<repo_id>/   one managed base clone per linked repository
   worktrees/task-<id>/      git worktree per :repo task
   tasks/<id>/               task folder per :folder task
+  surveys/task-<id>/        disposable read-only planning survey checkout
+  merges/task-<id>/         disposable worktree a Done merge is staged in
 ```
 
 ## Flow (`CodeLead.Git` + `CodeLead.Executor.LocalSubprocess`)
@@ -34,8 +36,8 @@ tasks use a task folder and skip the branch/push flow.
   an earlier generation, on an unrelated repository; reusing one
   unchecked runs the agent in the wrong repo and reports nothing. `mix
   code_lead.workspace.clean` (wired into the `ecto.reset` alias) drops
-  `worktrees/` and `tasks/` and prunes the base clones, so a reset stops
-  leaving orphans behind.
+  `worktrees/`, `tasks/`, `surveys/` and `merges/` and prunes the base
+  clones, so a reset stops leaving orphans behind.
 - A task whose recorded branch survives but whose worktree directory is
   gone is re-attached to that branch (`Git.attach_worktree/3`) rather
   than branched afresh — its commits are still wanted. A branch bearing
@@ -52,13 +54,71 @@ tasks use a task folder and skip the branch/push flow.
   re-hashes only what changed. Callers pass extra environment through
   `git/3`'s `:env` option.
 - `commit_all/2` commits as `CodeLead <codelead@localhost>`; `:noop`
-  when clean. `push/3` pushes the feature branch with upstream.
+  when clean. `push/3` pushes the feature branch with upstream;
+  `push_ref/4` pushes a ref to a differently-named remote branch
+  (`HEAD:main`) and is never forced.
 - `teardown/2`: `keep: true` (cancel/inspection) leaves everything;
   `keep: false` (send-back-to-planning) removes the worktree and
   deletes the local feature branch.
 - `spawn/3` opens an Erlang Port in the context directory with the
   decrypted project env injected — the stdio bridge the ACP driver
   attaches to.
+
+## Reading current default-branch source
+
+`ensure_clone/3` only *fetches* an existing clone — never `pull`,
+`reset`, or `checkout` — so the base clone's own working tree stays at
+whatever commit it was first cloned at while `origin/*` advances. Any
+reader that wants *current* source must go through a ref, not through
+that checkout:
+
+- `Git.create_detached_worktree/3` adds a worktree at
+  `origin/<default_branch>` with **no branch** (`worktree add --detach`).
+  The planning survey provisions one under `surveys/task-<id>` and
+  removes it with `remove_worktree/2` when the run ends — see
+  [`planning.md`](planning.md). It is not the executor's `provision/1`
+  path: no branch is created, nothing is committed or pushed, and no
+  worktree/branch reference is written to the task.
+- The planning assistant's file tree reads
+  `ls-tree -r --name-only origin/<default_branch>` for the same reason.
+
+This is also why a read-only agent gets a disposable checkout rather
+than the base clone: `read_only: true` denies `fs/write_text_file` but
+not `terminal/create`, so a shared clone would be writable in practice.
+
+## Merging on Done
+
+The `:merge` and `:squash` finalize modes land the branch on the
+default branch with git alone — no forge merge endpoint, so it works
+against any remote:
+
+```
+Git.commit_all(worktree) → Git.push(worktree, branch)      # nothing is lost from here on
+Git.fetch(base_clone)
+Git.create_detached_worktree(base_clone, merges/task-<id>, default_branch)
+Git.merge(staging, branch, strategy: :merge | :squash)
+Git.head_sha(staging) → Git.push_ref(staging, "HEAD", default_branch)
+Git.delete_remote_branch(base_clone, branch)               # best effort
+```
+
+Three things about that order are deliberate:
+
+- **Staged in a disposable detached worktree**, for the same reason the
+  planning survey is one: the base clone's working tree is frozen and
+  shared with every linked worktree. `remove_worktree/2` runs in an
+  `after`, so a conflicted merge is discarded wholesale rather than
+  unwound with `merge --abort`.
+- **The feature branch is pushed first and deleted last.** If the merge
+  conflicts or the push is rejected, the work is already safe on the
+  remote and the human can retry or switch the task to Pull request
+  mode. This is what a forge's "Merge and delete branch" does.
+- **The local branch ref is merged**, not `origin/<branch>` — the task's
+  worktree is a linked worktree of this clone, so its commits are
+  visible here regardless of what the remote accepted.
+
+Nothing is ever force-pushed. Deleting the remote branch is best-effort
+and swallowed: the merge has landed by then, so a leftover branch on
+the forge is cosmetic, not a reason to fail Done.
 
 ## Credentials
 
@@ -86,6 +146,26 @@ first-run wizard calls it when a token is saved. `failure_reason/1`
 picks the line of git output that carries the reason and `redact/1`
 scrubs token-shaped substrings; `TaskRunner` uses both before writing a
 `task_steps` row.
+
+Diagnosis sits here rather than in the callers: `refusal/1` classifies
+output as `:auth`, `:write_denied` (a credential that reads fine and is
+refused only at push), or `:other`, and `remote_failure/4` renders that
+plus the forge and whether a token was presented into one operator-facing
+sentence, redacting the detail on the way out. The git failure sites
+feed it — `LocalSubprocess.provision/1` via
+`TaskRunner.dispatch_error/1`, and `Finalizer.finalize/2` via
+`CodeLeadWeb.FlashMessages.finalize_error/1` — so each enriches its error
+with `%{output:, forge:, token_present?:}` at the point where those facts
+are still in scope.
+
+Merging fails in ways that are not about credentials at all, so it has
+its own pair: `merge_refusal/1` classifies output as `:conflict`,
+`:non_fast_forward`, `:protected` or `:other`, and `merge_failure/4`
+names the remedy — rebase the branch, approve again, or switch the task
+to Pull request mode. `:other` delegates straight to `remote_failure/4`,
+which already knows what to say about a rejected or read-only token.
+The finalizer's merge path adds `base_branch` to the enrichment map,
+because every one of those sentences names the branch being written.
 
 `ensure_clone/3` runs `remote set-url origin` before fetching an
 existing clone, so changing a project's repository URL retargets the

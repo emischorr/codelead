@@ -197,7 +197,7 @@ defmodule CodeLeadWeb.DashboardLive do
                   >
                     {Format.cents(@org_spend.cost_cents)} of {Format.cents(
                       @organization.budget_limit_cents
-                    )} total
+                    )} this month
                   </span>
                 </:meter>
               </.stat_tile>
@@ -265,7 +265,7 @@ defmodule CodeLeadWeb.DashboardLive do
             </.section_card>
           </section>
 
-          <.section_card label="Projects">
+          <.section_card label="Projects · spend this month">
             <div class="flex flex-col">
               <.project_row
                 :for={project <- @projects}
@@ -319,7 +319,7 @@ defmodule CodeLeadWeb.DashboardLive do
       spend_today: Costs.org_spend_today(),
       org_spend: org_spend(organization),
       project_summaries: Tasks.project_summaries(),
-      project_spend: Costs.spend_by_project()
+      project_spend: Costs.spend_by_project_month()
     )
   end
 
@@ -330,10 +330,10 @@ defmodule CodeLeadWeb.DashboardLive do
 
   defp schedule_refresh(socket), do: socket
 
-  # The cumulative total is only ever the budget meter's denominator, so
-  # with no limit configured it is two queries nobody reads.
+  # The month-to-date total is only ever the budget meter's numerator,
+  # so with no limit configured it is two queries nobody reads.
   defp org_spend(%{budget_limit_cents: nil, budget_limit_tokens: nil}), do: nil
-  defp org_spend(_organization), do: Costs.org_spend()
+  defp org_spend(_organization), do: Costs.org_spend_month()
 
   # `run_state` is the database's belief; the registry is the process
   # truth. A task executing without a runner has lost it.

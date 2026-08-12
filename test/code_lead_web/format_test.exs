@@ -84,4 +84,67 @@ defmodule CodeLeadWeb.FormatTest do
       assert Format.run_stat(nil, nil, nil, :free) == "—"
     end
   end
+
+  describe "finalize_action/2" do
+    test "states the mode the finalizer will actually run" do
+      assert Format.finalize_action(:pull_request, true) == "Approve & open PR"
+      assert Format.finalize_action(:merge, true) == "Approve & merge"
+      assert Format.finalize_action(:squash, true) == "Approve & squash merge"
+      assert Format.finalize_action(:artifact, false) == "Approve & hand over"
+      assert Format.finalize_action(:commit_to_path, false) == "Approve & commit artifact"
+    end
+
+    test "promises only a push when the remote has no forge convention" do
+      assert Format.finalize_action(:pull_request, false) == "Approve & push branch"
+    end
+  end
+
+  describe "finalize_hint/2" do
+    test "names the branch a merge writes to" do
+      assert Format.finalize_hint(:merge, "trunk") =~ "merges it into trunk"
+      assert Format.finalize_hint(:squash, "trunk") =~ "lands it on trunk"
+    end
+
+    test "falls back when no repository is linked" do
+      assert Format.finalize_hint(:merge, nil) =~ "the default branch"
+    end
+
+    test "says nothing is pushed for a folder artifact" do
+      assert Format.finalize_hint(:artifact, nil) =~ "Nothing is pushed"
+    end
+  end
+
+  describe "forge_link/1" do
+    test "labels each link kind" do
+      assert Format.forge_link(:pull_request) == "PR"
+      assert Format.forge_link(:merge_request) == "MR"
+      assert Format.forge_link(:commit) == "Commit"
+      assert Format.forge_link(:compare) == "Compare"
+      assert Format.forge_link(nil) == "Compare"
+    end
+  end
+
+  describe "project_path/2" do
+    test "a path inside the root loses the prefix" do
+      assert Format.project_path("/w/worktrees/task-5/docs/x.md", "/w/worktrees/task-5") ==
+               "docs/x.md"
+    end
+
+    test "an already-relative path is left alone" do
+      assert Format.project_path("lib/foo.ex", "/w/worktrees/task-5") == "lib/foo.ex"
+    end
+
+    test "the root itself is the current directory" do
+      assert Format.project_path("/w/worktrees/task-5", "/w/worktrees/task-5") == "."
+    end
+
+    test "a path outside the root has no project-relative form" do
+      assert Format.project_path("/etc/passwd", "/w/worktrees/task-5") == nil
+      assert Format.project_path("/w/worktrees/task-50/x.md", "/w/worktrees/task-5") == nil
+    end
+
+    test "no root means nothing to relativize against" do
+      assert Format.project_path("/etc/passwd", nil) == nil
+    end
+  end
 end

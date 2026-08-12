@@ -13,7 +13,7 @@ defmodule CodeLead.Tasks.TaskStep do
     field :executor_type, Ecto.Enum, values: [:agent, :system, :human]
     field :executor_name, :string
     field :executor_ref, :string
-    field :kind, Ecto.Enum, values: [:run, :review, :transition, :commit, :comment]
+    field :kind, Ecto.Enum, values: [:run, :review, :plan, :transition, :commit, :comment]
     field :summary, :string
 
     timestamps(type: :utc_datetime, updated_at: false)

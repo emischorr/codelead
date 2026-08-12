@@ -60,8 +60,8 @@ Two independent axes describe a task:
 
 - **Work type** — `code` / `design` / `content` / `file`. Drives which agents are selectable (executor and reviewers) and the **review renderer**.
 - **Target** — **where the work lands and how Done behaves**, independent of work type:
-  - `repo` — a git worktree on an auto-created feature branch in a linked repo; Done commits + pushes the branch and (GitHub/GitLab) opens an MR/PR. This is the flow for *any* work type that edits a linked repo — including content and design (e.g. landing-page copy, in-repo docs, HTML templates).
-  - `folder` — a standalone task folder for artifacts not tied to a repo; Done marks complete + downloadable, with an optional commit-to-path.
+  - `repo` — a git worktree on an auto-created feature branch in a linked repo; Done commits + pushes the branch and then, per the task's **finalize mode**, opens an MR/PR or merges the branch into the default branch. This is the flow for *any* work type that edits a linked repo — including content and design (e.g. landing-page copy, in-repo docs, HTML templates).
+  - `folder` — a standalone task folder for artifacts not tied to a repo; Done hands the artifact over as a download, or commits it to a chosen repo path.
 
 | Work type | Selectable agents | Review renderer | Typical target |
 |---|---|---|---|
@@ -83,7 +83,9 @@ Four columns: **Planning → Running → Review → Done**. There is deliberatel
 ### Planning — human workbench
 
 - Create the task; set title, description, **work type**, **target** (repo or folder — repo also picks which linked repo), priority.
-- **AI planning assistant (optional):** a button opens a chat that helps refine the task and surface open questions, with read-only access to linked repos and project context. Its output crystallizes into the task's spec / acceptance criteria.
+- **AI planning agent (optional):** pick a `plan`-role agent — filtered to the task's work type, like every other slot — and work with it to refine the task and surface open questions. Its output crystallizes into the task's spec / acceptance criteria; it never edits the task itself. The agent's **driver** decides what it can do:
+  - `llm_api` → **spec refinement** from the task text plus a repository file listing. A chat.
+  - `acp` → **repo-aware survey**: the agent reads the linked repository read-only at its current default branch and reports requirements gaps, contradictions with the existing code, and unstated assumptions. Invoked on demand — a pull, not a push. It is the reviewer's read-only posture pointed at the codebase instead of a diff, and lands as a turn in the same conversation.
 - **Choose the executor agent** that will do the work, and **zero or more reviewer agents** that will critique it — all filtered to the task's work type. The reviewer set is pre-filled from the project's default reviewers for that work type and stays editable per task.
 - **"Ready" flag (optional):** a human-only marker for the user's own reference ("what can I kick off?"). It triggers nothing and moves no card.
 - Nothing runs automatically here. The human **manually** moves the task to Running when they decide it's ready.
@@ -107,12 +109,27 @@ Four columns: **Planning → Running → Review → Done**. There is deliberatel
 
 ### Done
 
-Finalization (no agent) follows the task's **target**:
+Finalization (no agent) follows the task's **target** and its resolved **finalize mode**.
 
-- `repo` — commit any remainder, **push the feature branch**, and — on GitHub/GitLab only — open an MR/PR or show a compare link. This is the same for a `content`/`design` task targeting a repo (e.g. the landing-page copy).
-- `folder` — mark complete with a downloadable artifact and, optionally, commit it to a chosen repo path.
-- **Merging to main is intentionally out of scope:** merging is releasing, and release workflows/tooling are too varied to own here.
-- A Done task can be **archived** to clear it from the board without deleting it (see §13).
+**`repo`** — commit any remainder and **push the feature branch**, then:
+
+| Mode | What Done does |
+|---|---|
+| *Pull request* (default) | On GitHub/GitLab open an MR/PR, otherwise show a compare link. Nothing is merged; the remote branch stays for the PR to point at. |
+| *Merge* | Merge the branch into the repository's default branch and push it (a merge commit). |
+| *Squash* | The same, condensed into a single commit. |
+
+This is identical for a `content`/`design` task targeting a repo (e.g. the landing-page copy) — the mode follows the target, never the work type.
+
+**`folder`** — hand the task folder over as a **downloadable artifact** (mode *Artifact*), or commit it into a chosen repository path on its own branch (mode *Commit to path*). The folder is retained either way. An **empty** folder is refused rather than finalized: the folder is created before the run, so an agent that answered in chat without writing a file leaves one that exists and holds nothing — there is nothing to hand over, and the human should request changes.
+
+**Cleanup.** On success the worktree is pruned in every mode — the work is on the remote, and a stale worktree is only clutter. Merge and squash also **delete the remote feature branch** (it is redundant once merged); pull-request mode keeps it, because the PR is still open. Task folders are always retained.
+
+**Merging is local git, never a forge action.** CodeLead runs `git merge` + `git push` against the default branch, so it works with any remote — self-hosted forges, plain SSH, `file://`. It never presses a forge's Merge button, closes a PR, or gates on required checks. A protected default branch will refuse the push; use pull-request mode there. **Releasing — tags, changelogs, deploy pipelines — stays out of scope.**
+
+**Configuration.** Each project sets a default finalize mode per target (plus the destination path for *Commit to path*); an individual task may override it. Approve → Done stays a **single primary button** whose label states the resolved mode — *Approve & open PR*, *Approve & merge*, *Approve & squash merge*, *Approve & hand over*, *Approve & commit artifact* — so the action bar never grows a menu and the button never promises something other than what runs.
+
+A Done task can be **archived** to clear it from the board without deleting it (see §13).
 
 ---
 
@@ -133,7 +150,7 @@ Finalization (no agent) follows the task's **target**:
 
 An agent is a reusable **persona** — e.g. "Judy," a frontend specialist. It bundles:
 
-- **Role(s)** — what the agent can be slotted into: `execute`, `review`, or both. A persona like "Judy" may do both; a dedicated "Security Auditor" is review-only. Slots filter the pool by role *and* work type.
+- **Role(s)** — what the agent can be slotted into: `execute`, `review`, `plan`, or any combination. A persona like "Judy" may execute and review; a dedicated "Security Auditor" is review-only; a "Surveyor" is plan-only. Slots filter the pool by role *and* work type. A role is the *slot*, never the *capability* — what an agent can actually do in that slot follows from its driver, which is why a `plan` agent on `llm_api` refines text while the same role on `acp` reads the repo.
 - **Work type** — the kind of task it can take.
 - **Driver** — how it runs: `acp` (a full coding agent like Claude Code or Codex over the Agent Client Protocol) or `llm_api` (a single model call, e.g. a local Ollama model, for review or short content).
 - **Provider + model variant.**
@@ -155,7 +172,7 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 ## 10. Cost, tokens & budgets
 
 - Every run's token usage and cost are **captured and persisted** (per task, and rolled up per project per day).
-- **Budgets/limits** (money or tokens) can be set at **project** and **organization** level.
+- **Budgets/limits** (money or tokens) can be set at **project** and **organization** level. A limit covers the **current calendar month (UTC)** and resets on the 1st — the number a user sets is what may be spent per month, not for all time.
 - **MVP scope:** reliably track/persist usage and **enforce limits** — a task that would exceed a limit is *held* rather than started. The full review UI (per-project graphs by day/week/month/year) is iteration two, built on the same data.
 
 ---
@@ -164,14 +181,14 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 
 **In MVP**
 - Org/users with self-signup admin; projects with linked repos; org/project agents; UI-configured providers with encrypted credentials; project env store.
-- Planning → Running → Review → Done workflow with AI planning assistant, **multiple parallel advisory reviewers** (work-type matched, per-task, pre-filled from project defaults), human gates, cancel, and failure handling.
-- Agent **roles** (`execute` / `review`); separate executor and reviewer slots on a task.
+- Planning → Running → Review → Done workflow with selectable AI planning agents (text refinement and repo-aware survey), **multiple parallel advisory reviewers** (work-type matched, per-task, pre-filled from project defaults), human gates, cancel, and failure handling.
+- Agent **roles** (`execute` / `review` / `plan`); separate executor, reviewer and planner slots on a task.
 - Work types `code` / `design` / `content` / `file` driving agent selection, review surface, and Done.
 - Coding execution via worktree + feature branch; non-coding via task folder; local-subprocess executor.
 - Task **target** (`repo` / `folder`) decoupled from work type; content/design can land in a repo via branch/PR with a preview review.
 - ACP-driven coding agents; `llm_api` agents for review/content.
 - Multi-run rework loop with session/worktree continuity (fresh start on send-back-to-Planning).
-- Done follows target: repo → commit / push / optional MR on GitHub / GitLab; folder → download + optional commit-to-path.
+- Done follows target **and finalize mode**: repo → commit / push, then PR/MR-or-compare, merge, or squash-merge into the default branch; folder → download or commit-to-path. Project default per target, per-task override.
 - Usage/cost tracking + budget enforcement (data + limits, minimal display).
 - First-run `/setup` wizard (gated by a `setup_done` flag): admin → provider → optional project + repos → optional agent. Max-concurrent-running cap.
 - Board (Kanban default + list toggle), tabbed task view, and Settings / Profile / Projects / Agents pages (see §13).
@@ -185,13 +202,15 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 - Review **walkthrough** (LLM steps through the diff explaining changes).
 - Agent memory that learns preferences over time.
 - Cost/usage dashboards and review pages.
-- Planning / agent modes (ACP session modes).
+- Planning / agent **modes** (ACP session modes — plan/ask). Orthogonal to the `plan` *role*, which shipped: role is the slot, mode is how a session runs.
+- Plan mode as an execution sub-phase (an agent planning inside a run, before it edits).
 - Cross-project queue ordering and priorities.
-- Multi-repo tasks; merge-strategy settings; timeline view.
+- Multi-repo tasks; timeline view.
 - Agent marketplace and licensing/monetization.
 
 **Out of scope on purpose**
-- Merging to main / releasing.
+- Releasing: tags, changelogs, deploy pipelines. (Merging into the default branch *is* in scope — as local git, see §6.)
+- Forge-side automation: auto-merge, closing PRs, required-check gating, review-approval rules.
 - Enterprise features (fine-grained RBAC, SSO); multi-org-per-deployment.
 
 ---
@@ -216,7 +235,7 @@ Not a pixel spec — the page/tab map and the guarantee that each surface's data
 
 | Tab | Available | Primary in | Shows |
 |---|---|---|---|
-| **Task** | always | Planning | description, spec / acceptance criteria, work type, priority, owner/assignee, repository, executor + reviewer selection, ready flag, human comments, and the AI **planning-assistant chat** |
+| **Task** | always | Planning | description, spec / acceptance criteria, work type, priority, owner/assignee, repository, executor + reviewer selection, ready flag, human comments, and the **AI planning surface** (planner selection; chat for an `llm_api` planner, "Run repo survey" for an `acp` one) |
 | **Review / Artifact** | once Running | Review | live-updated diff (code) or rendered preview (design/content/file), plus each reviewer's findings and advisory verdict once the review cycle runs |
 | **Agent** | once Running | Running | the **executor** conversation — live event stream, send messages, answer agent questions, approve surfaced permission escalations |
 | **Developer** | once a worktree exists | — (power users) | terminal into the task's worktree (later: the container) |

@@ -19,6 +19,9 @@ defmodule CodeLead.Runtime.StageEffects do
   rather than dangerous.
   """
 
+  alias CodeLead.Executor
+  alias CodeLead.Executor.Context
+  alias CodeLead.Projects
   alias CodeLead.Reviews
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Runtime.ScheduledDispatchWorker
@@ -32,7 +35,9 @@ defmodule CodeLead.Runtime.StageEffects do
   anything is written.
   """
   @spec prepare(Stage.stage_type(), Task.t()) :: {:ok, term()} | {:error, term()}
-  def prepare(:finalize, %Task{} = task), do: CodeLead.Finalizer.finalize(task)
+  def prepare(:finalize, %Task{} = task) do
+    CodeLead.Finalizer.finalize(task, Tasks.finalize_mode(task))
+  end
 
   def prepare(_stage_type, %Task{}), do: {:ok, nil}
 
@@ -49,12 +54,49 @@ defmodule CodeLead.Runtime.StageEffects do
     :ok
   end
 
-  def on_enter(:finalize, %Task{} = task, %{note: note}) do
+  def on_enter(:finalize, %Task{} = task, %{note: note, cleanup: cleanup} = outcome) do
     Tasks.record_step(task.id, :commit, :system, "finalizer", note)
+    put_forge_url(task, outcome)
+    prune_context(task, cleanup)
     :ok
   end
 
   def on_enter(_stage_type, %Task{}, _prepared), do: :ok
+
+  @doc """
+  Tears the task's execution context down and forgets it: the worktree
+  and its feature branch, or the task folder.
+
+  Two callers, deliberately: the `:discard` worktree policy on an edge,
+  and a finalize outcome asking to prune. Same teardown either way — the
+  difference is only *when* it is known to be safe.
+  """
+  @spec discard_context(Task.t()) :: :ok
+  def discard_context(%Task{worktree_path: nil, target: :repo}), do: :ok
+
+  def discard_context(%Task{target: :repo} = task) do
+    repository = Projects.get_repository!(task.repository_id)
+
+    context = %Context{
+      type: :worktree,
+      path: task.worktree_path,
+      task_id: task.id,
+      base_clone_path: repository.base_clone_path,
+      branch_name: task.branch_name
+    }
+
+    Executor.impl().teardown(context, keep: false)
+  end
+
+  def discard_context(%Task{target: :folder} = task) do
+    context = %Context{
+      type: :folder,
+      path: CodeLead.Workspace.task_folder(task.id),
+      task_id: task.id
+    }
+
+    Executor.impl().teardown(context, keep: false)
+  end
 
   @doc """
   Asks the scheduler to admit the task and dispatches it if so. A hold
@@ -82,4 +124,23 @@ defmodule CodeLead.Runtime.StageEffects do
       end
     end
   end
+
+  # Only after the finalize succeeded, and only in the modes that said
+  # so: a `:pull_request` or merged branch lives on the remote, so the
+  # worktree is redundant, while a folder artifact *is* the deliverable.
+  defp prune_context(%Task{}, :keep_context), do: :ok
+
+  defp prune_context(%Task{} = task, :prune_context) do
+    discard_context(task)
+    {:ok, _task} = Tasks.clear_worktree_path(task)
+    :ok
+  end
+
+  # A folder artifact, and a remote with no forge convention, produce no
+  # link — there is nothing to record for those.
+  defp put_forge_url(%Task{} = task, %{url: url, url_kind: kind}) do
+    Tasks.put_forge_url(task, url, kind)
+  end
+
+  defp put_forge_url(%Task{}, _outcome), do: :ok
 end

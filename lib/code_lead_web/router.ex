@@ -115,6 +115,10 @@ defmodule CodeLeadWeb.Router do
     end
 
     post "/users/update-password", UserSessionController, :update_password
+
+    # A download is a controller response, not a LiveView render, so it
+    # sits outside the `live_session` — same pipeline, same gates.
+    get "/projects/:project_id/tasks/:id/artifact", TaskArtifactController, :download
   end
 
   # Other scopes may use custom stacks.

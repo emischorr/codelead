@@ -90,7 +90,9 @@ defmodule CodeLeadWeb.CoreComponents do
   `class` is additive — it is appended to the base and variant classes, not a
   replacement for them.
   """
-  attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
+  attr :rest, :global,
+    include: ~w(href navigate patch method download name value disabled target rel)
+
   attr :class, :any, default: nil, doc: "extra classes appended to the base and variant classes"
   attr :variant, :string, values: ~w(primary ghost danger)
   attr :full, :boolean, default: false, doc: "stretch to the width of the container"

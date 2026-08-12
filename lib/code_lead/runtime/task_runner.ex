@@ -39,17 +39,6 @@ defmodule CodeLead.Runtime.TaskRunner do
   # redacted first — a command line can carry a project env secret.
   @input_preview_limit 300
 
-  # Git speaks English here — `CodeLead.Git` pins LC_ALL=C precisely so
-  # these markers survive the operator's locale.
-  @auth_markers [
-    "Repository not found",
-    "Authentication failed",
-    "could not read Username",
-    "terminal prompts disabled",
-    "Permission denied (publickey)",
-    "Invalid username or token"
-  ]
-
   @spec start_link(pos_integer()) :: GenServer.on_start()
   def start_link(task_id) do
     GenServer.start_link(__MODULE__, task_id, name: RunSupervisor.via(task_id))
@@ -79,6 +68,18 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   @doc """
+  Answers, skips, or cancels a surfaced question of the running agent.
+  """
+  @spec answer_question(pos_integer(), term(), AgentDriver.question_answer()) ::
+          :ok | {:error, term()}
+  def answer_question(task_id, request_id, answer) do
+    case RunSupervisor.whereis(task_id) do
+      nil -> {:error, :not_running}
+      pid -> GenServer.call(pid, {:answer_question, request_id, answer})
+    end
+  end
+
+  @doc """
   Renders a dispatch failure for the human reading the timeline. Every
   dispatch step funnels into one error clause, so the message has to
   carry which step failed and what to do about it.
@@ -96,39 +97,17 @@ defmodule CodeLead.Runtime.TaskRunner do
   def dispatch_error(
         {:provision, {:remote, %{output: output, forge: forge, token_present?: present?}}}
       ) do
-    detail = Git.failure_reason(output)
-
-    cond do
-      not String.contains?(output, @auth_markers) ->
-        "could not prepare the workspace: #{detail}"
-
-      forge == :other ->
-        "could not access the repository; this remote has no token convention, so the " <>
-          "server's own git credentials were used: #{detail}"
-
-      present? ->
-        {kind, owner, repo} = forge
-
-        "the #{Git.token_var(kind)} in the project env store was rejected by " <>
-          "#{Git.host(kind)} — check that it has not expired and grants access to " <>
-          "#{owner}/#{repo}: #{detail}"
-
-      true ->
-        {kind, _owner, _repo} = forge
-
-        "could not access the repository — add a #{Git.token_var(kind)} to the " <>
-          "project env store: #{detail}"
-    end
+    Git.remote_failure("prepare the workspace", output, forge, present?)
   end
 
   def dispatch_error({:provision, output}) when is_binary(output) do
-    detail = Git.failure_reason(output)
+    detail = output |> Git.failure_reason() |> Git.redact()
 
-    if String.contains?(output, @auth_markers) do
+    if Git.refusal(output) == :other do
+      "could not prepare the workspace: #{detail}"
+    else
       "could not access the repository — add a GITHUB_TOKEN (or GITLAB_TOKEN) " <>
         "to the project env store: #{detail}"
-    else
-      "could not prepare the workspace: #{detail}"
     end
   end
 
@@ -192,7 +171,8 @@ defmodule CodeLead.Runtime.TaskRunner do
          live_usage: nil,
          open_row: nil,
          tool_rows: %{},
-         permission_rows: %{}
+         permission_rows: %{},
+         question_rows: %{}
        }}
     else
       {:error, reason} ->
@@ -214,13 +194,31 @@ defmodule CodeLead.Runtime.TaskRunner do
 
       state =
         if reply == :ok do
-          {:ok, _task} = Tasks.clear_attention(Tasks.get_task!(state.task.id))
-          resolve_permission(state, to_string(request_id), granted?)
+          state |> resolve_permission(to_string(request_id), granted?) |> refresh_attention()
         else
           state
         end
 
       {:reply, reply, state}
+    else
+      {:reply, {:error, :not_supported}, state}
+    end
+  end
+
+  def handle_call({:answer_question, request_id, answer}, _from, state) do
+    if function_exported?(state.driver, :answer_question, 3) do
+      case state.driver.answer_question(state.handle, request_id, answer) do
+        {:ok, content} ->
+          state =
+            state
+            |> resolve_question(to_string(request_id), answer, content)
+            |> refresh_attention()
+
+          {:reply, :ok, state}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
     else
       {:reply, {:error, :not_supported}, state}
     end
@@ -281,12 +279,25 @@ defmodule CodeLead.Runtime.TaskRunner do
     {:noreply, %{state | task: task}}
   end
 
-  defp handle_agent_event({:question, text} = event, state) do
+  # The agent is blocked on this until a human answers, so the run stays
+  # in Running rather than reaching the automatic completion edge.
+  defp handle_agent_event({:question, %{id: id, detail: detail, fields: fields}} = event, state) do
     state = finalize_open_row(state)
-    {:ok, task} = Tasks.set_attention(Tasks.get_task!(state.task.id), :agent_question, text)
-    record_row(state, %{kind: :question, text: text})
+    ref = to_string(id)
+
+    {:ok, task} =
+      Tasks.set_attention(Tasks.get_task!(state.task.id), :agent_question, detail, ref: ref)
+
+    row =
+      record_row(state, %{
+        kind: :question,
+        text: detail,
+        external_id: ref,
+        data: %{"fields" => Enum.map(fields, &question_field_data/1)}
+      })
+
     broadcast_event(task, event)
-    {:noreply, state}
+    {:noreply, %{state | question_rows: Map.put(state.question_rows, ref, row)}}
   end
 
   defp handle_agent_event({:permission_request, %{id: id, detail: detail}} = event, state) do
@@ -406,6 +417,73 @@ defmodule CodeLead.Runtime.TaskRunner do
         row = AgentFeed.update_event(row, %{data: %{"resolved" => granted?}})
         %{state | permission_rows: Map.put(state.permission_rows, ref, row)}
     end
+  end
+
+  defp resolve_question(state, ref, answer, content) do
+    case state.question_rows[ref] do
+      nil ->
+        state
+
+      row ->
+        row =
+          AgentFeed.update_event(row, %{
+            data: %{"resolved" => resolution(answer), "answers" => content}
+          })
+
+        %{state | question_rows: Map.put(state.question_rows, ref, row)}
+    end
+  end
+
+  # `resolved` is a string here and a boolean on a permission row; both
+  # are only ever tested for presence, which is what tells the UI the
+  # escalation is settled.
+  defp resolution({:accept, _values}), do: "answered"
+  defp resolution(:decline), do: "skipped"
+  defp resolution(:cancel), do: "cancelled"
+
+  # Attention belongs to the oldest escalation still waiting, not to the
+  # one just settled — a question and a permission request can be open at
+  # the same time, and clearing wholesale would lose the other one.
+  defp refresh_attention(state) do
+    task = Tasks.get_task!(state.task.id)
+
+    case next_pending(state) do
+      nil -> {:ok, _task} = Tasks.clear_attention(task)
+      {type, detail, ref} -> {:ok, _task} = Tasks.set_attention(task, type, detail, ref: ref)
+    end
+
+    state
+  end
+
+  defp next_pending(%{question_rows: question_rows, permission_rows: permission_rows}) do
+    [{question_rows, :agent_question}, {permission_rows, :permission_request}]
+    |> Enum.flat_map(fn {rows, type} ->
+      for {_ref, row} <- rows, is_nil(row.data["resolved"]), do: {row.id, type, row}
+    end)
+    |> Enum.min_by(fn {id, _type, _row} -> id end, fn -> nil end)
+    |> case do
+      nil -> nil
+      {_id, type, row} -> {type, row.text, row.external_id}
+    end
+  end
+
+  # `data` lands in a jsonb column, and only its top level is stringified
+  # on write — a nested atom key would render for live viewers and then
+  # come back as a string on reload.
+  defp question_field_data(field) do
+    %{
+      "key" => field.key,
+      "label" => field.label,
+      "description" => field.description,
+      "type" => Atom.to_string(field.type),
+      "required" => field.required?,
+      "custom_for" => field.custom_for,
+      "options" =>
+        Enum.map(
+          field.options,
+          &%{"value" => &1.value, "label" => &1.label, "description" => &1.description}
+        )
+    }
   end
 
   defp tool_data(detail) do

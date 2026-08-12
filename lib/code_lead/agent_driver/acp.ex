@@ -22,6 +22,22 @@ defmodule CodeLead.AgentDriver.Acp do
   surfaced as `{:permission_request, %{id:, detail:}}` events and stay
   pending until `answer_permission/3`.
 
+  ## Asking the human
+
+  The client advertises the `elicitation` form capability, which is what
+  makes a harness offer its ask-the-human tool at all — Claude Code's
+  adapter removes that tool from the model's toolset unless the capability
+  is present. An `elicitation/create` request is surfaced as
+  `{:question, %{id:, detail:, fields:, tool_call_id:}}` (normalized by
+  `CodeLead.Acp.Elicitation`) and left unanswered on the wire, which
+  blocks the agent's prompt turn until `answer_question/3` — deliberately
+  without a timeout, since waiting for the human is the point.
+
+  The capability is withheld for a read-only context. Advisory runs
+  (reviewers, planning surveys) are blocking calls with no way to route
+  an answer back, so a question there could only hang until their own
+  deadline.
+
   ## Terminal support (MVP)
 
   `terminal/create` runs the command to completion under
@@ -35,6 +51,8 @@ defmodule CodeLead.AgentDriver.Acp do
   use GenServer, restart: :temporary
 
   alias CodeLead.Acp.Connection
+  alias CodeLead.Acp.Elicitation
+  alias CodeLead.AgentDriver
   alias CodeLead.Agents
   alias CodeLead.Executor
   alias CodeLead.Executor.Context
@@ -80,13 +98,28 @@ defmodule CodeLead.AgentDriver.Acp do
     GenServer.call(handle, {:answer_permission, request_id, granted?})
   end
 
+  @doc """
+  Settles a surfaced agent question, unblocking the prompt turn.
+
+  Returns the content the agent actually received, so the caller can
+  record the answer exactly as sent — coercion and the "Other" override
+  are applied here, not by the caller.
+  """
+  @spec answer_question(pid(), term(), AgentDriver.question_answer()) ::
+          {:ok, map()} | {:error, :unknown_request | :not_running}
+  def answer_question(handle, request_id, answer) do
+    GenServer.call(handle, {:answer_question, request_id, answer})
+  catch
+    :exit, _reason -> {:error, :not_running}
+  end
+
   ## GenServer callbacks
 
   @impl GenServer
   def init(%{caller: caller, task: task, agent: agent, context: context, prompt: prompt}) do
     with {:ok, command} <- harness_command(agent),
          {:ok, conn} <- open_connection(agent, context, command) do
-      ref = Connection.request(conn, "initialize", initialize_params())
+      ref = Connection.request(conn, "initialize", initialize_params(not context.read_only))
 
       {:ok,
        %{
@@ -97,6 +130,7 @@ defmodule CodeLead.AgentDriver.Acp do
          session_id: task.acp_session_id,
          stage: {:initializing, ref},
          pending_permissions: %{},
+         pending_questions: %{},
          terminals: %{},
          usage: nil,
          cost_cents: nil,
@@ -121,6 +155,18 @@ defmodule CodeLead.AgentDriver.Acp do
       {{original_id, options}, pending} ->
         Connection.respond(state.conn, original_id, permission_outcome(options, granted?))
         {:reply, :ok, %{state | pending_permissions: pending}}
+    end
+  end
+
+  def handle_call({:answer_question, request_id, answer}, _from, state) do
+    case Map.pop(state.pending_questions, to_string(request_id)) do
+      {nil, _pending} ->
+        {:reply, {:error, :unknown_request}, state}
+
+      {{original_id, fields}, pending} ->
+        content = question_content(fields, answer)
+        Connection.respond(state.conn, original_id, question_outcome(content, answer))
+        {:reply, {:ok, content}, %{state | pending_questions: pending}}
     end
   end
 
@@ -389,6 +435,40 @@ defmodule CodeLead.AgentDriver.Acp do
     end
   end
 
+  # We never advertise url mode, so a url elicitation can only be a
+  # harness bug; decline rather than strand the agent on a request we
+  # have no surface for.
+  defp handle_agent_request("elicitation/create", id, %{"mode" => "url"}, state) do
+    Connection.respond(state.conn, id, %{action: "decline"})
+    {:noreply, state}
+  end
+
+  defp handle_agent_request("elicitation/create", id, params, state) do
+    case Elicitation.form_fields(params["requestedSchema"]) do
+      [] ->
+        Connection.respond(state.conn, id, %{action: "decline"})
+        {:noreply, state}
+
+      fields ->
+        emit(
+          state,
+          {:question,
+           %{
+             id: id,
+             detail: params["message"] || "The agent needs an answer",
+             fields: fields,
+             tool_call_id: params["toolCallId"]
+           }}
+        )
+
+        # Left unanswered on purpose — the open request is what holds the
+        # agent's turn. Keyed by the stringified id for the same reason
+        # as `pending_permissions`: answers arrive back as strings.
+        pending = Map.put(state.pending_questions, to_string(id), {id, fields})
+        {:noreply, %{state | pending_questions: pending}}
+    end
+  end
+
   defp handle_agent_request("terminal/create", id, params, state) do
     terminal_id = "term-#{System.unique_integer([:positive])}"
     command = params["command"]
@@ -546,15 +626,20 @@ defmodule CodeLead.AgentDriver.Acp do
     end
   end
 
-  defp initialize_params do
+  defp initialize_params(elicitation?) do
     %{
       protocolVersion: 1,
-      clientCapabilities: %{
-        fs: %{readTextFile: true, writeTextFile: true},
-        terminal: true
-      }
+      clientCapabilities:
+        %{fs: %{readTextFile: true, writeTextFile: true}, terminal: true}
+        |> put_elicitation(elicitation?)
     }
   end
+
+  # An empty map is how the protocol spells "supported"; omitting the key
+  # is how it spells "not supported". Only form mode — we have no surface
+  # for sending a human off to a url.
+  defp put_elicitation(capabilities, true), do: Map.put(capabilities, :elicitation, %{form: %{}})
+  defp put_elicitation(capabilities, false), do: capabilities
 
   defp permission_outcome(options, granted?) do
     wanted =
@@ -568,6 +653,17 @@ defmodule CodeLead.AgentDriver.Acp do
       %{"optionId" => option_id} -> %{outcome: %{outcome: "selected", optionId: option_id}}
     end
   end
+
+  defp question_content(fields, {:accept, values}), do: Elicitation.content(fields, values)
+  defp question_content(_fields, _answer), do: %{}
+
+  # An accept with empty content is still an accept — the agent reads it
+  # as "the human answered nothing", which is what a cleared form means.
+  # Recording it as a decline would put the transcript at odds with the
+  # wire.
+  defp question_outcome(content, {:accept, _values}), do: %{action: "accept", content: content}
+  defp question_outcome(_content, :decline), do: %{action: "decline"}
+  defp question_outcome(_content, :cancel), do: %{action: "cancel"}
 
   defp escalation?(tool_call, sandbox_path) do
     (tool_call["locations"] || [])
@@ -665,6 +761,14 @@ defmodule CodeLead.AgentDriver.Acp do
   defp finish(state, result) do
     result = Map.put_new(result, :session_id, state.session_id)
     emit(state, {:result, result})
+
+    # Settle anything the agent is still blocked on before the pipe goes
+    # away. The harness unwinds these on its own abort signal, so this is
+    # about leaving no wedged subprocess if that path ever regresses.
+    Enum.each(state.pending_questions, fn {_ref, {id, _fields}} ->
+      Connection.respond(state.conn, id, %{action: "cancel"})
+    end)
+
     Connection.close(state.conn)
     {:stop, :normal, state}
   end

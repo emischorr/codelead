@@ -3,10 +3,17 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
   The Agent tab: the executor's transcript (`CodeLead.AgentFeed`), folded
   into blocks so a burst of tool calls reads as one collapsed group
   instead of a card per status update. The message the agent is still
-  writing renders in its own pane below the feed. The composer is
-  disabled — the ACP driver doesn't support mid-run messages yet.
+  writing renders in its own pane below the feed.
+
+  A question row is the exception to "the feed is a transcript": it
+  renders the agent's own form — its choices, their descriptions, and a
+  free-text box — and submitting it releases the blocked run. The
+  composer beside it stays disabled; unprompted mid-run messages are a
+  separate capability the ACP driver does not have.
   """
   use CodeLeadWeb, :html
+
+  alias CodeLead.Workspace
 
   attr :task, :map, required: true
   attr :blocks, :any, required: true, doc: "the :feed LiveView stream of folded blocks"
@@ -19,6 +26,8 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     doc: "%{cost_cents:, tokens:, duration_ms:, cost_mode:} — live while a run executes"
 
   def agent_tab(assigns) do
+    assigns = assign(assigns, :root, context_root(assigns.task))
+
     ~H"""
     <div class="flex h-full flex-col">
       <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2.5 sm:px-6">
@@ -59,6 +68,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
           id={id}
           block={block}
           executing?={@executing?}
+          root={@root}
         />
       </div>
 
@@ -105,9 +115,15 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
   defp session_label(nil), do: "no session yet"
   defp session_label(session_id), do: session_id
 
+  # Where the run works: a git worktree for a :repo task, the task folder
+  # for a :folder one. Nil until a :repo task has been provisioned.
+  defp context_root(%{target: :repo, worktree_path: path}), do: path
+  defp context_root(%{target: :folder, id: id}), do: Workspace.task_folder(id)
+
   attr :id, :string, required: true
   attr :block, :map, required: true
   attr :executing?, :boolean, required: true
+  attr :root, :string, default: nil, doc: "the run's working directory, stripped from paths"
 
   defp feed_block(%{block: %{kind: :tools}} = assigns) do
     ~H"""
@@ -124,7 +140,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
           class="size-3.5 shrink-0 text-text3"
         />
         <span class="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text2">
-          {group_label(@block.rows)}
+          {group_label(@block.rows, @root)}
         </span>
         <span :if={pending?(@block.rows)} class="size-1.5 shrink-0 animate-pulse rounded-full bg-run" />
         <span class="shrink-0 font-mono text-[10px] text-text3">
@@ -134,7 +150,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
       <div :if={@block.expanded?} class="mt-1 flex flex-col gap-1 pl-5">
         <div :for={row <- @block.rows} class="flex items-start gap-2">
           <span class={["mt-1 size-1.5 shrink-0 rounded-full", status_dot(row.data["status"])]} />
-          <.tool_line row={row} />
+          <.tool_line row={row} root={@root} />
         </div>
       </div>
     </div>
@@ -147,6 +163,35 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     ~H"""
     <div id={@id} class="rounded-[11px] border border-border bg-surface p-3.5">
       <.markdown text={@row.text} class="break-words text-[13px] leading-relaxed text-text" />
+    </div>
+    """
+  end
+
+  # A question is the one row a human is expected to act on, so it grows
+  # a form instead of a pair of buttons.
+  defp feed_block(%{block: %{rows: [%{kind: :question} | _rest]}} = assigns) do
+    assigns = assign(assigns, :row, hd(assigns.block.rows))
+
+    ~H"""
+    <div id={@id} class={["flex flex-col gap-2.5 rounded-[11px] border p-3.5", card_border(@row)]}>
+      <div class="flex items-center gap-2">
+        <span class={[
+          "rounded-[5px] px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide",
+          chip_class(@row)
+        ]}>
+          {label(@row)}
+        </span>
+        <span
+          :if={@row.data["resolved"]}
+          class="rounded-[5px] bg-surface2 px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-text2"
+        >
+          {resolution_label(@row.data["resolved"])}
+        </span>
+        <span class="ml-auto font-mono text-[10px] text-text3">{Format.time(@row.inserted_at)}</span>
+      </div>
+      <p class="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-text" phx-no-format>{@row.text}</p>
+      <.question_form :if={answerable?(@row, @executing?)} id={@id} row={@row} />
+      <.question_answers :if={@row.data["resolved"]} row={@row} />
     </div>
     """
   end
@@ -192,10 +237,117 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     """
   end
 
+  attr :id, :string, required: true
   attr :row, :map, required: true
 
+  # A plain form rather than `<.form>`: there is no changeset behind an
+  # agent question, and a per-row form assign would have to survive every
+  # stream reset for nothing. The ref rides in a hidden input because
+  # `phx-value-*` does not survive a submit.
+  defp question_form(assigns) do
+    ~H"""
+    <form id={"#{@id}-answer-form"} phx-submit="answer_question" class="flex flex-col gap-3">
+      <input type="hidden" name="ref" value={@row.external_id} />
+      <.question_field :for={field <- @row.data["fields"] || []} field={field} prefix={@id} />
+      <div class="flex gap-2">
+        <.button variant="primary" type="submit" id={"#{@id}-answer"} phx-disable-with="Sending…">
+          Answer
+        </.button>
+        <.button
+          type="button"
+          phx-click="skip_question"
+          phx-value-ref={@row.external_id}
+          id={"#{@id}-skip"}
+        >
+          Skip
+        </.button>
+      </div>
+    </form>
+    """
+  end
+
+  attr :field, :map, required: true
+  attr :prefix, :string, required: true
+
+  defp question_field(%{field: %{"type" => type}} = assigns)
+       when type in ["select", "multi_select"] do
+    assigns = assign(assigns, :multi?, assigns.field["type"] == "multi_select")
+
+    ~H"""
+    <fieldset class="flex flex-col gap-1.5">
+      <legend class="text-[12px] font-medium text-text2">{@field["label"]}</legend>
+      <p :if={@field["description"]} class="text-[11.5px] text-text3">{@field["description"]}</p>
+      <label
+        :for={{option, index} <- Enum.with_index(@field["options"] || [])}
+        class="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-surface2"
+      >
+        <input
+          type={if(@multi?, do: "checkbox", else: "radio")}
+          name={"answer[#{@field["key"]}]#{if(@multi?, do: "[]", else: "")}"}
+          value={option["value"]}
+          id={"#{@prefix}-#{@field["key"]}-#{index}"}
+          required={not @multi? and @field["required"]}
+          class="mt-0.5 size-3.5 shrink-0 border-border bg-surface text-accent accent-accent focus:ring-accent/40"
+        />
+        <span class="min-w-0">
+          <span class="block text-[13px] leading-snug text-text">{option["label"]}</span>
+          <span :if={option["description"]} class="block text-[11.5px] leading-snug text-text3">
+            {option["description"]}
+          </span>
+        </span>
+      </label>
+    </fieldset>
+    """
+  end
+
+  defp question_field(%{field: %{"type" => "boolean"}} = assigns) do
+    ~H"""
+    <.input
+      type="checkbox"
+      name={"answer[#{@field["key"]}]"}
+      value="false"
+      label={@field["label"]}
+      id={"#{@prefix}-#{@field["key"]}"}
+    />
+    """
+  end
+
+  # Free text covers the "Other" box beside a choice and every generic
+  # field the schema did not pin down.
+  defp question_field(assigns) do
+    ~H"""
+    <.input
+      type={input_type(@field["type"])}
+      name={"answer[#{@field["key"]}]"}
+      value=""
+      label={@field["label"]}
+      placeholder={@field["description"]}
+      required={@field["required"]}
+      id={"#{@prefix}-#{@field["key"]}"}
+    />
+    """
+  end
+
+  attr :row, :map, required: true
+
+  defp question_answers(assigns) do
+    assigns = assign(assigns, :pairs, answered_pairs(assigns.row))
+
+    ~H"""
+    <dl :if={@pairs != []} class="flex flex-col gap-1 border-t border-warn-border/40 pt-2.5">
+      <div :for={{label, answer} <- @pairs} class="flex gap-2 text-[12px]">
+        <dt class="shrink-0 font-medium text-text2">{label}</dt>
+        <dd class="min-w-0 break-words text-text">{answer}</dd>
+      </div>
+    </dl>
+    """
+  end
+
+  attr :row, :map, required: true
+  attr :root, :string, default: nil
+
   defp tool_line(assigns) do
-    {label, detail} = tool_summary(assigns.row)
+    {label, detail} = tool_summary(assigns.row, assigns.root)
     assigns = assign(assigns, label: label, detail: detail)
 
     ~H"""
@@ -206,31 +358,44 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     """
   end
 
-  defp group_label([row]), do: row |> tool_summary() |> elem(0)
-  defp group_label(rows), do: "#{length(rows)} tool calls"
+  defp group_label([row], root), do: row |> tool_summary(root) |> elem(0)
+  defp group_label(rows, _root), do: "#{length(rows)} tool calls"
 
   # `{label, detail}` — the label carries the weight, the detail trails
   # after a colon. A shell call titles itself with its own command, so the
   # description leads and the command is never rendered twice.
-  defp tool_summary(%{data: %{"locations" => [path | _rest]}} = row), do: {tool_title(row), path}
+  defp tool_summary(%{data: %{"locations" => [path | _rest]}} = row, root),
+    do: {tool_title(row), display_path(path, root)}
 
-  defp tool_summary(%{data: %{"input" => %{"description" => description, "command" => command}}})
+  defp tool_summary(
+         %{data: %{"input" => %{"description" => description, "command" => command}}},
+         _root
+       )
        when is_binary(description) and is_binary(command),
        do: {description, command}
 
-  defp tool_summary(%{data: %{"input" => %{"command" => command}}}) when is_binary(command),
-    do: {command, nil}
+  defp tool_summary(%{data: %{"input" => %{"command" => command}}}, _root)
+       when is_binary(command),
+       do: {command, nil}
 
-  defp tool_summary(%{data: %{"input" => input}} = row)
+  defp tool_summary(%{data: %{"input" => input}} = row, root)
        when is_map(input) and map_size(input) > 0,
-       do: {tool_title(row), input |> Enum.sort() |> Enum.map_join(" · ", &elem(&1, 1))}
+       do:
+         {tool_title(row),
+          input |> Enum.sort() |> Enum.map_join(" · ", &display_path(elem(&1, 1), root))}
 
   # Rows recorded before the input was stored field by field carry the raw
   # JSON preview.
-  defp tool_summary(%{data: %{"input" => input}} = row) when is_binary(input),
-    do: {tool_title(row), input}
+  defp tool_summary(%{data: %{"input" => input}} = row, root) when is_binary(input),
+    do: {tool_title(row), display_path(input, root)}
 
-  defp tool_summary(row), do: {tool_title(row), nil}
+  defp tool_summary(row, _root), do: {tool_title(row), nil}
+
+  # A path inside the run's own directory reads better without the prefix
+  # every row would repeat; one left absolute is the signal that the agent
+  # reached outside the project.
+  defp display_path("/" <> _rest = path, root), do: Format.project_path(path, root) || path
+  defp display_path(text, _root), do: text
 
   defp tool_title(%{text: text, data: data}), do: text || data["tool_kind"] || "tool call"
 
@@ -267,11 +432,37 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
 
   defp result_status(_data), do: nil
 
-  defp answerable?(%{kind: :permission, external_id: ref, data: data}, executing?) do
+  defp answerable?(%{kind: kind, external_id: ref, data: data}, executing?)
+       when kind in [:permission, :question] do
     executing? and is_binary(ref) and is_nil(data["resolved"])
   end
 
   defp answerable?(_row, _executing?), do: false
+
+  defp input_type("number"), do: "number"
+  defp input_type("integer"), do: "number"
+  defp input_type(_type), do: "text"
+
+  defp resolution_label("answered"), do: "Answered"
+  defp resolution_label("skipped"), do: "Skipped"
+  defp resolution_label("cancelled"), do: "Cancelled"
+  defp resolution_label(_resolved), do: "Resolved"
+
+  # Only the fields that made it onto the wire are shown — an "Other"
+  # answer supersedes its question before the row is written, so a
+  # superseded selection is simply absent.
+  defp answered_pairs(%{data: data}) do
+    answers = data["answers"] || %{}
+
+    for field <- data["fields"] || [],
+        answer = answers[field["key"]],
+        not is_nil(answer),
+        do: {field["label"], format_answer(answer)}
+  end
+
+  defp format_answer(answer) when is_list(answer), do: Enum.join(answer, ", ")
+  defp format_answer(answer) when is_boolean(answer), do: if(answer, do: "Yes", else: "No")
+  defp format_answer(answer), do: to_string(answer)
 
   defp card_border(%{kind: :result, data: %{"status" => "ok"}}), do: "border-ok bg-surface"
   defp card_border(%{kind: :result}), do: "border-del-text/40 bg-surface"

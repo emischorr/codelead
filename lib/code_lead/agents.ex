@@ -267,8 +267,18 @@ defmodule CodeLead.Agents do
   end
 
   @doc """
+  Agents selectable as planning assistant for a task of the given work
+  type. The driver decides the capability: `:llm_api` refines the spec
+  from text, `:acp` surveys the repository read-only.
+  """
+  @spec eligible_planners(atom(), pos_integer()) :: [Agent.t()]
+  def eligible_planners(work_type, project_id) do
+    Repo.all(eligible(work_type, project_id, :plan))
+  end
+
+  @doc """
   Checks a single agent against the selection rules for a slot
-  (`:execute` or `:review`).
+  (`:execute`, `:review` or `:plan`).
   """
   @spec eligible?(Agent.t(), atom(), pos_integer(), atom()) :: boolean()
   def eligible?(%Agent{} = agent, work_type, project_id, role) do

@@ -47,6 +47,49 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     end
   end
 
+  describe "approve defaults" do
+    test "saves a finalize mode per target and the artifact path",
+         %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      view
+      |> form("#project-finalize-form",
+        finalize: %{repo: "squash", folder: "commit_to_path", commit_path: "generated"}
+      )
+      |> render_submit()
+
+      assert Projects.finalize_defaults(project.id) == %{
+               repo: :squash,
+               folder: :commit_to_path,
+               commit_path: "generated"
+             }
+    end
+
+    test "leaves unrelated settings keys alone", %{conn: conn, project: project} do
+      {:ok, _project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      view
+      |> form("#project-finalize-form",
+        finalize: %{repo: "merge", folder: "artifact", commit_path: ""}
+      )
+      |> render_submit()
+
+      assert Projects.get_project!(project.id).settings["theme"] == "dark"
+    end
+
+    test "the form opens on the mode the finalizer would run", %{conn: conn, project: project} do
+      {:ok, _project} = Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert has_element?(view, ~s(#project-finalize-form option[value="merge"][selected]))
+      # Nothing stored for folders, so the built-in default is preselected.
+      assert has_element?(view, ~s(#project-finalize-form option[value="artifact"][selected]))
+    end
+  end
+
   describe "repositories" do
     test "links a repository", %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}/repositories/new")

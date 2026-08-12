@@ -15,13 +15,14 @@ Map of the repo's documentation. Design notes describe how things work
 ## Design notes
 
 - [`architecture.md`](architecture.md) — module map: contexts, behaviours, runtime processes.
-- [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout, git credentials (and how to read a forge's refusal), harness prerequisites, the Docker image.
-- [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: the `CodeLead.Workflow` definition it runs on (stage types, edge policies), transition table, stage effects, the scheduler's admission gates and scheduled runs, deviations, IEx usage.
-- [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches (including when an existing directory may be reused), diff/commit/push, forge tokens, executor provisioning, `mix code_lead.workspace.clean`.
-- [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations, preflight.
-- [`cost-tracking.md`](cost-tracking.md) — agent_runs (token split, duration), where ACP reports tokens vs money, nightly rollups, pricing precedence, billing modes, spend queries, budget gate.
+- [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout, git credentials (and how to read a forge's refusal), per-project approve defaults, harness prerequisites, the Docker image.
+- [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: the `CodeLead.Workflow` definition it runs on (stage types, edge policies), transition table, stage effects, finalize modes and their cleanup rule, the scheduler's admission gates and scheduled runs, deviations, IEx usage.
+- [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches (including when an existing directory may be reused), diff/commit/push, merging a finished branch into the default branch on Done, forge tokens, executor provisioning, `mix code_lead.workspace.clean`.
+- [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations, preflight, permission escalations and agent questions (ACP elicitation).
+- [`cost-tracking.md`](cost-tracking.md) — agent_runs (token split, duration), where ACP reports tokens vs money, nightly rollups, pricing precedence, billing modes, spend queries (lifetime vs month-to-date, and why the two tables merge per day), calendar-month budget gate.
 - [`reviews.md`](reviews.md) — reviewer fan-out, advisory verdicts, read-only ACP posture, rework loop.
-- [`web-ui.md`](web-ui.md) — the LiveView layer: the dashboard at `/`, board + task page, the `/settings` area, design tokens, component inventory, PubSub wiring, the live/collapsible diff and its JS hook.
+- [`planning.md`](planning.md) — the planning surface: the `:plan` role, `llm_api` spec refinement vs the `acp` repo-aware survey, the survey's disposable detached worktree, message kinds, and the escalation gap.
+- [`web-ui.md`](web-ui.md) — the LiveView layer: the dashboard at `/`, board + task page, the `/settings` area, the mode-derived Approve button and artifact download, design tokens, component inventory, PubSub wiring, the live/collapsible diff and its JS hook.
 - [`navigation.md`](navigation.md) — the sidebar contract: the `@nav` map and its `on_mount` hook, what is enabled/deactivated/hidden where, the full/rail/drawer renderings, and how the selected project is remembered off-project.
 - [`setup-and-auth.md`](setup-and-auth.md) — the `setup_done` flag, the setup/auth router gates, the first-run wizard, and how the generated auth stack was merged.
 

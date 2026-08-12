@@ -1,8 +1,13 @@
-# Review cycle (last updated: 2026-08-11)
+# Review cycle (last updated: 2026-08-12)
 
 Implemented in `CodeLead.Reviews`. Reviewers are ordinary agents with
 `:review` in `roles`, matched to the task's work type, selected per
 task (pre-filled from project defaults) — not a separate abstraction.
+
+The run itself is `CodeLead.AdvisoryRun`, shared with the planning
+survey (see [`planning.md`](planning.md)): the same read-only posture
+pointed at a different subject. `Reviews` owns only the artifact, the
+prompt, the verdict, and the rows.
 
 ## Fan-out
 
@@ -23,12 +28,19 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
     `:folder` targets (truncated at 60k chars).
   - `acp` reviewers get the execution context with `read_only: true` —
     `fs/write_text_file` is denied by the driver; reads and terminal
-    stay available.
+    stay available. Because the terminal is not gated, a read-only
+    posture contains a *disposable* context, not a shared one.
 - Each reviewer writes a `reviews` row (advisory `verdict` parsed from
   a trailing `{"verdict": ...}` JSON line, full text as `findings`),
   an `agent_runs` row (cost-tracked, **not** budget-held), and a
   `:review` task step. A crashed/timed-out reviewer records a
   verdict-less review row and never blocks the cycle.
+- A reviewer that asks a question or hits a permission escalation
+  raises the ordinary `attention` field and keeps waiting; its run ends
+  on `AdvisoryRun`'s own 15-minute deadline (the outer stream timeout is
+  a minute longer, so the deadline that cancels the driver and still
+  records a row is the one that fires). Neither is answerable for an
+  advisory run — see the gap noted in [`planning.md`](planning.md).
 - When the cycle completes: attention `:review_ready` +
   `{:review_cycle_completed, cycle}` on the task topic. Cycles
   increment per Review entry; prior cycles are retained for audit.

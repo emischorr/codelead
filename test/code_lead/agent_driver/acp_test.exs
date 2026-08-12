@@ -118,6 +118,83 @@ defmodule CodeLead.AgentDriver.AcpTest do
     assert result.status == :ok
   end
 
+  test "a form elicitation surfaces as a structured question and unblocks on answer", ctx do
+    use_scenario("elicitation")
+
+    {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Ask me something")
+
+    assert_receive {:agent_event, ^handle, {:question, question}}, 15_000
+    assert %{id: id, detail: "Which approach should I take?", tool_call_id: "tc-ask"} = question
+
+    assert [select, custom, multi] = question.fields
+    assert %{key: "question_0", label: "Approach", type: :select} = select
+    assert Enum.map(select.options, & &1.value) == ["Refactor first", "Ship it"]
+    assert %{key: "question_0_custom", type: :text, custom_for: "question_0"} = custom
+    assert %{key: "question_1", type: :multi_select} = multi
+
+    # The typed "Other" supersedes the selection, so the agent must never
+    # see `question_0` alongside it.
+    assert {:ok, content} =
+             Acp.answer_question(handle, id, {
+               :accept,
+               %{
+                 "question_0" => "Ship it",
+                 "question_0_custom" => "Do neither",
+                 "question_1" => ["api", "ui"]
+               }
+             })
+
+    assert content == %{"question_0_custom" => "Do neither", "question_1" => ["api", "ui"]}
+
+    {events, result} = collect_until_result(handle)
+    chunks = for {:message_chunk, text} <- events, do: text
+    answered = Enum.join(chunks)
+
+    assert answered =~ ~s("action":"accept")
+    assert answered =~ "Do neither"
+    refute answered =~ "Ship it"
+    assert result.status == :ok
+  end
+
+  test "a read-only context never offers the agent a way to ask", ctx do
+    use_scenario("elicitation")
+    context = %{ctx.context | read_only: true}
+
+    {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, context, "Ask me something")
+    {events, result} = collect_until_result(handle)
+
+    chunks = for {:message_chunk, text} <- events, do: text
+    assert Enum.join(chunks) == "no elicitation support"
+    refute Enum.any?(events, &match?({:question, _question}, &1))
+    assert result.status == :ok
+  end
+
+  test "cancelling a run settles a still-pending question", ctx do
+    use_scenario("elicitation")
+
+    {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Ask me something")
+    assert_receive {:agent_event, ^handle, {:question, _question}}, 15_000
+
+    ref = Process.monitor(handle)
+    :ok = Acp.cancel(handle)
+
+    assert_receive {:agent_event, ^handle, {:result, %{status: :cancelled}}}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^handle, :normal}, 5_000
+  end
+
+  test "answering a question that is not pending is refused", ctx do
+    use_scenario("elicitation")
+
+    {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Ask me something")
+    assert_receive {:agent_event, ^handle, {:question, %{id: id}}}, 15_000
+
+    assert {:ok, _content} = Acp.answer_question(handle, id, :decline)
+    assert {:error, :unknown_request} = Acp.answer_question(handle, id, :decline)
+
+    {_events, result} = collect_until_result(handle)
+    assert result.status == :ok
+  end
+
   test "terminal round trip through the client", ctx do
     use_scenario("terminal")
 

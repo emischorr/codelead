@@ -44,6 +44,8 @@ defmodule CodeLead.Tasks do
 
   alias CodeLead.Agents
   alias CodeLead.Agents.Agent
+  alias CodeLead.Finalizer
+  alias CodeLead.Projects
   alias CodeLead.Repo
   alias CodeLead.Tasks.Attention
   alias CodeLead.Tasks.Task
@@ -135,10 +137,20 @@ defmodule CodeLead.Tasks do
   Updates task fields. In Planning everything is editable; afterwards
   only descriptive fields (title, description, spec, priority, ready
   flag, assignee).
+
+  A Planning edit that changes the execution shape is re-normalized the
+  same way creation is: a `:repo` target without a repository falls back
+  to the project's first one, and a new work type drops an executor that
+  is no longer eligible and re-prefills the reviewer set.
   """
   @spec update_task(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update_task(%Task{state: :planning} = task, attrs) do
-    task |> Task.planning_changeset(attrs) |> Repo.update() |> broadcast_board_change()
+    with {:ok, updated} <- task |> Task.planning_changeset(attrs) |> Repo.update() do
+      updated
+      |> maybe_default_repository()
+      |> realign_agents(task.work_type)
+      |> then(&broadcast_board_change({:ok, &1}))
+    end
   end
 
   def update_task(%Task{} = task, attrs) do
@@ -321,6 +333,63 @@ defmodule CodeLead.Tasks do
   @spec approve(Task.t()) :: {:ok, Task.t()} | transition_error()
   def approve(%Task{} = task) do
     apply_transition(task, {:review, :done}, actor: :human, summary: "approved — Done")
+  end
+
+  @doc """
+  The finalize mode Approve → Done will actually run: the task's own
+  override, else the project default for its target, else the built-in.
+
+  The single place the three sources are joined, so the button label and
+  the finalizer cannot disagree about what Approve does.
+  """
+  @spec finalize_mode(Task.t()) :: Task.finalize_mode()
+  def finalize_mode(%Task{target: target, finalize_mode: mode, project_id: project_id}) do
+    defaults = Projects.finalize_defaults(project_id)
+    Finalizer.resolve_mode(target, mode, Map.fetch!(defaults, target))
+  end
+
+  @doc """
+  Sets the task's finalize-mode override. A blank value clears it, which
+  is not the same as picking the project's current default — it means
+  "follow the project", including after the project changes its mind.
+  """
+  @spec set_finalize_mode(Task.t(), String.t() | nil) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def set_finalize_mode(%Task{} = task, value) do
+    task
+    |> Task.finalize_changeset(%{finalize_mode: blank_to_nil(value)})
+    |> Repo.update()
+    |> broadcast_board_change()
+  end
+
+  @doc """
+  Forgets the worktree the finalizer just pruned.
+
+  `branch_name` deliberately stays: it still names what was pushed or
+  merged and the Done card shows it — only the path has stopped being
+  true. Written by the finalize stage effects, never by a caller.
+  """
+  @spec clear_worktree_path(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def clear_worktree_path(%Task{} = task) do
+    task
+    |> Ecto.Changeset.change(worktree_path: nil)
+    |> Repo.update()
+    |> broadcast_board_change()
+  end
+
+  @doc """
+  Records the finalizer's forge link — the PR/MR that Approve → Done
+  opened, the merge commit it landed, or the compare link it fell back
+  to. Written by the finalize stage effects, never by a caller-supplied
+  changeset.
+  """
+  @spec put_forge_url(Task.t(), String.t(), Task.url_kind()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def put_forge_url(%Task{} = task, url, kind) do
+    task
+    |> Ecto.Changeset.change(pr_url: url, pr_url_kind: kind)
+    |> Repo.update()
+    |> broadcast_board_change()
   end
 
   @doc """
@@ -806,6 +875,11 @@ defmodule CodeLead.Tasks do
     end
   end
 
+  # A select's "inherit" option posts an empty string, which `cast/3`
+  # would read as "field omitted" and leave the old override in place.
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
   # Notifies board and organization subscribers after a successful write;
   # passes errors through untouched so it can sit at the end of a pipeline.
   # The two topics carry the same message and have disjoint subscribers —
@@ -947,11 +1021,29 @@ defmodule CodeLead.Tasks do
 
   defp maybe_default_repository(task), do: task
 
+  # A work type change invalidates both agent selections — they are
+  # filtered by work type — so the task is realigned rather than left
+  # holding picks that only fail later, at the execute-stage guard.
+  defp realign_agents(%Task{work_type: work_type} = task, work_type), do: task
+
+  defp realign_agents(task, _previous_work_type) do
+    task |> clear_ineligible_executor() |> prefill_reviewers()
+  end
+
+  defp clear_ineligible_executor(%Task{agent_id: nil} = task), do: task
+
+  defp clear_ineligible_executor(task) do
+    case check_executor(task) do
+      :ok -> task
+      {:error, _reason} -> task |> Ecto.Changeset.change(agent_id: nil) |> Repo.update!()
+    end
+  end
+
   defp prefill_reviewers(task) do
     default_ids =
       Agents.default_reviewers(task.project_id, task.work_type) |> Enum.map(& &1.id)
 
-    if default_ids != [], do: replace_reviewers(task.id, default_ids)
+    replace_reviewers(task.id, default_ids)
     task
   end
 

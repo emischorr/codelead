@@ -12,6 +12,7 @@ defmodule CodeLead.Runtime do
   column by name. The functions below name edges and supply summaries.
   """
 
+  alias CodeLead.AgentDriver
   alias CodeLead.Runtime.StageEffects
   alias CodeLead.Runtime.TaskRunner
   alias CodeLead.Tasks
@@ -114,6 +115,18 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
+  Settles a surfaced agent question, releasing the blocked run.
+
+  `{:accept, answers}` hands the answers over, `:decline` skips the
+  question (the agent proceeds without one), and `:cancel` aborts the
+  request outright.
+  """
+  @spec answer_question(Task.t(), term(), AgentDriver.question_answer()) :: :ok | {:error, term()}
+  def answer_question(%Task{} = task, request_id, answer) do
+    TaskRunner.answer_question(task.id, request_id, answer)
+  end
+
+  @doc """
   Review → Running with the same agent, worktree, branch, and session:
   the feedback becomes the next prompt and commits accumulate.
   """
@@ -159,10 +172,11 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
-  Review → Done: runs the system finalizer (commit remainder, push the
-  feature branch, PR/compare link — or mark the folder artifact
-  complete), then transitions. A finalizer failure keeps the task in
-  Review. Returns the outcome map alongside the task.
+  Review → Done: runs the system finalizer in the task's resolved
+  finalize mode — open a PR, merge or squash-merge the branch, hand the
+  folder artifact over, or commit it to a repository path — then
+  transitions. A finalizer failure keeps the task in Review. Returns the
+  outcome map alongside the task.
   """
   @spec approve(Task.t()) ::
           {:ok, Task.t(), CodeLead.Finalizer.outcome()}
@@ -194,34 +208,8 @@ defmodule CodeLead.Runtime do
 
   defp fetch_edge(_workflow, %Task{}, _edge_keys), do: {:error, :invalid_state}
 
-  defp apply_worktree_policy(%Task{} = task, :discard), do: teardown_context(task)
+  defp apply_worktree_policy(%Task{} = task, :discard), do: StageEffects.discard_context(task)
   defp apply_worktree_policy(%Task{}, :keep), do: :ok
-
-  defp teardown_context(%Task{worktree_path: nil, target: :repo}), do: :ok
-
-  defp teardown_context(%Task{target: :repo} = task) do
-    repository = CodeLead.Projects.get_repository!(task.repository_id)
-
-    context = %CodeLead.Executor.Context{
-      type: :worktree,
-      path: task.worktree_path,
-      task_id: task.id,
-      base_clone_path: repository.base_clone_path,
-      branch_name: task.branch_name
-    }
-
-    CodeLead.Executor.impl().teardown(context, keep: false)
-  end
-
-  defp teardown_context(%Task{target: :folder} = task) do
-    context = %CodeLead.Executor.Context{
-      type: :folder,
-      path: CodeLead.Workspace.task_folder(task.id),
-      task_id: task.id
-    }
-
-    CodeLead.Executor.impl().teardown(context, keep: false)
-  end
 
   # Only `approve/1` surfaces what the stage prepared; the rest keep the
   # two-tuple their callers pattern-match on.

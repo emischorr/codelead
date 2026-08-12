@@ -22,7 +22,12 @@ defmodule CodeLead.AgentDriver do
     * `{:permission_request, %{id: id, detail: detail}}` — an escalation
       that needs a human decision (in-sandbox requests are auto-granted
       by the driver and never surface here)
-    * `{:question, text}` — the agent asks the human something
+    * `{:question, %{id: id, detail: detail, fields: fields, tool_call_id:
+      tool_call_id}}` — the agent asks the human something and **blocks**
+      until answered. `detail` is the prompt; `fields` is a UI-ready list
+      of selects, multi-selects and free-text inputs, already normalized
+      from the protocol's form schema, so no consumer parses JSON Schema.
+      Stays pending until the driver's `answer_question/3`
     * `{:session_started, session_id}` — an ACP session exists; the
       runner persists it for later resume
     * `{:usage, snapshot}` — advisory mid-run usage; may arrive any
@@ -85,11 +90,49 @@ defmodule CodeLead.AgentDriver do
           session_id: String.t() | nil
         }
 
+  @typedoc """
+  One choice offered for a question field. `value` is what goes back on
+  the wire; `label` and `description` are for the human.
+  """
+  @type question_option :: %{
+          value: String.t(),
+          label: String.t(),
+          description: String.t() | nil
+        }
+
+  @typedoc """
+  One input of an agent question, normalized away from the protocol's
+  schema. `custom_for` marks a free-text field that overrides the
+  selection of the question it names — the "Other" box beside a choice.
+  """
+  @type question_field :: %{
+          key: String.t(),
+          label: String.t(),
+          description: String.t() | nil,
+          type: :select | :multi_select | :text | :number | :integer | :boolean,
+          required?: boolean(),
+          custom_for: String.t() | nil,
+          options: [question_option()]
+        }
+
+  @typedoc """
+  A human's response to an agent question: answers keyed by field,
+  `:decline` to skip it (the agent proceeds without an answer), or
+  `:cancel` to abort the request outright.
+  """
+  @type question_answer :: {:accept, map()} | :decline | :cancel
+
   @type event ::
           {:message_chunk, String.t()}
           | {:tool_call, map()}
           | {:permission_request, map()}
-          | {:question, String.t()}
+          | {:question,
+             %{
+               id: term(),
+               detail: String.t(),
+               fields: [question_field()],
+               tool_call_id: String.t() | nil
+             }}
           | {:session_started, String.t()}
           | {:usage, usage_snapshot()}
           | {:result, result()}
@@ -114,8 +157,10 @@ defmodule CodeLead.AgentDriver do
             ) :: {:ok, handle()} | {:error, term()}
 
   @doc """
-  Sends a follow-up message into a running session (answers to agent
-  questions, permission decisions).
+  Sends a follow-up message into a running session. Escalations do not
+  come through here: a question is settled with `answer_question/3` and a
+  permission with `answer_permission/3`, both optional driver functions
+  rather than callbacks, since only the ACP driver can honour them.
   """
   @callback send_message(handle(), String.t()) :: :ok | {:error, term()}
 

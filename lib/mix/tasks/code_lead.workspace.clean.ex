@@ -2,8 +2,8 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
   @shortdoc "Removes per-task worktrees and task folders from the workspace volume"
 
   @moduledoc """
-  Drops the per-task state on the workspace volume: `worktrees/` and
-  `tasks/`. Base clones under `repos/` are kept, so a reset does not
+  Drops the per-task state on the workspace volume: `worktrees/`,
+  `tasks/`, `surveys/` and `merges/`. Base clones under `repos/` are kept, so a reset does not
   re-clone every repository — they are only pruned of the worktree
   registrations that were just removed. Without the prune a later
   `git worktree add` on the same path fails as already registered.
@@ -25,7 +25,7 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
 
     root = Workspace.root()
 
-    Enum.each(["worktrees", "tasks"], &File.rm_rf!(Path.join(root, &1)))
+    Enum.each(["worktrees", "tasks", "surveys", "merges"], &File.rm_rf!(Path.join(root, &1)))
     Enum.each(base_clones(root), &Git.git(&1, ["worktree", "prune"]))
 
     Mix.shell().info("Cleaned per-task workspace state under #{root}")

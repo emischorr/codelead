@@ -5,6 +5,10 @@ defmodule CodeLeadWeb.NavigationTest do
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.Costs
+  alias CodeLead.Costs.DailyMetric
+  alias CodeLead.Repo
+
   setup :register_and_log_in_user
 
   describe "sidebar on a project page" do
@@ -38,6 +42,35 @@ defmodule CodeLeadWeb.NavigationTest do
       {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
 
       assert has_element?(view, "#budget-card")
+    end
+
+    # The tile's headline names the current month, so its figure has to be
+    # month-to-date — an earlier month's rollup must not inflate it.
+    test "the budget tile counts this month only", %{conn: conn, project: project} do
+      task = task_fixture(project.id)
+
+      {:ok, _run} =
+        Costs.record_run(%{
+          task_id: task.id,
+          status: :ok,
+          started_at: DateTime.utc_now(:second),
+          usage: %{total_tokens: 100, cost_cents: 40}
+        })
+
+      Repo.insert!(%DailyMetric{
+        project_id: project.id,
+        date: Date.add(Date.beginning_of_month(Date.utc_today()), -1),
+        total_tokens: 5_000,
+        cost_cents: 999,
+        run_count: 3
+      })
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      card = view |> element("#budget-card") |> render()
+
+      assert card =~ "$0.40"
+      refute card =~ "$10.39"
     end
 
     test "the theme switch sits in the account row, not the page header",

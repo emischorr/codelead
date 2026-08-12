@@ -1,6 +1,6 @@
 defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   @moduledoc """
-  The four sections of the project settings page. Presentation only — every
+  The sections of the project settings page. Presentation only — every
   event is handled by `CodeLeadWeb.SettingsLive.Project`.
   """
 
@@ -33,7 +33,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
               field={@form[:budget_limit_cents]}
               type="number"
               min="0"
-              label="Cost limit (cents)"
+              label="Monthly cost limit (cents)"
               placeholder="No limit"
             />
             <p class="-mt-1 mb-2 text-[12px] text-text3">
@@ -44,18 +44,64 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
             field={@form[:budget_limit_tokens]}
             type="number"
             min="0"
-            label="Token limit"
+            label="Monthly token limit"
             placeholder="No limit"
           />
         </div>
 
         <p class="mb-4 text-[12px] leading-relaxed text-text3">
-          A run that would push the project past a limit is held in the queue rather than started.
-          Leave blank for no limit.
+          Limits cover the current calendar month (UTC) and reset on the 1st. A run that would push
+          the project past one is held in the queue rather than started. Leave blank for no limit.
         </p>
 
         <div class="flex justify-end">
           <.button variant="primary" type="submit" phx-disable-with="Saving…">Save details</.button>
+        </div>
+      </.form>
+    </.section_card>
+    """
+  end
+
+  @doc """
+  What Approve → Done does by default, per target. Every task inherits
+  these and may override its own.
+  """
+  attr :form, Phoenix.HTML.Form, required: true
+
+  def finalize(assigns) do
+    ~H"""
+    <.section_card label="On approve">
+      <.form for={@form} id="project-finalize-form" phx-submit="save_finalize">
+        <.input
+          field={@form[:repo]}
+          type="select"
+          label="Repository tasks"
+          options={FormOptions.finalize_modes(:repo)}
+        />
+        <.input
+          field={@form[:folder]}
+          type="select"
+          label="Folder tasks"
+          options={FormOptions.finalize_modes(:folder)}
+        />
+        <.input
+          field={@form[:commit_path]}
+          label="Artifact path"
+          placeholder={CodeLead.Projects.default_commit_path()}
+        />
+
+        <p class="mb-4 text-[12px] leading-relaxed text-text3">
+          Merge and squash push straight to the repository's default branch and then delete the
+          feature branch — a protected branch will refuse that, so use Pull request there.
+          <em>Commit to path</em>
+          lands a folder task's artifact in <code>&lt;path&gt;/task-&lt;id&gt;-&lt;slug&gt;/</code>
+          on its own branch. A task can override any of this on its own page.
+        </p>
+
+        <div class="flex justify-end">
+          <.button variant="primary" type="submit" phx-disable-with="Saving…">
+            Save defaults
+          </.button>
         </div>
       </.form>
     </.section_card>

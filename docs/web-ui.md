@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-11)
+# Web UI (last updated: 2026-08-12)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -17,7 +17,8 @@ what exists today.
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
 | `/settings/agents` | `CodeLeadWeb.SettingsLive.Agents` | org agents; `/new` and `/:id/edit` |
 | `/settings/projects` | `CodeLeadWeb.SettingsLive.Projects` | list; `/new` |
-| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, repositories, env store, default reviewers |
+| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, repositories, env store, default reviewers |
+| `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
 | `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings |
 
@@ -26,9 +27,12 @@ The project detail page also carries four patch-based sub-routes:
 and `/env/:key/edit`. `/settings/projects/new` is declared **before**
 `/settings/projects/:id` so the literal is not swallowed by the param.
 
-All of the above except `/setup` and `/users/log-in` live in
-`live_session :require_authenticated_user` behind both the setup gate and
-the auth gate — see [`setup-and-auth.md`](setup-and-auth.md). All of them
+All of the above except `/setup`, `/users/log-in` and the artifact
+download live in `live_session :require_authenticated_user` behind both
+the setup gate and the auth gate. The artifact download is a
+**controller** route, which cannot live inside a `live_session`, so it
+sits in the same authenticated scope beside `post
+/users/update-password` — same pipeline, same gates — see [`setup-and-auth.md`](setup-and-auth.md). All of them
 render the same sidebar from the `@nav` map assigned by
 `CodeLeadWeb.NavContext` — see [`navigation.md`](navigation.md).
 
@@ -205,7 +209,24 @@ Plain assigns (whole-board reload); `Tasks.subscribe_board/1` +
 (tasks waiting on a future `scheduled_at` are excluded from the
 numbering — they are not in line behind anything).
 No drag & drop — explicit Start (planning footer) and Archive (done
-footer) actions. The planning footer's Start is a split control: the
+footer) actions. It was considered and turned down. A board move here is
+not the harmless reordering it is in a generic issue tracker: every edge
+fires automation and encodes a human decision — Planning→Running
+dispatches an agent, Review→Planning discards the worktree, branch, and
+session, Review→Done commits, pushes and then opens a PR or merges the
+branch outright, depending on the task's finalize mode. The moves that
+would most want a gesture are also the ones you cannot decide from a
+card — judging a review means reading the diff and the verdicts, so you
+are on the task page already, where `header_actions/1` carries the full
+set. What is left is the fast, obvious moves, and those already have
+per-edge buttons on the card. A generic move gesture would only add a
+second, weaker trigger for transitions that deserve a deliberate one.
+A done card whose finalizer produced a forge link also
+shows it (`<card_id>-forge-link`), labelled PR / MR / Commit / Compare
+from `tasks.pr_url_kind` — the URL comes off the task, not from
+`board_ctx`. A done `:folder` task shows a **Download**
+(`<card_id>-artifact-link`) instead; a card never has both, which is
+what the single `ml-auto` in the footer assumes. The planning footer's Start is a split control: the
 clock button opens the shared `schedule_modal` and starts the run at a
 chosen UTC time instead of now. A queued task with a future
 `scheduled_at` shows `⏱ starts …` in place of the `⏸ queued · #N`
@@ -228,20 +249,68 @@ Header actions are chosen by `{state, run_state}` plus a precomputed
 opening the shared `schedule_modal`) alongside **Start run**, and a
 queued task whose start time has not arrived offers **Run now**
 (`#action-run-now`, `Runtime.run_now/1`) beside Cancel run. A
-`#scheduled-hint` badge next to the state badge shows the start time.
+`#scheduled-hint` badge next to the state badge shows the start time. A
+done task carrying a forge link renders **Open PR / MR / Commit /
+Compare** (`#action-open-pr`, from `tasks.pr_url`/`pr_url_kind`) left of
+**Archive**, as an external `<.button href=… target="_blank">`; a done
+`:folder` task also gets **Download** (`#action-download-artifact`).
+
+In Review the primary button is labelled from the task's **resolved
+finalize mode** — *Approve & open PR* / *& merge* / *& squash merge* /
+*& hand over* / *& commit artifact* — via `Format.finalize_action/2`,
+with `Format.finalize_hint/2` as its tooltip. `#action-approve` stays a
+single button whatever the mode; the mode itself is picked on the Task
+tab, not in the bar. The `forge_known?` flag it takes is precomputed in
+`load_task/1` (`Git.forge(git_url) != :other`), because a remote with no
+forge convention can be pushed to but not opened a PR on — there the
+label reads *Approve & push branch*.
+One `header_actions/1` clause feeds both the desktop toolbar and the
+mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
 
 - **Task tab** — attention banner (with Allow/Deny when a permission
-  `ref` is stored), description/spec (edit form in planning via
-  `planning_changeset`), planning-assistant chat
-  (`Planning.send_message/3` is synchronous → `start_async`;
-  assistant = first `llm_api` agent of the project), timeline
+  `ref` is stored; Answer/Skip when a question one is — Answer patches
+  to the Agent tab rather than duplicating the form, Skip declines in
+  place. Both stay hidden without a `ref`, which is how an advisory
+  run's unanswerable escalation renders), description/spec (edit form in planning via
+  `planning_changeset`; edit mode is the `editing?` assign toggled by
+  `toggle_edit`, not a `JS.toggle` — a save or a background re-render
+  would otherwise leave the form open over stale values, and
+  `load_task/1` conversely leaves an open form's contents alone),
+  the planning surface (`#planner-form` selects
+  a `:plan` agent from `Agents.eligible_planners/2`; an `:llm_api` pick
+  shows `#chat-form` — `Planning.send_message/3` is synchronous →
+  `start_async` — and an `:acp` pick swaps in `#run-survey`, which
+  fires `Planning.start_survey/2` and waits for `{:survey_completed, _}`
+  on the task topic; survey turns render with a provenance label. The
+  selected planner lives in the socket, not on the task — see
+  [`planning.md`](planning.md)), timeline
   (`Tasks.steps/1` on a vertical rail, opened by a `timeline_start`
   node synthesized from `task.inserted_at` — no `:created` step row
   exists; every timestamp carries a UTC `title` that the `.LocalTime`
   colocated hook rewrites to the viewer's zone),
   executor/reviewer selection (planning) or verdict
-  list, per-run cost/token/duration rows (`Costs.task_runs/1`, with the
-  token split on hover).
+  list, the target card, per-run cost/token/duration rows
+  (`Costs.task_runs/1`, with the token split on hover).
+  The **execution shape** — work type, target, repository — is editable
+  only in Planning, and is split across two surfaces: work type is a
+  select in `#task-edit-form` (it stays a chip in the read view), while
+  target and repository live in `#target-card` on the rail between
+  Executor and Cost. `#target-form` is a bare `phx-change` form like
+  `#executor-form`, so `set_target` saves on every change with no Save
+  button; the repository select only appears for a `:repo` target, and
+  switching to `:folder` leaves `repository_id` alone because the
+  `:commit_to_path` finalize mode still uses it. Outside Planning the
+  card turns into read-only rows plus the branch name. The same card
+  carries the **On approve** selector (`#finalize-form`, another bare
+  `phx-change` form) until the task is Done: its first option is
+  *Project default · \<mode\>* with an empty value, so clearing the
+  override is distinguishable from choosing the project's current mode.
+  A done `:folder` task shows its download here too
+  (`#task-artifact-link`). Both surfaces go through
+  `Tasks.update_task/2`, which re-normalizes a Planning edit: a `:repo`
+  target with no repository falls back to the project's first one, and a
+  new work type drops an executor that is no longer eligible and
+  re-prefills the reviewer set from the project defaults.
 - **Agent tab** — the executor transcript from `AgentFeed.list_run/2`
   (the current run; "Show earlier runs" switches to `list_all/2`), never
   from task steps. `CodeLeadWeb.TaskLive.AgentFeedBlocks.fold/2` groups
@@ -256,8 +325,34 @@ queued task whose start time has not arrived offers **Run now**
   `{:task_event, _, {:message_chunk, _}}` appends to it cheaply; the row
   broadcast replaces that text wholesale and is always authoritative.
   Permission Allow/Deny render only while the run is executing and the
-  row has no `data["resolved"]`. Composer is disabled: the ACP driver's
-  mid-run `send_message` is a stub.
+  row has no `data["resolved"]` — `answerable?/2`, which a `:question`
+  row shares. Composer is disabled: the ACP driver's mid-run
+  `send_message` is a stub.
+
+  Tool rows read `label: detail`, and the detail is shortened against the
+  run's working directory (`context_root/1` — the worktree for a `:repo`
+  task, the task folder for a `:folder` one) via
+  `Format.project_path/2`. A path with no leading slash is therefore
+  inside the project; one still absolute is the signal that the agent
+  reached outside it. Only `data["locations"]` and absolute
+  `data["input"]` values are rewritten — command strings are free text
+  and left verbatim. The stored event keeps the absolute path, which the
+  ACP sandbox check depends on.
+
+  A `:question` row is the one entry a human acts on directly, so it
+  renders the agent's own form rather than a message: `#…-answer-form`
+  holds a radio group per single-select field (checkboxes for
+  multi-select, each option showing its label and description), a text
+  input for the free-text and "Other" fields, and `#…-answer` /
+  `#…-skip`. The `ref` travels in a hidden input because `phx-value-*`
+  does not survive a submit, and the form is a plain `<form>` rather
+  than `<.form>` — there is no changeset behind a question and a per-row
+  form assign would have to survive every stream reset for nothing.
+  `answer_question` submits, `skip_question` declines; both go through
+  `Runtime.answer_question/3`. Once resolved the form is replaced by the
+  recorded answers plus an Answered/Skipped/Cancelled chip — and only
+  answers that reached the agent are listed, since a typed "Other"
+  supersedes its selection before the row is written.
 
   Visual weight goes to the prose, not the machinery: a `:message` block
   is a bordered `surface` card with markdown at 13px, while a tool group
@@ -308,8 +403,9 @@ queued task whose start time has not arrived offers **Run now**
 
   **Follow mode** (`following?`) is offered while `run_state` is
   `:executing`. `follow_path` tracks `data["locations"]` from tool-call
-  rows (relativized against the worktree) even while off, so engaging it
-  lands immediately. A refresh re-focuses that file only when it differs
+  rows (relativized against the worktree by `Format.project_path/2`,
+  which the Agent tab shares) even while off, so engaging it lands
+  immediately. A refresh re-focuses that file only when it differs
   from `follow_anchor` — re-anchoring every 1.5s would drag the viewport
   back through consecutive edits of one file.
 

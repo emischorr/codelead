@@ -15,6 +15,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Projects.Repository
+  alias CodeLead.Tasks.Task
   alias CodeLeadWeb.FlashMessages
   alias CodeLeadWeb.FormOptions
   alias CodeLeadWeb.SettingsLive.ProjectSections
@@ -27,6 +28,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
      socket
      |> assign(page_title: project.name, project: project)
      |> assign_details_form(%{})
+     |> assign_finalize_form()
      |> load_project()}
   end
 
@@ -84,6 +86,22 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
       {:error, changeset} ->
         {:noreply, assign(socket, details_form: to_form(changeset, as: "project"))}
+    end
+  end
+
+  ## Finalize defaults
+
+  def handle_event("save_finalize", %{"finalize" => params}, socket) do
+    case Projects.put_finalize_defaults(socket.assigns.project, params) do
+      {:ok, project} ->
+        {:noreply,
+         socket
+         |> assign(project: project)
+         |> put_flash(:info, "Approve defaults updated.")
+         |> assign_finalize_form()}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save the approve defaults.")}
     end
   end
 
@@ -173,6 +191,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
       <div class="mx-auto flex w-full max-w-4xl flex-col gap-3.5 p-4 sm:p-6">
         <ProjectSections.details form={@details_form} />
+        <ProjectSections.finalize form={@finalize_form} />
         <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
         <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
         <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
@@ -289,6 +308,26 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
     assign(socket, details_form: to_form(changeset, as: "project"))
   end
+
+  # A plain map form, not a changeset: these live in the project's
+  # jsonb `settings` and are written through `put_finalize_defaults/2`,
+  # which merges rather than replacing the column.
+  defp assign_finalize_form(socket) do
+    defaults = Projects.finalize_defaults(socket.assigns.project.id)
+
+    params = %{
+      "repo" => mode_value(defaults.repo, :repo),
+      "folder" => mode_value(defaults.folder, :folder),
+      "commit_path" => defaults.commit_path
+    }
+
+    assign(socket, finalize_form: to_form(params, as: "finalize"))
+  end
+
+  # An unset default still has to select something, so the select shows
+  # the built-in the finalizer would fall back to.
+  defp mode_value(nil, target), do: to_string(Task.default_finalize_mode(target))
+  defp mode_value(mode, _target), do: to_string(mode)
 
   defp assign_env_form(socket, key, params, errors \\ []) do
     socket

@@ -70,6 +70,17 @@ defmodule CodeLead.WorkflowTest do
                Workflow.fetch_transition(workflow, :review, :planning)
     end
 
+    test "review → done keeps the worktree; pruning is a finalize outcome, not an edge policy" do
+      # Done *does* prune the worktree, which makes `:discard` look right
+      # here. It is not: the policy fires before the finalizer has run, so
+      # it cannot know whether the merge succeeded or which mode ran, and
+      # on a `:folder` target it would delete the artifact Done just
+      # produced. See architecture spec §4.1 and
+      # `CodeLead.Runtime.StageEffects.prune_context/2`.
+      assert {:ok, %{worktree_policy: :keep}} =
+               Workflow.fetch_transition(Workflow.built_in(), :review, :done)
+    end
+
     test "moves outside the graph do not resolve" do
       workflow = Workflow.built_in()
 

@@ -8,12 +8,16 @@ defmodule CodeLead.Reviews do
   advisory: nothing gates the human decision. When the cycle completes
   the task gets `attention: :review_ready`.
 
+  The run itself is `CodeLead.AdvisoryRun` — the same read-only
+  primitive the planning survey uses. This module owns only the
+  artifact, the prompt, the verdict, and the rows.
+
   Review runs are cost-tracked but not budget-held.
   """
 
   import Ecto.Query
 
-  alias CodeLead.AgentDriver
+  alias CodeLead.AdvisoryRun
   alias CodeLead.Agents.Agent
   alias CodeLead.Costs
   alias CodeLead.Executor.Context
@@ -24,7 +28,11 @@ defmodule CodeLead.Reviews do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
 
-  @review_timeout :timer.minutes(15)
+  # The run's own deadline is the shorter one on purpose: it cancels
+  # the driver and still records a review row, where the outer stream
+  # timeout only kills the child.
+  @review_run_timeout :timer.minutes(15)
+  @review_timeout :timer.minutes(16)
   @artifact_char_limit 60_000
 
   @doc """
@@ -125,9 +133,14 @@ defmodule CodeLead.Reviews do
     prompt = review_prompt(task, artifact)
     context = review_context(task, reviewer)
 
-    driver = AgentDriver.impl(reviewer)
-    {:ok, handle} = driver.start_run(task, reviewer, context, prompt)
-    result = await_result(handle)
+    result =
+      case AdvisoryRun.run(task, reviewer, context, prompt, timeout: @review_run_timeout) do
+        {:ok, result} ->
+          result
+
+        {:error, reason} ->
+          %{status: :error, content: "review failed: #{inspect(reason)}", usage: nil}
+      end
 
     {verdict, findings} =
       case result do
@@ -164,22 +177,6 @@ defmodule CodeLead.Reviews do
     review = record_review(task, reviewer, cycle, verdict, findings, step.id)
     broadcast(task, {:review_completed, %{agent: reviewer.name, verdict: verdict}})
     review
-  end
-
-  defp await_result(handle, content_acc \\ "") do
-    receive do
-      {:agent_event, ^handle, {:result, result}} ->
-        Map.update(result, :content, content_acc, fn
-          nil -> content_acc
-          content -> content
-        end)
-
-      {:agent_event, ^handle, {:message_chunk, text}} ->
-        await_result(handle, content_acc <> text)
-
-      {:agent_event, ^handle, _other} ->
-        await_result(handle, content_acc)
-    end
   end
 
   defp record_review(task, reviewer, cycle, verdict, findings, step_id) do

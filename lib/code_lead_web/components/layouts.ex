@@ -455,6 +455,9 @@ defmodule CodeLeadWeb.Layouts do
     """
   end
 
+  # `spend` is month-to-date (`Costs.project_spend_month/1`) because the
+  # limit it is measured against runs on the calendar month too — the
+  # headline names that month.
   attr :id, :string, required: true
   attr :spend, :map, required: true
   attr :budget_limit_cents, :integer, default: nil

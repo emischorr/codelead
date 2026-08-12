@@ -134,6 +134,26 @@ defmodule CodeLead.CostsTest do
       assert Costs.project_spend(project.id) == %{tokens: 450, cost_cents: 8}
       assert Costs.task_spend(task.id) == %{tokens: 450, cost_cents: 8}
       assert Costs.org_spend().tokens >= 450
+
+      # today is always inside the current month, whatever the date
+      assert Costs.project_spend_month(project.id) == %{tokens: 450, cost_cents: 8}
+      assert Costs.org_spend_month().tokens >= 450
+    end
+
+    test "lifetime spend keeps days the rollup has not reached yet" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+
+      record!(task,
+        started_at: DateTime.add(DateTime.utc_now(:second), -2, :day),
+        prompt: 10,
+        completion: 5,
+        cost_cents: 1
+      )
+
+      record!(task, prompt: 100, completion: 50, cost_cents: 4)
+
+      assert Costs.project_spend(project.id) == %{tokens: 165, cost_cents: 5}
     end
   end
 
@@ -188,6 +208,21 @@ defmodule CodeLead.CostsTest do
       record!(task, cost_cents: 10)
 
       assert {:hold, :budget} = Costs.check_budget(project.id)
+    end
+
+    test "ignores spend from an earlier month" do
+      project = project_fixture()
+      {:ok, _} = CodeLead.Projects.update_project(project, %{budget_limit_cents: 10})
+
+      Repo.insert!(%DailyMetric{
+        project_id: project.id,
+        date: Date.add(Date.beginning_of_month(Date.utc_today()), -1),
+        total_tokens: 5_000,
+        cost_cents: 500,
+        run_count: 3
+      })
+
+      assert :ok = Costs.check_budget(project.id)
     end
 
     test "holds when the org token limit is reached" do

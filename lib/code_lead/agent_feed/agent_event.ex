@@ -9,8 +9,14 @@ defmodule CodeLead.AgentFeed.AgentEvent do
   `text` carries the human-readable body (message text, tool title,
   question, failure detail); `data` carries the string-keyed extras
   (`"status"`, `"tool_kind"`, `"locations"`, `"input"`, `"resolved"`,
-  `"cost_cents"`, `"tokens"`). `streaming` marks the message row the
-  runner is still appending to.
+  `"cost_cents"`, `"tokens"`, and on a `:question` row the `"fields"`
+  the human is asked to fill plus the `"answers"` that went back).
+  `streaming` marks the message row the runner is still appending to.
+
+  `data` is a jsonb column and only its top level is stringified on
+  write, so anything nested — a question's fields — must be written
+  string-keyed by the producer or a live viewer and a reload will
+  disagree.
   """
 
   use Ecto.Schema

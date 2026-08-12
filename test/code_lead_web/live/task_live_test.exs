@@ -77,6 +77,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       {:ok, view, _html} = live(conn, task_path(project, task))
 
+      view |> element("#toggle-edit") |> render_click()
+
       view
       |> form("#task-edit-form",
         task: %{description: "New description", spec: "New acceptance criteria"}
@@ -85,6 +87,75 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert render(view) =~ "New description"
       assert render(view) =~ "New acceptance criteria"
+    end
+
+    test "saving closes edit mode, cancelling discards the changes", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{description: "Original"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      refute has_element?(view, "#task-edit-form")
+      view |> element("#toggle-edit") |> render_click()
+      assert has_element?(view, "#task-edit-form")
+      refute has_element?(view, "#task-description-view")
+
+      view |> form("#task-edit-form", task: %{description: "Saved"}) |> render_submit()
+
+      refute has_element?(view, "#task-edit-form")
+      assert has_element?(view, "#task-description-view")
+
+      view |> element("#toggle-edit") |> render_click()
+      view |> form("#task-edit-form", task: %{description: "Abandoned"}) |> render_change()
+      view |> element("#cancel-edit") |> render_click()
+
+      refute has_element?(view, "#task-edit-form")
+      assert render(view) =~ "Saved"
+      assert Tasks.get_task!(task.id).description == "Saved"
+    end
+
+    test "the edit form changes the work type", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#toggle-edit") |> render_click()
+      view |> form("#task-edit-form", task: %{work_type: "content"}) |> render_submit()
+
+      assert Tasks.get_task!(task.id).work_type == :content
+    end
+
+    test "the target form changes target and repository", %{conn: conn} do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      task = task_fixture(project.id, %{work_type: :content, target: :folder})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#target-form") |> render_change(%{"target" => "repo"})
+
+      # A repo target with no repository falls back to the project's first.
+      assert %{target: :repo, repository_id: repository_id} = Tasks.get_task!(task.id)
+      assert repository_id == repository.id
+
+      other = repository_fixture(project.id)
+
+      view
+      |> element("#target-form")
+      |> render_change(%{"target" => "repo", "repository_id" => to_string(other.id)})
+
+      assert Tasks.get_task!(task.id).repository_id == other.id
+    end
+
+    test "the target box is read-only outside planning", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :review})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#target-card")
+      refute has_element?(view, "#target-form")
     end
 
     test "selecting an executor persists it", %{conn: conn} do
@@ -114,6 +185,94 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert [%{id: reviewer_id}] = Tasks.reviewers(task.id)
       assert reviewer_id == reviewer.id
+    end
+  end
+
+  describe "planning agent selection" do
+    test "an llm_api planner offers the chat, not the survey", %{conn: conn} do
+      project = project_fixture()
+      _coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#planner-form")
+      assert has_element?(view, "#chat-form")
+      refute has_element?(view, "#run-survey")
+    end
+
+    test "selecting an acp planner swaps the chat for the survey action", %{conn: conn} do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+
+      surveyor =
+        agent_fixture(%{
+          roles: [:plan],
+          work_type: :code,
+          driver: :acp,
+          harness: :claude_code,
+          name: "Surveyor #{System.unique_integer([:positive])}"
+        })
+
+      task = task_fixture(project.id, %{target: :repo, repository_id: repository.id})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      # Whichever planner sorts first, switching to the ACP one is what
+      # exposes the repo-aware action.
+      view |> element("#planner-form") |> render_change(%{"agent_id" => to_string(coach.id)})
+      refute has_element?(view, "#run-survey")
+
+      view |> element("#planner-form") |> render_change(%{"agent_id" => to_string(surveyor.id)})
+      assert has_element?(view, "#run-survey")
+      refute has_element?(view, "#chat-form")
+    end
+
+    test "no planner for the work type leaves the chat disabled", %{conn: conn} do
+      project = project_fixture()
+      _content_planner = agent_fixture(%{roles: [:plan], work_type: :content})
+      task = task_fixture(project.id, %{work_type: :code})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#planner-form")
+      assert render(view) =~ "No planning agents for this work type"
+    end
+
+    test "a completed survey renders as a labelled turn", %{conn: conn} do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      surveyor =
+        agent_fixture(%{
+          roles: [:plan],
+          work_type: :code,
+          driver: :acp,
+          harness: :claude_code
+        })
+
+      task = task_fixture(project.id, %{target: :repo, repository_id: repository.id})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      CodeLead.Repo.insert!(%CodeLead.Planning.PlanningMessage{
+        task_id: task.id,
+        agent_id: surveyor.id,
+        role: :assistant,
+        kind: :survey,
+        content: "Gap: the spec never says what happens on payment failure."
+      })
+
+      send(
+        view.pid,
+        {:task_event, task.id, {:survey_completed, %{agent: surveyor.name, status: :ok}}}
+      )
+
+      html = render(view)
+      assert html =~ "payment failure"
+      assert html =~ "Repo survey"
+      assert html =~ surveyor.name
     end
   end
 
@@ -208,6 +367,170 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "finalize mode" do
+    defp reviewable_repo_task do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = task |> executing_task() |> put_context!(%{state: :review, run_state: :idle})
+      %{task: task, project: project}
+    end
+
+    test "the approve button states what it will actually do", %{conn: conn} do
+      %{task: task, project: project} = reviewable_repo_task()
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      # A file:// origin has no forge convention, so a PR is not on offer.
+      assert render(element(view, "#action-approve")) =~ "Approve &amp; push branch"
+    end
+
+    test "the project default changes the button", %{conn: conn} do
+      %{task: task, project: project} = reviewable_repo_task()
+      {:ok, _project} = CodeLead.Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert render(element(view, "#action-approve")) =~ "Approve &amp; merge"
+    end
+
+    test "a task override beats the project default and clears back to it", %{conn: conn} do
+      %{task: task, project: project} = reviewable_repo_task()
+      {:ok, _project} = CodeLead.Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      view |> form("#finalize-form", %{finalize_mode: "squash"}) |> render_change()
+
+      assert Tasks.get_task!(task.id).finalize_mode == :squash
+      assert render(element(view, "#action-approve")) =~ "Approve &amp; squash merge"
+
+      view |> form("#finalize-form", %{finalize_mode: ""}) |> render_change()
+
+      assert Tasks.get_task!(task.id).finalize_mode == nil
+      assert render(element(view, "#action-approve")) =~ "Approve &amp; merge"
+    end
+
+    test "a folder task is never offered a merge", %{conn: conn} do
+      project = project_fixture()
+      agent = agent_fixture(%{driver: :llm_api, work_type: :content, roles: [:execute]})
+
+      task =
+        project.id
+        |> task_fixture(%{work_type: :content, target: :folder, agent_id: agent.id})
+        |> put_context!(%{state: :review, run_state: :idle})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert render(element(view, "#action-approve")) =~ "Approve &amp; hand over"
+
+      html = render(element(view, "#finalize-form"))
+      assert html =~ "commit_to_path"
+      refute html =~ ~s(value="merge")
+    end
+
+    test "the selector is gone once the task is done", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :done})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      refute has_element?(view, "#finalize-form")
+    end
+  end
+
+  describe "done actions" do
+    test "the forge link opens the pull request in a new tab", %{conn: conn} do
+      project = project_fixture()
+
+      task =
+        task_fixture(project.id)
+        |> put_context!(%{
+          state: :done,
+          pr_url: "https://github.com/acme/site/pull/7",
+          pr_url_kind: :pull_request
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(
+               view,
+               ~s(#action-open-pr[href="https://github.com/acme/site/pull/7"][target="_blank"])
+             )
+
+      assert render(element(view, "#action-open-pr")) =~ "PR"
+      assert has_element?(view, "#action-archive")
+    end
+
+    test "a compare fallback is labelled as such", %{conn: conn} do
+      project = project_fixture()
+
+      task =
+        task_fixture(project.id)
+        |> put_context!(%{
+          state: :done,
+          pr_url: "https://github.com/acme/site/compare/main...topic",
+          pr_url_kind: :compare
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert render(element(view, "#action-open-pr")) =~ "Compare"
+    end
+
+    test "no link is shown when the finalizer produced none", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :done})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      refute has_element?(view, "#action-open-pr")
+      assert has_element?(view, "#action-archive")
+    end
+
+    test "a merged task links its commit", %{conn: conn} do
+      project = project_fixture()
+
+      task =
+        task_fixture(project.id)
+        |> put_context!(%{
+          state: :done,
+          pr_url: "https://github.com/acme/site/commit/abc123",
+          pr_url_kind: :commit
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert render(element(view, "#action-open-pr")) =~ "Commit"
+    end
+
+    test "a folder task offers its artifact for download", %{conn: conn} do
+      project = project_fixture()
+      agent = agent_fixture(%{driver: :llm_api, work_type: :content, roles: [:execute]})
+
+      task =
+        project.id
+        |> task_fixture(%{work_type: :content, target: :folder, agent_id: agent.id})
+        |> put_context!(%{state: :done})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      href = ~p"/projects/#{project.id}/tasks/#{task.id}/artifact"
+      assert has_element?(view, ~s(#action-download-artifact[href="#{href}"]))
+      assert has_element?(view, ~s(#task-artifact-link[href="#{href}"]))
+    end
+
+    test "a repo task explains that its worktree was pruned", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      task =
+        task
+        |> put_context!(%{state: :done, branch_name: "codelead/task-9", worktree_path: nil})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "diff"))
+
+      assert render(view) =~ "pruned when this task was finalized"
+    end
+  end
+
   describe "attention" do
     test "shows the banner with detail", %{conn: conn} do
       project = project_fixture()
@@ -218,6 +541,25 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert render(view) =~ "Agent asks"
       assert render(view) =~ "Which retention window?"
+
+      # no ref means nothing to answer against — an advisory run raises
+      # exactly this shape
+      refute has_element?(view, "#banner-answer-question")
+      refute has_element?(view, "#banner-skip-question")
+    end
+
+    test "a question with a ref routes the human to the form", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
+      {:ok, task} = Tasks.set_attention(task, :agent_question, "Which one?", ref: "80")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#banner-skip-question")
+
+      view |> element("#banner-answer-question") |> render_click()
+
+      assert_patched(view, task_path(project, task, "agent"))
     end
   end
 
@@ -447,6 +789,54 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert view |> render() |> String.split("git status --short") |> length() == 2
     end
 
+    test "tool paths render relative to the worktree, outside ones stay absolute", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      worktree = "/w/worktrees/task-#{task.id}"
+      task = put_context!(task, %{worktree_path: worktree})
+
+      inside =
+        feed_row(task,
+          kind: :tool_call,
+          text: "Read docs/trap-entries.md",
+          data: %{"locations" => [Path.join(worktree, "docs/trap-entries.md")]}
+        )
+
+      outside =
+        feed_row(task,
+          kind: :tool_call,
+          text: "Read passwd",
+          data: %{"locations" => ["/etc/passwd"]}
+        )
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+      html = render(view)
+
+      assert has_element?(view, block_id(inside))
+      refute has_element?(view, block_id(outside))
+      refute html =~ worktree
+      assert html =~ "docs/trap-entries.md"
+      # a path the agent reached outside the project keeps its leading slash
+      assert html =~ "/etc/passwd"
+    end
+
+    test "an absolute path in a tool's input is shortened too", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      worktree = "/w/worktrees/task-#{task.id}"
+      task = put_context!(task, %{worktree_path: worktree})
+
+      feed_row(task,
+        kind: :tool_call,
+        text: "Write",
+        data: %{"input" => %{"file_path" => Path.join(worktree, "docs/new.md")}}
+      )
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+      html = render(view)
+
+      refute html =~ worktree
+      assert html =~ "docs/new.md"
+    end
+
     test "live chunks render in the live pane until the row is finalized", ctx do
       %{conn: conn, project: project, task: task} = ctx
 
@@ -484,6 +874,107 @@ defmodule CodeLeadWeb.TaskLiveTest do
       send(view.pid, {:agent_feed, task.id, resolved})
 
       refute has_element?(view, "#{block_id(row)}-grant")
+    end
+
+    defp question_row(task, attrs \\ []) do
+      feed_row(
+        task,
+        Enum.into(attrs, %{
+          kind: :question,
+          text: "Which approach should I take?",
+          external_id: "80",
+          data: %{
+            "fields" => [
+              %{
+                "key" => "question_0",
+                "label" => "Approach",
+                "description" => nil,
+                "type" => "select",
+                "required" => false,
+                "custom_for" => nil,
+                "options" => [
+                  %{
+                    "value" => "Refactor first",
+                    "label" => "Refactor first",
+                    "description" => "Clean up, then build"
+                  },
+                  %{"value" => "Ship it", "label" => "Ship it", "description" => nil}
+                ]
+              },
+              %{
+                "key" => "question_0_custom",
+                "label" => "Other",
+                "description" => "Type your own answer",
+                "type" => "text",
+                "required" => false,
+                "custom_for" => "question_0",
+                "options" => []
+              }
+            ]
+          }
+        })
+      )
+    end
+
+    test "an unanswered question renders the agent's own options as a form", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = question_row(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      assert has_element?(view, "#{block_id(row)}-answer-form")
+      assert has_element?(view, "#{block_id(row)}-answer")
+      assert has_element?(view, "#{block_id(row)}-skip")
+
+      # one control per option the agent offered, plus its free-text box
+      assert has_element?(view, "#{block_id(row)} #agent-block-#{row.id}-question_0-0")
+      assert has_element?(view, "#{block_id(row)} #agent-block-#{row.id}-question_0-1")
+      assert has_element?(view, "#{block_id(row)} #agent-block-#{row.id}-question_0_custom")
+
+      assert render(view) =~ "Clean up, then build"
+    end
+
+    test "an answered question shows the answer and drops the form", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = question_row(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+      assert has_element?(view, "#{block_id(row)}-answer-form")
+
+      resolved =
+        AgentFeed.update_event(row, %{
+          data: %{"resolved" => "answered", "answers" => %{"question_0" => "Ship it"}}
+        })
+
+      send(view.pid, {:agent_feed, task.id, resolved})
+
+      refute has_element?(view, "#{block_id(row)}-answer-form")
+      assert render(view) =~ "Ship it"
+      assert render(view) =~ "Answered"
+    end
+
+    test "a question is no longer answerable once the run stops", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = question_row(task)
+      put_context!(task, %{state: :review, run_state: :idle})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      refute has_element?(view, "#{block_id(row)}-answer-form")
+    end
+
+    test "submitting with no runner alive reports the failure instead of crashing", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = question_row(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      html =
+        view
+        |> form("#{block_id(row)}-answer-form", %{"answer" => %{"question_0" => "Ship it"}})
+        |> render_submit()
+
+      assert html =~ "Couldn&#39;t send the answer"
     end
   end
 

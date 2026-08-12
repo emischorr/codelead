@@ -50,6 +50,58 @@ defmodule CodeLead.TasksTest do
       assert task.work_type == :content
     end
 
+    test "a new work type drops an ineligible executor and re-prefills reviewers" do
+      project = project_fixture()
+      code_executor = agent_fixture(%{roles: [:execute], work_type: :code})
+      code_reviewer = agent_fixture(%{roles: [:review], work_type: :code})
+      content_reviewer = agent_fixture(%{roles: [:review], work_type: :content})
+      :ok = Agents.set_default_reviewers(project.id, :code, [code_reviewer.id])
+      :ok = Agents.set_default_reviewers(project.id, :content, [content_reviewer.id])
+
+      task = task_fixture(project.id, %{work_type: :code, agent_id: code_executor.id})
+      assert [%{id: id}] = Tasks.reviewers(task.id)
+      assert id == code_reviewer.id
+
+      assert {:ok, task} = Tasks.update_task(task, %{work_type: :content})
+
+      assert task.agent_id == nil
+      assert [%{id: id}] = Tasks.reviewers(task.id)
+      assert id == content_reviewer.id
+    end
+
+    test "a new work type keeps an executor that stays eligible" do
+      project = project_fixture()
+      executor = agent_fixture(%{roles: [:execute], work_type: :code})
+      task = task_fixture(project.id, %{work_type: :code, agent_id: executor.id})
+
+      assert {:ok, task} = Tasks.update_task(task, %{priority: :high})
+
+      assert task.agent_id == executor.id
+    end
+
+    test "a work type without default reviewers clears the stale set" do
+      project = project_fixture()
+      code_reviewer = agent_fixture(%{roles: [:review], work_type: :code})
+      :ok = Agents.set_default_reviewers(project.id, :code, [code_reviewer.id])
+      task = task_fixture(project.id, %{work_type: :code})
+
+      assert {:ok, task} = Tasks.update_task(task, %{work_type: :content, target: :folder})
+
+      assert Tasks.reviewers(task.id) == []
+    end
+
+    test "switching to a repo target picks the project's first repository" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      task = task_fixture(project.id, %{work_type: :content})
+      assert task.repository_id == nil
+
+      assert {:ok, task} = Tasks.update_task(task, %{target: :repo})
+
+      assert task.target == :repo
+      assert task.repository_id == repository.id
+    end
+
     test "after planning the execution shape is locked" do
       %{task: task} = runnable_task_fixture()
       {:ok, task} = Tasks.move_to_running(task)
@@ -86,6 +138,70 @@ defmodule CodeLead.TasksTest do
     end
   end
 
+  describe "finalize_mode/1" do
+    test "defaults per target when neither task nor project names one" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      repo_task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id
+        })
+
+      folder_task = task_fixture(project.id, %{work_type: :content, target: :folder})
+
+      assert Tasks.finalize_mode(repo_task) == :pull_request
+      assert Tasks.finalize_mode(folder_task) == :artifact
+    end
+
+    test "the project default applies, and a task override beats it" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      {:ok, _project} = CodeLead.Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id
+        })
+
+      assert Tasks.finalize_mode(task) == :merge
+
+      {:ok, task} = Tasks.set_finalize_mode(task, "squash")
+      assert Tasks.finalize_mode(task) == :squash
+    end
+
+    test "clearing the override follows the project again, including later changes" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id
+        })
+
+      {:ok, task} = Tasks.set_finalize_mode(task, "squash")
+      {:ok, task} = Tasks.set_finalize_mode(task, "")
+      assert task.finalize_mode == nil
+
+      {:ok, _project} = CodeLead.Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+      assert Tasks.finalize_mode(task) == :merge
+    end
+
+    test "rejects a mode the task's target cannot use" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content, target: :folder})
+
+      assert {:error, changeset} = Tasks.set_finalize_mode(task, "merge")
+      assert "is invalid" in errors_on(changeset).finalize_mode
+    end
+  end
+
   describe "planning → running guards" do
     test "requires an executor" do
       project = project_fixture()
@@ -104,6 +220,17 @@ defmodule CodeLead.TasksTest do
 
       assert task.repository_id == nil
       assert {:error, :missing_repository} = Tasks.move_to_running(task)
+    end
+
+    test "a plan-role agent does not satisfy the executor guard" do
+      project = project_fixture()
+      repository_fixture(project.id)
+      planner = agent_fixture(%{roles: [:plan], work_type: :code})
+      task = task_fixture(project.id, %{work_type: :code})
+
+      # Surveying is not executing: the guard stays keyed on :execute.
+      assert {:error, :executor_ineligible} = Tasks.set_executor(task, planner.id)
+      assert {:error, :no_executor} = Tasks.move_to_running(task)
     end
 
     test "rejects an executor that lost eligibility" do

@@ -138,6 +138,63 @@ defmodule CodeLead.ProjectsTest do
     end
   end
 
+  describe "finalize defaults" do
+    test "falls back to nil modes and the built-in commit path" do
+      project = project_fixture()
+
+      assert Projects.finalize_defaults(project.id) == %{
+               repo: nil,
+               folder: nil,
+               commit_path: Projects.default_commit_path()
+             }
+    end
+
+    test "round-trips the stored modes" do
+      project = project_fixture()
+
+      {:ok, _project} =
+        Projects.put_finalize_defaults(project, %{
+          "repo" => "squash",
+          "folder" => "commit_to_path",
+          "commit_path" => "artifacts/generated"
+        })
+
+      assert Projects.finalize_defaults(project.id) == %{
+               repo: :squash,
+               folder: :commit_to_path,
+               commit_path: "artifacts/generated"
+             }
+    end
+
+    test "ignores a mode the target cannot use, or one that is not a mode at all" do
+      project = project_fixture()
+
+      {:ok, _project} =
+        Projects.put_finalize_defaults(project, %{"repo" => "artifact", "folder" => "nonsense"})
+
+      assert %{repo: nil, folder: nil} = Projects.finalize_defaults(project.id)
+    end
+
+    test "leaves unrelated settings keys alone" do
+      project = project_fixture()
+      {:ok, project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, project} = Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      assert project.settings["theme"] == "dark"
+      assert %{repo: :merge} = Projects.finalize_defaults(project.id)
+    end
+
+    test "clearing a select returns the target to the built-in default" do
+      project = project_fixture()
+      {:ok, project} = Projects.put_finalize_defaults(project, %{"repo" => "merge"})
+
+      {:ok, _project} = Projects.put_finalize_defaults(project, %{"repo" => ""})
+
+      assert %{repo: nil} = Projects.finalize_defaults(project.id)
+    end
+  end
+
   describe "change_project/2" do
     test "rejects negative budgets" do
       changeset = Projects.change_project(%Project{}, %{name: "x", budget_limit_cents: -1})

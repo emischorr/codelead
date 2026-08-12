@@ -210,6 +210,12 @@ defmodule CodeLeadWeb.TaskLive.DiffTab do
       not assigns.diff_loading? and is_nil(assigns.diff_error)
   end
 
+  defp empty_reason(%{target: :repo, worktree_path: nil, state: :done, branch_name: branch})
+       when is_binary(branch),
+       do:
+         "The worktree was pruned when this task was finalized. " <>
+           "The work is on #{branch} — or already merged into the default branch."
+
   defp empty_reason(%{target: :repo, worktree_path: nil}),
     do: "A diff appears once a run has provisioned a worktree."
 

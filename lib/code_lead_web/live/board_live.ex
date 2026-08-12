@@ -15,12 +15,12 @@ defmodule CodeLeadWeb.BoardLive do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLeadWeb.FlashMessages
+  alias CodeLeadWeb.Format
+  alias CodeLeadWeb.FormOptions
   alias CodeLeadWeb.NavContext
   alias CodeLeadWeb.ScheduleForm
 
   @columns [planning: "Planning", running: "Running", review: "Review", done: "Done"]
-  @work_types [Code: "code", Design: "design", Content: "content", File: "file"]
-  @targets [Repository: "repo", Folder: "folder"]
   @priorities [Low: "low", Normal: "normal", High: "high", Urgent: "urgent"]
 
   @impl true
@@ -166,7 +166,7 @@ defmodule CodeLeadWeb.BoardLive do
     )
     |> NavContext.put_stats(
       length(Tasks.attention_tasks(project.id)),
-      Costs.project_spend(project.id)
+      Costs.project_spend_month(project.id)
     )
   end
 
@@ -495,16 +495,47 @@ defmodule CodeLeadWeb.BoardLive do
   end
 
   defp card_footer(%{column: :done} = assigns) do
-    assigns = assign(assigns, :note, assigns.ctx.done_notes[assigns.task.id])
+    # A done card links either the forge (repo targets) or the artifact
+    # (folder targets) — never both, so one `ml-auto` decides the layout.
+    assigns =
+      assigns
+      |> assign(:note, assigns.ctx.done_notes[assigns.task.id])
+      |> assign(:artifact?, assigns.task.target == :folder)
+      |> assign(:link?, assigns.task.pr_url != nil or assigns.task.target == :folder)
 
     ~H"""
     <div class="flex items-center gap-1.5">
       <span class="truncate font-mono text-[11px] text-ok">✓ {@note || "completed"}</span>
+      <.link
+        :if={@task.pr_url}
+        href={@task.pr_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        id={"#{@card_id}-forge-link"}
+        class="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-surface2"
+      >
+        {Format.forge_link(@task.pr_url_kind)}
+      </.link>
+      <.link
+        :if={@artifact?}
+        href={~p"/projects/#{@task.project_id}/tasks/#{@task.id}/artifact"}
+        download
+        id={"#{@card_id}-artifact-link"}
+        class={[
+          "shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-surface2",
+          !@task.pr_url && "ml-auto"
+        ]}
+      >
+        Download
+      </.link>
       <button
         type="button"
         phx-click="archive"
         phx-value-id={@task.id}
-        class="ml-auto shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-text3 hover:bg-surface2 hover:text-text2"
+        class={[
+          "shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-text3 hover:bg-surface2 hover:text-text2",
+          !@link? && "ml-auto"
+        ]}
       >
         Archive
       </button>
@@ -592,7 +623,7 @@ defmodule CodeLeadWeb.BoardLive do
     """
   end
 
-  defp work_type_options, do: @work_types
-  defp target_options, do: @targets
+  defp work_type_options, do: FormOptions.work_types()
+  defp target_options, do: FormOptions.targets()
   defp priority_options, do: @priorities
 end

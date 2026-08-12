@@ -31,19 +31,19 @@ Key fields only. `enc` = encrypted at rest. `seam` = present for a future featur
 
 - **organization** — singleton for the instance: `name`, `settings` *(jsonb; includes `setup_done`, `max_concurrent_runs`)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
 - **users** — `email`, `hashed_password`, `role` (`:admin` | `:member`), `locale`, `settings` *(jsonb: theme, UI preferences)*.
-- **projects** — `org_id`, `name`, `settings`, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
+- **projects** — `org_id`, `name`, `settings` *(jsonb; `finalize` holds the project's Done defaults: `{repo, folder, commit_path}` — see §6)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
 - **repositories** — `project_id`, `name`, `git_url`, `default_branch`, `base_clone_path`.
 - **project_envs** — `project_id`, `key`, `value` *(enc)*. Injected as env vars at executor spawn.
 - **project_default_reviewers** — `project_id`, `work_type`, `agent_id`. Pre-fills a new task's reviewer set for that work type (editable per task).
 - **providers** — `name`, `kind` (`:anthropic_subscription` | `:anthropic_api` | `:openai` | `:ollama` | …), `config` *(enc: tokens/keys/endpoint)*. Instance-scoped.
-- **agents** — `name` (persona), `scope` (`:org` | `:project`), `project_id` (nullable), `roles` (array of `:execute` | `:review`), `work_type` (`:code`|`:design`|`:content`|`:file`), `driver` (`:acp` | `:llm_api`), `harness` (`:claude_code` | `:codex` | `nil`), `provider_id`, `model_variant`, `system_prompt`, `memory` *(jsonb, seam)*.
-- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `ready_flag` (bool), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `archived_at` (nullable — orthogonal to `state`), `scheduled_at` (nullable — when a queued run may start; `NULL` = as soon as the scheduler admits it, see §5.3; recurrence via a future `schedule_rule` is a `seam`, not built).
-- **task_steps** — audit trail: `task_id`, `executor_type` (`:agent`|`:system`|`:human`), `executor_name`, `executor_ref` (nullable), `kind` (`:run`|`:review`|`:transition`|`:commit`|…), `summary`, `inserted_at`. **Denormalized** so agent deletion is graceful.
+- **agents** — `name` (persona), `scope` (`:org` | `:project`), `project_id` (nullable), `roles` (array of `:execute` | `:review` | `:plan`), `work_type` (`:code`|`:design`|`:content`|`:file`), `driver` (`:acp` | `:llm_api`), `harness` (`:claude_code` | `:codex` | `nil`), `provider_id`, `model_variant`, `system_prompt`, `memory` *(jsonb, seam)*.
+- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `ready_flag` (bool), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `pr_url` (nullable — the finalizer's forge link), `pr_url_kind` (nullable — `:pull_request` | `:merge_request` | `:compare` | `:commit`, so the UI can label the link without parsing it), `finalize_mode` (nullable — `:pull_request`|`:merge`|`:squash` when `target = :repo`, `:artifact`|`:commit_to_path` when `:folder`; `NULL` inherits the project default), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `archived_at` (nullable — orthogonal to `state`), `scheduled_at` (nullable — when a queued run may start; `NULL` = as soon as the scheduler admits it, see §5.3; recurrence via a future `schedule_rule` is a `seam`, not built).
+- **task_steps** — audit trail: `task_id`, `executor_type` (`:agent`|`:system`|`:human`), `executor_name`, `executor_ref` (nullable), `kind` (`:run`|`:review`|`:plan`|`:transition`|`:commit`|…), `summary`, `inserted_at`. **Denormalized** so agent deletion is graceful.
 - **task_reviewers** — `task_id`, `agent_id`. The reviewer set chosen for the task (each `agent_id` has `:review` in `roles` and matches the task's `work_type`).
 - **reviews** — one row per reviewer per review cycle: `task_id`, `agent_id`, `task_step_id`, `cycle` (int), `verdict` (`:pass`|`:concerns`|`:block`, **advisory**), `findings` (jsonb/text), `inserted_at`.
 - **agent_runs** — per-execution cost/usage: `task_id`, `task_step_id`, `agent_id`, `provider_id`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `cost_cents`, `status`, `started_at`, `finished_at`. **Prunable** (~14-day TTL).
 - **daily_metrics** — permanent rollup: `project_id`, `date`, `total_tokens`, `cost_cents`, `run_count`.
-- **planning_messages** — `task_id`, `role`, `content`. The planning-assistant chat.
+- **planning_messages** — `task_id`, `agent_id` (nullable), `role` (`:user`|`:assistant`), `kind` (`:chat` | `:survey`), `content`. The planning conversation. Only `:chat` turns are replayed as history into later completions — a `:survey` report is a standalone artifact, not context.
 - **task_comments** *(optional)* — `task_id`, `user_id`, `body`.
 
 ---
@@ -59,7 +59,7 @@ Key fields only. `enc` = encrypted at rest. `seam` = present for a future featur
 | running | review | agent completes | system | `run_state := :idle`; **fan out one review run per selected reviewer** (parallel, read-only on the worktree) — each writes a `reviews` row + `agent_run` + `task_step`; `attention := :review_ready` when the cycle completes |
 | running | planning | cancel | human | terminate agent process, **keep** worktree, `run_state := :idle` |
 | running | running | failure | system | `run_state := :failed`, `attention := :run_failed`; **no column change** — human picks retry (re-dispatch) or abort (→ planning) |
-| review | done | approve | human | system executor, by **target**: `:repo` → commit remainder, push branch, optional MR/PR (GitHub/GitLab) or compare link; `:folder` → finalize downloadable artifact, optional commit-to-path |
+| review | done | approve | human | system executor, by **target** and resolved **finalize mode**: `:repo` → commit remainder, push branch, then MR/PR-or-compare link (`:pull_request`) **or** merge/squash the branch into the default branch and push it (`:merge`/`:squash`); `:folder` → downloadable artifact (`:artifact`) **or** commit-to-path. On success the worktree is pruned in every mode; `:merge`/`:squash` also delete the remote feature branch |
 | review | running | request changes | human | **keep** worktree/branch/`acp_session_id`; feedback becomes next prompt; new run (new `task_step`); `run_state := :queued` |
 | review | planning | send back to planning | human | **discard** worktree, **delete** feature branch, **clear** `acp_session_id`; human reworks spec |
 
@@ -82,7 +82,7 @@ The table above is **data, not code**. The machine dispatches on an abstract **s
 | planning | `:plan` | nothing — the human workbench |
 | running | `:execute` | executor guard → `Scheduler.admit?` → provision by **target** → start the agent via `AgentDriver` |
 | review | `:review` | fan out one read-only run per selected reviewer |
-| done | `:finalize` | finalize by **target** (commit/push/optional MR-PR, or folder artifact) |
+| done | `:finalize` | finalize by **target** + **finalize mode** (commit/push then MR-PR or merge/squash, or folder artifact / commit-to-path) |
 
 **Edge policies** — every transition carries three:
 
@@ -100,6 +100,8 @@ The two policies are the generalisation of the rework distinction above: *reques
 | review | done | `:human` | `:carry` | `:keep` |
 | review | running | `:human` | `:carry` | `:keep` |
 | review | planning | `:human` | `:reset` | `:discard` |
+
+**Why `review → done` is `:keep` even though Done prunes the worktree.** An edge policy describes what the *move* preserves — a static property of the edge, decided before anything runs. Post-Done pruning is none of those things: it depends on the finalize **mode**, which the edge cannot know, and it must not happen until the merge or push has actually succeeded. Declaring the edge `:discard` would fire the teardown *before* the finalizer runs, delete the **task folder** on `:folder` targets (the very artifact Done produces), and drop the branch reference the Done card still needs. Cleanup is therefore expressed as data on the finalize **outcome** — `cleanup: :keep_context | :prune_context` — consumed by the `:finalize` stage's on-entry effect after the write. Still one declared value mapped to one behaviour; the only branch on mode lives in the finalizer.
 
 An (from, to) pair absent from the definition is `{:error, :invalid_state}` — the definition, not the code, is the authority on which moves are legal. Field changes are **derived** from the edge and the target stage, not written per column: target `:execute` ⇒ `run_state := :queued` (everything else `:idle`) and `next_prompt := ` the run's prompt; `trigger: :human` ⇒ `attention := nil` (an `:auto` signal leaves it to the entering stage's effects); `context_policy: :reset` ⇒ clear `acp_session_id`; `worktree_policy: :discard` ⇒ drop the worktree/branch references and tear them down; target `:finalize` ⇒ stamp `completed_at`.
 
@@ -168,6 +170,21 @@ Reviewers are ordinary **agents** with `:review` in `roles`, matched to the task
 - Reviews are **advisory only**: no verdict gates the transition. The human reads all findings and makes the Approve / Request-changes / Send-back decision.
 - Review runs are cost-tracked like any run but are **not** budget-held in MVP (they run immediately on entry); budget enforcement primarily gates executor dispatch.
 
+The run loop itself is `CodeLead.AdvisoryRun`, shared with §5.5: preflight, consume the driver's event stream, raise `attention` on a question or permission escalation, and enforce its own deadline. Reviewers own only the artifact, the prompt, the verdict, and the rows.
+
+### 5.5 Planning agents and the repo-aware survey
+
+A **planning agent** is an ordinary agent with `:plan` in `roles`, matched to the task's `work_type`, selected in the Planning surface — the same shape as executor and reviewer selection. Role is the *slot*; the **driver** decides the capability:
+
+- `llm_api` → spec refinement over the task text plus a file listing (`Planning.send_message/3`). One completion; no filesystem.
+- `acp` → a **repo-aware survey** (`Planning.start_survey/2`): the same read-only `AdvisoryRun` a reviewer uses, reading the *existing codebase* to critique the *spec* rather than a diff to critique the *output*. A reviewer and a surveyor are one primitive at two points in the lifecycle.
+
+The survey differs from a review in exactly two ways: **when** it runs (pulled by a human in Planning; never a transition effect, never a gate, and it moves no card) and **where its output lands** (a `planning_messages` turn with `kind: :survey`, not a `reviews` row). The run is real — an `agent_run` for cost and a `:plan` `task_step` for audit — and, like reviews, cost-tracked but not budget-held.
+
+Normal completion raises no attention; the human asked for it. A question or permission escalation raises the ordinary `attention` field through the existing mechanism — no new type. Neither is answerable for an advisory run today (`Runtime.answer_permission/3` resolves executor runs only), so such a run ends on the `AdvisoryRun` deadline.
+
+A `:plan` agent is not an executor: the Planning→Running guard stays keyed on `:execute`.
+
 ---
 
 ## 6. ACP integration
@@ -190,9 +207,11 @@ Reviewers are ordinary **agents** with `:review` in `roles`, matched to the task
 - Per `:repo` task: a **git worktree** off the base clone on an auto-created feature branch (e.g. `codelead/task-<id>-<slug>`).
 - Diffs computed against the branch base. The Review/Artifact tab renders per work type: `code` → diff; `content`/`design` → rendered preview of changed files **with diff available**. Preview renders files directly and does **not** run the project's build pipeline.
 - Multi-run accumulates commits on the same branch.
-- **Done:** commit remaining changes, push the branch; if the remote is GitHub or GitLab, create an MR/PR via API (token from provider/secret) or show a compare URL. **No auto-merge to main.**
+- **Done:** commit remaining changes and push the branch, then follow the resolved **finalize mode**. `:pull_request` — if the remote is GitHub or GitLab, create an MR/PR via API (token from the project env store) or show a compare URL; the remote branch stays. `:merge` / `:squash` — merge locally (below) and delete the remote feature branch.
+- **Merging (local):** `fetch origin --prune` on the base clone → a **disposable detached worktree** at `origin/<default_branch>` (`merges/task-<id>`) → `merge --no-ff` or `merge --squash` + commit → `push origin HEAD:<default_branch>` → delete the remote feature branch → remove the merge worktree (also on failure — discarding the directory beats `merge --abort`). Detached and disposable for the same reason the planning survey is: the base clone's own working tree is frozen and shared with every linked worktree. The feature branch is **pushed before** the merge and **deleted after** it, so a conflict or a rejected push loses no work. Nothing is ever force-pushed: a conflict, a non-fast-forward rejection, or a protected-branch refusal aborts the finalize and leaves the task in Review. Merging is git only — CodeLead never calls a forge's merge/close endpoints.
 - **Send back to planning:** remove the worktree and delete the feature branch.
-- **Retention:** on Done/archive, a coding **worktree may be pruned** (the branch lives on the remote); non-coding **task folders are retained**. Task content (`task_steps`, `reviews`, spec, description) is retained regardless of `agent_runs` pruning, so archived tasks stay searchable/consultable later.
+- **Planning survey (§5.5):** a **disposable detached worktree** off the base clone at `origin/<default_branch>` (`surveys/task-<id>`), removed when the run ends. No feature branch, nothing committed or pushed, and the task's `acp_session_id` is deliberately not passed so a survey can never occupy the execution session. It is a detached checkout rather than the base clone itself for two reasons: the base clone's own working tree is frozen (an existing clone is only *fetched*, never `pull`/`reset`/`checkout`, so reading it would survey stale source), and a read-only posture denies `fs/write_text_file` but not the terminal, so it must contain a disposable context rather than shared state.
+- **Retention:** on Done the **worktree is pruned in every mode** and the local feature branch goes with it — the work is on the remote either way. The remote branch survives only in `:pull_request` mode. `branch_name` is *kept* on the task: it still names what was pushed or merged, and the Done card shows it. Non-coding **task folders are retained** and are downloadable as a zip from `GET /projects/:project_id/tasks/:id/artifact` (a controller route, authenticated like every other surface). Task content (`task_steps`, `reviews`, spec, description) is retained regardless of `agent_runs` pruning, so archived tasks stay searchable/consultable later.
 
 Auth stays on the host/volume; credentials are not baked into the agent image beyond what the executor injects.
 
@@ -211,7 +230,7 @@ Auth stays on the host/volume; credentials are not baked into the agent image be
 - **Source:** the ACP result/usage message per run (prompt/completion/total tokens, cost); `llm_api` runs report usage from the provider response.
 - **Persist** per run in `agent_runs` (prunable). Roll up nightly (Oban) into `daily_metrics` per project per day.
 - **Per-task cost** = sum of its `agent_runs` (executor runs **and** each reviewer run — N reviewers multiply per-cycle review cost).
-- **Budgets:** organization and project carry optional token/cost limits; the scheduler's `BudgetGate` enforces them inside `admit?` (over-limit → `{:hold, :budget}`, task stays queued with a badge). Held tasks are retried by `Runtime.kick_queue/0` after every completed run. A **scheduled** run re-enters the whole gate list when its start time arrives, so an unattended dispatch is budget-checked exactly like an attended one — the limit cannot be sidestepped by scheduling around it.
+- **Budgets:** organization and project carry optional token/cost limits, evaluated against **month-to-date** spend (calendar month, UTC), so a hold lifts by itself on the 1st; the period lives in the query, not in the schema. The scheduler's `BudgetGate` enforces them inside `admit?` (over-limit → `{:hold, :budget}`, task stays queued with a badge). Held tasks are retried by `Runtime.kick_queue/0` after every completed run. A **scheduled** run re-enters the whole gate list when its start time arrives, so an unattended dispatch is budget-checked exactly like an attended one — the limit cannot be sidestepped by scheduling around it.
 - MVP surfaces minimal display (per-task total, current budget usage); dashboards/graphs are iteration two on the same tables.
 
 ---
@@ -266,7 +285,7 @@ The task view auto-selects the tab matching `tasks.state`; Agent/Review/Develope
 | Planning / agent modes | agent/task `mode` field + ACP session modes |
 | Per-agent MCP tooling | `session/new` mcpServers |
 | Priorities / cross-project queue | `Scheduler` ordering |
-| Planning assistant as a selectable agent | extend `agents.roles` with `:plan` |
+| Plan mode as an execution sub-phase (planning inside a run) | `task_steps.kind` + the `%Workflow{}` stage list — a sub-phase is a stage, not a column |
 | Search across archived tasks | archived `tasks` retained in Postgres + future full-text / vector index |
 | Agent access to past tasks | an ACP/MCP tool exposing archived task history (spec, diffs, reviews) |
 | Task splitting / sub-tasks / epics | `tasks.parent_id` (nullable) — MVP leaves it null; splitting is manual |

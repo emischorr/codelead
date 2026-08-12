@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-10)
+# Configuration (last updated: 2026-08-12)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -89,15 +89,48 @@ Three limits worth knowing:
 
 `ensure_clone/3` re-points `origin` at the project's current repository
 URL on every run, so editing the URL takes effect without deleting the
-base clone. What it cannot fix is the credential. `LC_ALL=C` pins these
-messages, so they are safe to match on:
+base clone. What it cannot fix is the credential — at clone time on
+dispatch, or at push time when Approve → Done finalizes. `LC_ALL=C` pins
+these messages, so they are safe to match on:
 
 | Git says | What it means |
 |---|---|
 | `Invalid username or token` | The token was presented and rejected — expired, revoked, or simply not the value you think is stored. Note GitHub appends "Password authentication is not supported for Git operations" to *every* HTTPS auth failure; it is boilerplate, not the diagnosis. |
 | `Repository not found` | The credential is valid but has no access to that repository — or the owner/repo in the URL is wrong. |
+| `Write access to repository not granted` (HTTP 403 on push) | The token is valid and can *read* — clone and dispatch succeed, only Approve → Done fails. It has no write scope. Fine-grained PAT: **Contents: Read and write**. Classic PAT: the `repo` scope. GitLab words this `You are not allowed to push code to this project` and needs `write_repository`. |
 | `could not read Username … terminal prompts disabled` | No token stored *and* no ambient credential on the host. |
 | `Permission denied (publickey)` | An SSH remote whose key the server cannot use. |
+| `CONFLICT (content)` / `Automatic merge failed` | Merge or squash mode only: the branch conflicts with the default branch. Nothing was merged and nothing pushed. Request changes so the agent rebases, or switch the task to Pull request mode and resolve it on the forge. |
+| `non-fast-forward` / `Updates were rejected` | Merge or squash mode only: the default branch moved on the remote between the fetch and the push. Nothing landed — approve again to retry against its new tip. Never force-pushed. |
+| `protected branch` / `GH006` / `pre-receive hook declined` | The remote refuses direct pushes to the default branch. This is exactly what Pull request mode is for; switch the task or the project default. |
+
+`CodeLead.Git.refusal/1` sorts output into these three classes
+(`:auth` / `:write_denied` / `:other`) and `remote_failure/4` turns one
+into the sentence the operator reads. The last three rows are not about
+credentials, so they get their own pair — `merge_refusal/1` and
+`merge_failure/4`, which falls through to `remote_failure/4` for
+anything that *is*.
+
+### Approve defaults (per project)
+
+`projects.settings["finalize"]` holds what Approve → Done does by
+default, edited under **Settings → Projects → \<project\> → On approve**:
+
+| Key | Values | Applies to |
+|---|---|---|
+| `repo` | `pull_request` (default) / `merge` / `squash` | `:repo`-target tasks |
+| `folder` | `artifact` (default) / `commit_to_path` | `:folder`-target tasks |
+| `commit_path` | a repository-relative path, default `artifacts` | where `commit_to_path` lands the artifact |
+
+An individual task overrides this in the **On approve** selector on its
+own page (`tasks.finalize_mode`); leaving it on *Project default* means
+it keeps following the project, including after the project changes.
+An unrecognized or wrong-target value in the column is ignored rather
+than run — see [`task-workflow.md`](task-workflow.md) → *Finalize modes*.
+
+Merge and squash push straight to the repository's default branch. On a
+forge with branch protection that push will be refused; use pull-request
+mode there.
 
 Triage a GitHub token without involving CodeLead:
 

@@ -1,7 +1,7 @@
 defmodule CodeLeadWeb.Format do
   @moduledoc """
-  Pure formatting helpers for money, token counts, and timestamps as they
-  appear throughout the UI (`$1.24`, `183.5k`, `3m ago`).
+  Pure formatting helpers for money, token counts, timestamps, and short
+  labels as they appear throughout the UI (`$1.24`, `183.5k`, `3m ago`).
   """
 
   @doc "Formats cents as dollars, e.g. `123` -> `\"$1.23\"`."
@@ -43,6 +43,70 @@ defmodule CodeLeadWeb.Format do
   def cost(_cost_cents, :free), do: "—"
   def cost(cost_cents, :estimated), do: "~#{cents(cost_cents)} est"
   def cost(cost_cents, _exact), do: cents(cost_cents)
+
+  @doc """
+  Label for the finalizer's forge link: the PR/MR it opened, the commit
+  a merge landed, or the compare view it fell back to when no PR could
+  be created.
+  """
+  @spec forge_link(atom() | nil) :: String.t()
+  def forge_link(:pull_request), do: "PR"
+  def forge_link(:merge_request), do: "MR"
+  def forge_link(:commit), do: "Commit"
+  def forge_link(_kind), do: "Compare"
+
+  @doc """
+  Label for the Approve button, stating the finalize mode that will
+  actually run. `forge_known?` distinguishes a remote CodeLead can open
+  a PR on from one where pushing the branch is all Done can do — the
+  caller resolves it, because only it knows the repository.
+  """
+  @spec finalize_action(atom(), boolean()) :: String.t()
+  def finalize_action(:pull_request, true), do: "Approve & open PR"
+  def finalize_action(:pull_request, false), do: "Approve & push branch"
+  def finalize_action(:merge, _forge_known?), do: "Approve & merge"
+  def finalize_action(:squash, _forge_known?), do: "Approve & squash merge"
+  def finalize_action(:artifact, _forge_known?), do: "Approve & hand over"
+  def finalize_action(:commit_to_path, _forge_known?), do: "Approve & commit artifact"
+
+  @doc """
+  The same label for the mobile action bar, where only a verb fits.
+  """
+  @spec finalize_action_short(atom()) :: String.t()
+  def finalize_action_short(:pull_request), do: "PR"
+  def finalize_action_short(:merge), do: "Merge"
+  def finalize_action_short(:squash), do: "Squash"
+  def finalize_action_short(:artifact), do: "Finish"
+  def finalize_action_short(:commit_to_path), do: "Commit"
+
+  @doc """
+  What Approve will do, spelled out — for the button's tooltip and the
+  line under the task's finalize selector. `base_branch` names the
+  branch a merge would write to.
+  """
+  @spec finalize_hint(atom(), String.t() | nil) :: String.t()
+  def finalize_hint(:pull_request, _base) do
+    "Commits any remainder, pushes the feature branch, and opens a PR/MR " <>
+      "(or a compare link). Nothing is merged; the remote branch stays."
+  end
+
+  def finalize_hint(:merge, base) do
+    "Pushes the feature branch, merges it into #{base_branch(base)}, pushes that, " <>
+      "then deletes the remote branch."
+  end
+
+  def finalize_hint(:squash, base) do
+    "Pushes the feature branch, lands it on #{base_branch(base)} as a single " <>
+      "commit, then deletes the remote branch."
+  end
+
+  def finalize_hint(:artifact, _base) do
+    "Marks the task complete and offers the task folder as a download. Nothing is pushed."
+  end
+
+  def finalize_hint(:commit_to_path, _base) do
+    "Commits the task folder into the linked repository on its own branch and pushes it."
+  end
 
   @doc """
   Formats a millisecond duration, e.g. `134_000` -> `\"2m 14s\"`. Zero
@@ -134,4 +198,25 @@ defmodule CodeLeadWeb.Format do
   @spec time(DateTime.t() | NaiveDateTime.t() | nil) :: String.t()
   def time(nil), do: "—"
   def time(at), do: Calendar.strftime(at, "%H:%M:%S")
+
+  @doc """
+  Path rewritten relative to `root`, or nil when it falls outside `root` —
+  the caller decides whether that means "keep the absolute form" or
+  "ignore". The missing leading slash is what marks a path as belonging
+  to the project.
+  """
+  @spec project_path(String.t(), String.t() | nil) :: String.t() | nil
+  def project_path(_path, nil), do: nil
+
+  def project_path(path, root) do
+    expanded = Path.expand(root)
+
+    case Path.relative_to(Path.expand(path, expanded), expanded) do
+      "/" <> _outside -> nil
+      relative -> relative
+    end
+  end
+
+  defp base_branch(nil), do: "the default branch"
+  defp base_branch(branch), do: branch
 end
