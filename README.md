@@ -6,7 +6,7 @@ Where an AI coding assistant helps a *developer write code*, CodeLead helps a yo
 
 You direct a virtual team of specialist agents from a Kanban board. They plan and execute. You decide what starts, what ships, and what goes back for another round.
 
-<!-- ![The CodeLead board](docs/images/board.png) -->
+![The CodeLead board](docs/images/board.png)
 
 ---
 
