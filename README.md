@@ -14,7 +14,9 @@ You direct a virtual team of specialist agents from a Kanban board. They plan an
 
 Autonomous agent runners optimize for getting out of your way. That works right up until the agent confidently builds the wrong thing and you find out three commits later. Or you more often busy cleaning up behind a herd of autonomous agents gone wild than actually building your product.
 
-CodeLead takes the opposite position: **humans own every handoff.** Agents plan and execute. You move the work between states. Automation that silently bypasses a human decision point is treated as a design failure, not a feature.
+CodeLead is not built for vibe-coding. It's built for the practices that the software industry has spent decades converging on: a clear specification before work starts, a refinement pass to catch what the spec left out, and a review before anything ships. Those aren't extra steps bolted onto a fast agent loop — they're the workflow itself. The board's three working columns *are* that discipline, structural rather than left to habit.
+
+CodeLead takes the opposite position from a "just let it run" tool: **humans own every handoff.** Agents plan and execute. You move the work between states. Automation that silently bypasses a human decision point is treated as a design failure, not a feature.
 
 That constraint buys you a few things:
 
