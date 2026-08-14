@@ -195,6 +195,41 @@ defmodule CodeLead.ProjectsTest do
     end
   end
 
+  describe "pr template" do
+    test "falls back to the built-in default" do
+      project = project_fixture()
+
+      assert Projects.pr_template(project.id) == Projects.default_pr_template()
+    end
+
+    test "round-trips a stored template" do
+      project = project_fixture()
+
+      {:ok, _project} = Projects.put_pr_template(project, "## {{title}}\n\n{{description}}")
+
+      assert Projects.pr_template(project.id) == "## {{title}}\n\n{{description}}"
+    end
+
+    test "leaves unrelated settings keys alone" do
+      project = project_fixture()
+      {:ok, project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, project} = Projects.put_pr_template(project, "custom template")
+
+      assert project.settings["theme"] == "dark"
+      assert Projects.pr_template(project.id) == "custom template"
+    end
+
+    test "a blank value clears the template back to the built-in default" do
+      project = project_fixture()
+      {:ok, project} = Projects.put_pr_template(project, "custom template")
+
+      {:ok, _project} = Projects.put_pr_template(project, "")
+
+      assert Projects.pr_template(project.id) == Projects.default_pr_template()
+    end
+  end
+
   describe "change_project/2" do
     test "rejects negative budgets" do
       changeset = Projects.change_project(%Project{}, %{name: "x", budget_limit_cents: -1})

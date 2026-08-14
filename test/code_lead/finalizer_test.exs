@@ -401,7 +401,7 @@ defmodule CodeLead.FinalizerTest do
   end
 
   describe "pull request creation" do
-    test "opens a GitHub PR through the API" do
+    setup do
       Application.put_env(:code_lead, :forge_req_options, plug: {Req.Test, CodeLead.ForgeStub})
 
       test_pid = self()
@@ -415,8 +415,15 @@ defmodule CodeLead.FinalizerTest do
         |> Req.Test.json(%{"html_url" => "https://github.com/acme/site/pull/7"})
       end)
 
+      %{project: project_fixture()}
+    end
+
+    test "opens a GitHub PR through the API, rendering the default body template", %{
+      project: project
+    } do
       task = %CodeLead.Tasks.Task{
         id: 1,
+        project_id: project.id,
         title: "Add pricing page",
         description: "Three tiers",
         branch_name: "codelead/task-1-add-pricing-page"
@@ -429,6 +436,26 @@ defmodule CodeLead.FinalizerTest do
       assert body["head"] == "codelead/task-1-add-pricing-page"
       assert body["base"] == "main"
       assert body["title"] == "Add pricing page"
+      assert body["body"] =~ "Three tiers"
+      assert body["body"] =~ "Created by CodeLead for task #1."
+    end
+
+    test "renders the project's custom PR template", %{project: project} do
+      {:ok, project} = Projects.put_pr_template(project, "## {{title}}\n\nBranch: {{branch}}")
+
+      task = %CodeLead.Tasks.Task{
+        id: 42,
+        project_id: project.id,
+        title: "Add pricing page",
+        description: "Three tiers",
+        branch_name: "codelead/task-42-add-pricing-page"
+      }
+
+      assert {:ok, _url} =
+               Finalizer.create_pull_request({:github, "acme", "site"}, "gh-token", task, "main")
+
+      assert_receive {:forge_request, "api.github.com", "/repos/acme/site/pulls", body}
+      assert body["body"] == "## Add pricing page\n\nBranch: codelead/task-42-add-pricing-page"
     end
   end
 

@@ -3,11 +3,12 @@ defmodule CodeLead.Projects do
   Projects, their linked repositories, and the encrypted project env
   store.
 
-  `projects.settings` is a free-form jsonb column; the one key this
-  module gives meaning to is `"finalize"`, holding the project's Done
-  defaults. Those are read back through `finalize_defaults/1` and
-  written through `put_finalize_defaults/2` rather than through the
-  changeset, so a form editing them cannot clobber unrelated keys.
+  `projects.settings` is a free-form jsonb column; the keys this module
+  gives meaning to are `"finalize"`, holding the project's Done
+  defaults, and `"pr_template"`, holding the PR/MR description
+  template. Both are read back through dedicated getters and written
+  through dedicated setters rather than through the changeset, so a
+  form editing them cannot clobber unrelated keys.
   """
 
   import Ecto.Query
@@ -21,6 +22,13 @@ defmodule CodeLead.Projects do
   alias CodeLead.Tasks.Task
 
   @default_commit_path "artifacts"
+
+  @default_pr_template """
+  {{description}}
+
+  ---
+  Created by CodeLead for task \#{{task_id}}.
+  """
 
   @doc """
   Creates a project under the organization singleton.
@@ -277,6 +285,54 @@ defmodule CodeLead.Projects do
   """
   @spec default_commit_path() :: String.t()
   def default_commit_path, do: @default_commit_path
+
+  @doc """
+  The project's PR/MR description template, or the built-in default
+  when none is set. `CodeLead.Finalizer` substitutes its placeholders
+  (`{{title}}`, `{{description}}`, `{{task_id}}`, `{{branch}}`) when it
+  opens a pull request.
+  """
+  @spec pr_template(pos_integer()) :: String.t()
+  def pr_template(project_id) do
+    settings = Repo.one(from p in Project, where: p.id == ^project_id, select: p.settings) || %{}
+
+    case Map.get(settings, "pr_template") do
+      template when is_binary(template) ->
+        case String.trim(template) do
+          "" -> @default_pr_template
+          _non_blank -> template
+        end
+
+      _absent ->
+        @default_pr_template
+    end
+  end
+
+  @doc """
+  Sets the project's PR/MR description template, leaving every other
+  settings key alone. A blank value clears it back to the built-in
+  default.
+  """
+  @spec put_pr_template(Project.t(), String.t()) ::
+          {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
+  def put_pr_template(%Project{settings: settings} = project, template) do
+    settings =
+      case String.trim(template || "") do
+        "" -> Map.delete(settings || %{}, "pr_template")
+        trimmed -> Map.put(settings || %{}, "pr_template", trimmed)
+      end
+
+    project
+    |> Ecto.Changeset.change(settings: settings)
+    |> Repo.update()
+  end
+
+  @doc """
+  The built-in PR/MR description template, used to prefill the settings
+  form when a project has not overridden it.
+  """
+  @spec default_pr_template() :: String.t()
+  def default_pr_template, do: @default_pr_template
 
   # jsonb round-trips as string keys, and the value is operator-editable
   # data rather than application input — so it is matched against the

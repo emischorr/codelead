@@ -90,6 +90,50 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     end
   end
 
+  describe "pr template" do
+    test "the form opens prefilled with the built-in default", %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert view
+             |> element("#project-pr-template-form textarea")
+             |> render() =~ "Created by CodeLead"
+    end
+
+    test "saves a custom template", %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      view
+      |> form("#project-pr-template-form", pr_template: %{template: "## {{title}}"})
+      |> render_submit()
+
+      assert Projects.pr_template(project.id) == "## {{title}}"
+    end
+
+    test "a blank submit reverts to the built-in default", %{conn: conn, project: project} do
+      {:ok, _project} = Projects.put_pr_template(project, "## {{title}}")
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      view
+      |> form("#project-pr-template-form", pr_template: %{template: ""})
+      |> render_submit()
+
+      assert Projects.pr_template(project.id) == Projects.default_pr_template()
+    end
+
+    test "leaves unrelated settings keys alone", %{conn: conn, project: project} do
+      {:ok, _project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      view
+      |> form("#project-pr-template-form", pr_template: %{template: "custom"})
+      |> render_submit()
+
+      assert Projects.get_project!(project.id).settings["theme"] == "dark"
+    end
+  end
+
   describe "repositories" do
     test "links a repository", %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}/repositories/new")
