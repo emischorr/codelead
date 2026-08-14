@@ -120,6 +120,14 @@ defmodule CodeLeadWeb.Layouts do
       export default {
         mounted() { this.sync() },
         updated() { this.sync() },
+        // A reconnect (e.g. the browser tab was backgrounded and the socket
+        // dropped) joins a brand-new LiveView process, so the server forgets
+        // the restored project even though this DOM node — and its
+        // `this.restored` flag — survives the reconnect untouched. Without
+        // resetting it here, `sync()` would see `this.restored` still true
+        // and never re-push, leaving the project stuck at nil.
+        disconnected() { this.restored = false },
+        reconnected() { this.sync() },
         sync() {
           const id = this.el.dataset.projectId
           if (id) {
