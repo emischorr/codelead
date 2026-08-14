@@ -1093,11 +1093,15 @@ defmodule CodeLeadWeb.TaskLive do
       variant="ghost"
       phx-click="send_back"
       id={action_id("send-back", @mobile)}
-      class={@mobile && "hidden!"}
+      class={@mobile && "flex-1"}
     >
       Send back
     </.button>
-    <.button phx-click="toggle_feedback" id={action_id("request-changes", @mobile)}>
+    <.button
+      phx-click="toggle_feedback"
+      class={@mobile && "flex-1"}
+      id={action_id("request-changes", @mobile)}
+    >
       {if @mobile, do: "Changes", else: "Request changes"}
     </.button>
     <.button
