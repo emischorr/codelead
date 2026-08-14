@@ -19,7 +19,8 @@ defmodule CodeLead.Application do
         {Task.Supervisor, name: CodeLead.TaskSupervisor},
         {Oban, Application.fetch_env!(:code_lead, Oban)},
         {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},
-        {Phoenix.PubSub, name: CodeLead.PubSub}
+        {Phoenix.PubSub, name: CodeLead.PubSub},
+        CodeLead.Agents.SubscriptionUsageCache
       ] ++
         CodeLead.Runtime.RunSupervisor.child_specs() ++
         [
