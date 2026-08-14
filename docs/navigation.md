@@ -194,6 +194,17 @@ LiveView needs a clause for it. A `nil` from the client (nothing stored
 yet, e.g. a fresh browser deep-linking to `/settings`) falls back to the
 first project.
 
+The push only happens once per mount — a `this.restored` flag set inside
+the hook guards `mounted()`/`updated()` from re-pushing on every patch. A
+LiveView reconnect (socket drops and rejoins, e.g. an Android browser tab
+resuming from the background) keeps that DOM node — and the JS flag on
+it — alive while spawning a brand-new server process whose `nav.project`
+starts at `nil` again. Without a reset, the guard would block the re-push
+forever and strand the page with no project until a full LiveView
+navigation remounted the hook. `disconnected()` clears the flag and
+`reconnected()` calls `sync()` again so the fresh process gets its restore
+push.
+
 General pages deliberately start with **no** project rather than guessing
 the first one, so the selector never flashes the wrong name before the
 client answers. `scope` stays `:general` through the restore, which is why
