@@ -109,6 +109,42 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   end
 
   @doc """
+  The PR/MR description template used when Approve opens a pull request.
+  Placeholders are substituted at creation time; a blank field reverts
+  to the built-in default.
+  """
+  attr :form, Phoenix.HTML.Form, required: true
+
+  def pr_template(assigns) do
+    ~H"""
+    <.section_card label="PR template">
+      <.form for={@form} id="project-pr-template-form" phx-submit="save_pr_template">
+        <.input
+          field={@form[:template]}
+          type="textarea"
+          label="Description"
+          rows="8"
+          spellcheck="false"
+        />
+
+        <p class="mb-4 text-[12px] leading-relaxed text-text3" phx-no-curly-interpolation>
+          Used as the PR/MR description when Approve opens a pull request. Placeholders:
+          <code class="font-mono">{{title}}</code>, <code class="font-mono">{{description}}</code>,
+          <code class="font-mono">{{task_id}}</code>, and <code class="font-mono">{{branch}}</code>.
+          Leave blank to fall back to the built-in default.
+        </p>
+
+        <div class="flex justify-end">
+          <.button variant="primary" type="submit" phx-disable-with="Saving…">
+            Save template
+          </.button>
+        </div>
+      </.form>
+    </.section_card>
+    """
+  end
+
+  @doc """
   The linked git repositories. `base_clone_path` is managed by the finalizer
   and is shown as a state badge rather than offered as an input.
   """

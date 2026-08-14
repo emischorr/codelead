@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-13)
+# Configuration (last updated: 2026-08-14)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -155,6 +155,26 @@ than run — see [`task-workflow.md`](task-workflow.md) → *Finalize modes*.
 Merge and squash push straight to the repository's default branch. On a
 forge with branch protection that push will be refused; use pull-request
 mode there.
+
+### PR template (per project)
+
+`projects.settings["pr_template"]` holds the description used when
+Approve → Done opens a pull/merge request, edited under **Settings →
+Projects → \<project\> → PR template**. A blank field clears it back to
+the built-in default:
+
+```
+{{description}}
+
+---
+Created by CodeLead for task #{{task_id}}.
+```
+
+`CodeLead.Finalizer.create_pull_request/4` substitutes four
+placeholders before sending the body to the forge: `{{title}}`,
+`{{description}}`, `{{task_id}}` and `{{branch}}`. The template only
+affects the PR/MR **body** — the title is always `tasks.title`
+verbatim, and merge/squash mode never opens a PR at all.
 
 Triage a GitHub token without involving CodeLead:
 

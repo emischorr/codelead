@@ -185,7 +185,9 @@ defmodule CodeLead.Finalizer do
 
   @doc """
   Opens a PR (GitHub) or MR (GitLab) for the pushed branch. The token
-  comes from the project env store (`GITHUB_TOKEN` / `GITLAB_TOKEN`).
+  comes from the project env store (`GITHUB_TOKEN` / `GITLAB_TOKEN`);
+  the body is rendered from the project's PR template
+  (`CodeLead.Projects.pr_template/1`).
   """
   @spec create_pull_request(
           {:github | :gitlab, String.t(), String.t()},
@@ -398,12 +400,12 @@ defmodule CodeLead.Finalizer do
   defp forge_token(project_id, {kind, _owner, _repo}), do: Projects.forge_token(project_id, kind)
 
   defp pr_body(task) do
-    """
-    #{task.description || ""}
-
-    ---
-    Created by CodeLead for task ##{task.id}.
-    """
+    task.project_id
+    |> Projects.pr_template()
+    |> String.replace("{{title}}", task.title || "")
+    |> String.replace("{{description}}", task.description || "")
+    |> String.replace("{{task_id}}", to_string(task.id))
+    |> String.replace("{{branch}}", task.branch_name || "")
   end
 
   defp ensure_context(%Task{worktree_path: nil}), do: {:error, :no_worktree}

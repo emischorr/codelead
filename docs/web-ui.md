@@ -17,7 +17,7 @@ what exists today.
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
 | `/settings/agents` | `CodeLeadWeb.SettingsLive.Agents` | org agents; `/new` and `/:id/edit` |
 | `/settings/projects` | `CodeLeadWeb.SettingsLive.Projects` | list; `/new` |
-| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, repositories, env store, default reviewers |
+| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, default reviewers |
 | `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
 | `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings |
