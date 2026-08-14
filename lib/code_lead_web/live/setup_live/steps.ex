@@ -72,14 +72,23 @@ defmodule CodeLeadWeb.SetupLive.Steps do
       phx-change="validate_provider"
       phx-submit="create_provider"
     >
-      <.input field={@form[:name]} label="Display name" required phx-mounted={JS.focus()} />
+      <.input
+        field={@form[:name]}
+        label="Display name"
+        autocomplete="off"
+        required
+        phx-mounted={JS.focus()}
+      />
       <.input field={@form[:kind]} type="select" label="Backend" options={provider_kinds()} />
       <.input
         field={@form[:credential]}
         type={credential_type(@form[:kind].value)}
         label={credential_label(@form[:kind].value)}
         placeholder={credential_placeholder(@form[:kind].value)}
-        autocomplete="off"
+        autocomplete="new-password"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
         spellcheck="false"
         required
       />
@@ -122,7 +131,10 @@ defmodule CodeLeadWeb.SetupLive.Steps do
         type="password"
         label="Access token — optional"
         placeholder="github_pat_…"
-        autocomplete="off"
+        autocomplete="new-password"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
       />
       <p class="-mt-2 mb-4 text-[12px] leading-relaxed text-text3">
         Needed for private GitHub or GitLab repositories over <code>https://</code>. Stored

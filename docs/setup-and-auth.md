@@ -126,9 +126,11 @@ generated output:
   and share the confirmation LiveView; invites get their own email copy
   (`UserNotifier.deliver_invite_instructions/2`).
 - The generated migration was folded into
-  `20260810130342_create_users.exs` (the app has never been deployed, and
+  `20260810130342_create_users.exs` (nothing was deployed at the time, and
   `create_tasks` already FKs `assignee_id → users`, so a later-timestamped
-  migration would have ordered wrong). Reset with `mix ecto.reset`.
+  migration would have ordered wrong). Reset with `mix ecto.reset`. That
+  shortcut is no longer available — deployed instances exist, so schema
+  changes now ship as new forward migrations.
 - The log-in and confirmation LiveViews render inside `Layouts.auth/1` —
   a chromeless wordmark + theme toggle + centered column — instead of the
   project sidebar, and use the project's tokens rather than the generated

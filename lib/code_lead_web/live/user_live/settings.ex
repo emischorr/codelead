@@ -13,63 +13,65 @@ defmodule CodeLeadWeb.UserLive.Settings do
     <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope}>
       <.settings_page_header title="Account" back={~p"/settings"} />
 
-      <div class="mx-auto flex w-full max-w-2xl flex-col gap-3.5 p-4 sm:p-6">
-        <p class="text-[13px] text-text2">Manage your email address and password.</p>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto flex w-full max-w-2xl flex-col gap-3.5 p-4 sm:p-6">
+          <p class="text-[13px] text-text2">Manage your email address and password.</p>
 
-        <.section_card label="Email">
-          <.form
-            for={@email_form}
-            id="email-form"
-            phx-submit="update_email"
-            phx-change="validate_email"
-          >
-            <.input
-              field={@email_form[:email]}
-              type="email"
-              label="Email"
-              autocomplete="username"
-              spellcheck="false"
-              required
-            />
-            <.button variant="primary" phx-disable-with="Changing...">Change email</.button>
-          </.form>
-        </.section_card>
+          <.section_card label="Email">
+            <.form
+              for={@email_form}
+              id="email-form"
+              phx-submit="update_email"
+              phx-change="validate_email"
+            >
+              <.input
+                field={@email_form[:email]}
+                type="email"
+                label="Email"
+                autocomplete="username"
+                spellcheck="false"
+                required
+              />
+              <.button variant="primary" phx-disable-with="Changing...">Change email</.button>
+            </.form>
+          </.section_card>
 
-        <.section_card label="Password">
-          <.form
-            for={@password_form}
-            id="password-form"
-            action={~p"/users/update-password"}
-            method="post"
-            phx-change="validate_password"
-            phx-submit="update_password"
-            phx-trigger-action={@trigger_submit}
-          >
-            <input
-              name={@password_form[:email].name}
-              type="hidden"
-              id="hidden-user-email"
-              spellcheck="false"
-              value={@current_email}
-            />
-            <.input
-              field={@password_form[:password]}
-              type="password"
-              label="New password"
-              autocomplete="new-password"
-              spellcheck="false"
-              required
-            />
-            <.input
-              field={@password_form[:password_confirmation]}
-              type="password"
-              label="Confirm new password"
-              autocomplete="new-password"
-              spellcheck="false"
-            />
-            <.button variant="primary" phx-disable-with="Saving...">Save password</.button>
-          </.form>
-        </.section_card>
+          <.section_card label="Password">
+            <.form
+              for={@password_form}
+              id="password-form"
+              action={~p"/users/update-password"}
+              method="post"
+              phx-change="validate_password"
+              phx-submit="update_password"
+              phx-trigger-action={@trigger_submit}
+            >
+              <input
+                name={@password_form[:email].name}
+                type="hidden"
+                id="hidden-user-email"
+                spellcheck="false"
+                value={@current_email}
+              />
+              <.input
+                field={@password_form[:password]}
+                type="password"
+                label="New password"
+                autocomplete="new-password"
+                spellcheck="false"
+                required
+              />
+              <.input
+                field={@password_form[:password_confirmation]}
+                type="password"
+                label="Confirm new password"
+                autocomplete="new-password"
+                spellcheck="false"
+              />
+              <.button variant="primary" phx-disable-with="Saving...">Save password</.button>
+            </.form>
+          </.section_card>
+        </div>
       </div>
     </Layouts.app>
     """

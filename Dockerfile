@@ -1,35 +1,35 @@
-# Find eligible builder and runner images on Docker Hub. We use Ubuntu/Debian
-# instead of Alpine to avoid DNS resolution issues in production.
-#
-# https://hub.docker.com/r/hexpm/elixir/tags?name=ubuntu
-# https://hub.docker.com/_/ubuntu/tags
-#
-# This file is based on these images:
-#
-#   - https://hub.docker.com/r/hexpm/elixir/tags - for the build image
-#   - https://hub.docker.com/_/debian/tags?name=trixie-20260112-slim - for the release image
-#   - https://pkgs.org/ - resource for finding needed packages
-#   - Ex: docker.io/hexpm/elixir:1.18.4-erlang-27.2.3-debian-trixie-20260112-slim
-#
-ARG ELIXIR_VERSION=1.18.4
-ARG OTP_VERSION=27.2.3
-ARG DEBIAN_VERSION=trixie-20260112-slim
+# Once:
+# - docker buildx create --name multiarch --driver docker-container --use
+# - docker login ghcr.io
+# build & push it:
+# docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/code_lead:0.1.0 -t ghcr.io/emischorr/code_lead:latest --push .
 
-ARG BUILDER_IMAGE="docker.io/hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
-ARG RUNNER_IMAGE="docker.io/debian:${DEBIAN_VERSION}"
+ARG RELEASE_NAME=code_lead
 
-# The ACP harness is a Node package and needs Node >= 22, which Debian
-# trixie does not ship. Take Node from the official image of the *same*
-# Debian release so the binary we copy into the runner matches its
-# glibc/libstdc++.
-ARG NODE_IMAGE="docker.io/node:22-trixie-slim"
+ARG ELIXIR_VERSION="1.20.3"
+ARG ERLANG_VERSION="28.5.0.5"
+ARG ALPINE_VERSION="3.23.5"
+
+ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${ERLANG_VERSION}-alpine-${ALPINE_VERSION}"
+ARG RUNNER_IMAGE="alpine:${ALPINE_VERSION}"
+
 ARG CLAUDE_ACP_VERSION=0.66.0
 
-# Bundle the Claude Code ACP harness. This stage reads nothing from the
-# repo, so it caches independently of the application source.
-FROM ${NODE_IMAGE} AS harness
+# -----------------------------------------------------------------------------
+ARG MIX_ENV="prod"
+
+# harness stage
+# Bundle the Claude Code ACP harness. This stage reads nothing from the repo,
+# so it caches independently of the application source. It builds on the runner
+# image so that the musl-specific packages npm resolves match the image the
+# harness ends up in.
+FROM ${RUNNER_IMAGE} AS harness
 
 ARG CLAUDE_ACP_VERSION
+
+# `node --version` fails the build loudly if Alpine ever ships Node < 22, which
+# the harness requires.
+RUN apk add --no-cache nodejs npm && node --version
 
 # --prefix keeps npm itself out of what we copy: the package lands in
 # /opt/harness/lib/node_modules and is linked as
@@ -37,100 +37,98 @@ ARG CLAUDE_ACP_VERSION
 RUN npm install -g --prefix /opt/harness --no-fund --no-audit \
   "@agentclientprotocol/claude-agent-acp@${CLAUDE_ACP_VERSION}"
 
+
+# -----------------------------------------------------------------------------
+
+# build stage
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache build-base git python3 curl
 
-# prepare build dir
+# sets work dir
 WORKDIR /app
 
-# install hex + rebar
-RUN mix local.hex --force \
-  && mix local.rebar --force
+# Needed for cross platform builds with newer erlang (27+). Also prevent Erlang from trying to initialize a TTY during the build
+# see: https://elixirforum.com/t/mix-deps-get-memory-explosion-when-doing-cross-platform-docker-build/57157/3
+ENV ERL_FLAGS="-noinput +JPperf true"
 
-# set build ENV
-ENV MIX_ENV="prod"
+# install hex + rebar
+RUN mix local.hex --force && \
+  mix local.rebar --force
+
+# redeclare it as it is lost after the FROM above
+ARG MIX_ENV
+ENV MIX_ENV="${MIX_ENV}"
+
+COPY . /app
 
 # install mix dependencies
-COPY mix.exs mix.lock ./
 RUN mix deps.get --only $MIX_ENV
-RUN mkdir config
 
-# copy compile-time config files before we compile dependencies
-# to ensure any relevant config change will trigger the dependencies
-# to be re-compiled.
-COPY config/config.exs config/${MIX_ENV}.exs config/
+# compile dependencies
 RUN mix deps.compile
 
-RUN mix assets.setup
-
-COPY priv priv
-
-COPY lib lib
-
-# Compile the release
+# compile project
 RUN mix compile
 
-COPY assets assets
-
-# compile assets
+# Compile assets
 RUN mix assets.deploy
 
-# Changes to config/runtime.exs don't require recompiling the code
-COPY config/runtime.exs config/
+# assemble release
+RUN mix release $RELEASE_NAME
 
-COPY rel rel
-RUN mix release
 
-# start a new build stage so that the final image will only contain
-# the compiled release and other runtime necessities
-FROM ${RUNNER_IMAGE} AS final
+# -----------------------------------------------------------------------------
 
-# git is required at runtime: the app clones workspace repos, manages task
-# worktrees, and pushes task branches to origin from inside the release.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates git \
-  && rm -rf /var/lib/apt/lists/*
+# app stage
+FROM ${RUNNER_IMAGE} AS runner
 
-# Set the locale
-RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
-  && locale-gen
+ARG RELEASE_NAME
+ARG MIX_ENV
 
-ENV LANG=en_US.UTF-8
-ENV LANGUAGE=en_US:en
-ENV LC_ALL=en_US.UTF-8
+# install runtime dependencies
+# git: the app clones workspace repos, manages task worktrees and pushes task
+#   branches to origin from inside the release.
+# ca-certificates: Alpine ships no CA bundle, without it every outbound HTTPS
+#   call (LLM APIs, git over https) fails TLS verification.
+# nodejs: runs the ACP harness copied in below (npm stays in the harness stage).
+RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs
 
-# Node plus the bundled ACP harness. libstdc++6 (installed above) is the
-# only shared library Node needs beyond libc. `#!/usr/bin/env node` in
-# the harness bin script resolves through PATH.
-COPY --from=harness /usr/local/bin/node /usr/local/bin/node
+ENV USER="elixir"
+
+WORKDIR "/app"
+
+# Create  unprivileged user to run the release
+RUN \
+  addgroup \
+  -g 1000 \
+  -S "${USER}" \
+  && adduser \
+  -s /bin/sh \
+  -u 1000 \
+  -G "${USER}" \
+  -h "/home/${USER}" \
+  -D "${USER}" \
+  && su "${USER}" \
+  && chown "${USER}":"${USER}" /app
+
+# The bundled ACP harness. `#!/usr/bin/env node` in its bin script resolves
+# through PATH to the nodejs installed above.
 COPY --from=harness /opt/harness /opt/harness
 ENV PATH="/opt/harness/bin:${PATH}"
 
-WORKDIR "/app"
-RUN chown nobody /app
-
 # Mutable state, kept out of the release directory. Mount a volume here:
-# `home` is where the agent harness writes its own config and session
-# state, `workspace` holds base clones, task worktrees and task folders.
-RUN mkdir -p /data/home /data/workspace && chown -R nobody /data
+# `home` is where the agent harness writes its own config and session state,
+# `workspace` holds base clones, task worktrees and task folders.
+RUN mkdir -p /data/home /data/workspace && chown -R "${USER}":"${USER}" /data
 ENV HOME=/data/home
 ENV WORKSPACE_ROOT=/data/workspace
 
-# set runner ENV
-ENV MIX_ENV="prod"
+# run as user
+USER "${USER}"
 
-# Only copy the final release from the build stage
-COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/code_lead ./
-
-USER nobody
-
-# If using an environment that doesn't automatically reap zombie processes, it is
-# advised to add an init process such as tini via `apt-get install`
-# above and adding an entrypoint. See https://github.com/krallin/tini for details
-# ENTRYPOINT ["/tini", "--"]
+# copy release executables
+COPY --from=builder --chown="${USER}":"${USER}" /app/_build/"${MIX_ENV}"/rel/"${RELEASE_NAME}" ./
 
 CMD ["/app/bin/server"]

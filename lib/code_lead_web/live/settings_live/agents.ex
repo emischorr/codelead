@@ -108,48 +108,50 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
         </:actions>
       </.settings_page_header>
 
-      <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
-        <.section_card label="Org agents — selectable in every project">
-          <div :if={@providers == []}>
-            <.empty_state icon="hero-cloud" title="Connect a provider first">
-              An agent needs a model backend.
-              <.link navigate={~p"/settings/providers"} class="font-semibold text-accent">
-                Add a provider
-              </.link>
-              to get started.
-            </.empty_state>
-          </div>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
+          <.section_card label="Org agents — selectable in every project">
+            <div :if={@providers == []}>
+              <.empty_state icon="hero-cloud" title="Connect a provider first">
+                An agent needs a model backend.
+                <.link navigate={~p"/settings/providers"} class="font-semibold text-accent">
+                  Add a provider
+                </.link>
+                to get started.
+              </.empty_state>
+            </div>
 
-          <div :if={@providers != [] and @agents == []}>
-            <.empty_state icon="hero-sparkles" title="No agents yet">
-              Nothing can run without an executor. Add your first persona.
-            </.empty_state>
-          </div>
+            <div :if={@providers != [] and @agents == []}>
+              <.empty_state icon="hero-sparkles" title="No agents yet">
+                Nothing can run without an executor. Add your first persona.
+              </.empty_state>
+            </div>
 
-          <div id="agent-list">
-            <.list_row
-              :for={agent <- @agents}
-              id={"agent-row-#{agent.id}"}
-              title={agent.name}
-              subtitle={model_line(agent, @providers)}
-            >
-              <:badges>
-                <.badge variant={:accent}>{agent.work_type}</.badge>
-                <.badge :for={role <- agent.roles} variant={:neutral}>{role}</.badge>
-                <.badge variant={:run}>{driver_label(agent)}</.badge>
-              </:badges>
-              <:actions>
-                <.button patch={~p"/settings/agents/#{agent.id}/edit"}>Edit</.button>
-                <.delete_button
-                  id={"delete-agent-#{agent.id}"}
-                  value={agent.id}
-                  reason={usage_reason(agent.usage)}
-                  confirm={"Delete #{agent.name}?"}
-                />
-              </:actions>
-            </.list_row>
-          </div>
-        </.section_card>
+            <div id="agent-list">
+              <.list_row
+                :for={agent <- @agents}
+                id={"agent-row-#{agent.id}"}
+                title={agent.name}
+                subtitle={model_line(agent, @providers)}
+              >
+                <:badges>
+                  <.badge variant={:accent}>{agent.work_type}</.badge>
+                  <.badge :for={role <- agent.roles} variant={:neutral}>{role}</.badge>
+                  <.badge variant={:run}>{driver_label(agent)}</.badge>
+                </:badges>
+                <:actions>
+                  <.button patch={~p"/settings/agents/#{agent.id}/edit"}>Edit</.button>
+                  <.delete_button
+                    id={"delete-agent-#{agent.id}"}
+                    value={agent.id}
+                    reason={usage_reason(agent.usage)}
+                    confirm={"Delete #{agent.name}?"}
+                  />
+                </:actions>
+              </.list_row>
+            </div>
+          </.section_card>
+        </div>
       </div>
 
       <.modal

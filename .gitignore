@@ -37,6 +37,10 @@ npm-debug.log
 
 .envrc
 
+# Filled-in deployment secrets. The committed template is
+# deployment/.env.example — never the .env made from it.
+.env
+
 # Local Postgres data volume (docker-compose bind mount).
 /docker/postgres/
 

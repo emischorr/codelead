@@ -214,9 +214,11 @@ defmodule CodeLeadWeb.BoardLive do
         </.button>
       </header>
 
-      <div class="min-h-0 flex-1 overflow-auto p-4 sm:p-5">
+      <%!-- Desktop hands scrolling to the individual columns so the headers stay
+            put; below `lg` there is only one column, so the pane scrolls it. --%>
+      <div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 lg:overflow-hidden">
         <%!-- Desktop: all four columns --%>
-        <div class="hidden items-start gap-4 lg:grid lg:grid-cols-4">
+        <div class="hidden gap-4 lg:grid lg:h-full lg:grid-cols-4">
           <.board_column
             :for={{column, title} <- @columns}
             id={"board-column-#{column}"}
@@ -302,8 +304,8 @@ defmodule CodeLeadWeb.BoardLive do
 
   defp board_column(assigns) do
     ~H"""
-    <div id={@id} class="flex min-w-0 flex-col gap-2.5">
-      <div :if={!@headerless} class="flex items-center gap-2 px-1">
+    <div id={@id} class="flex min-h-0 min-w-0 flex-col gap-2.5">
+      <div :if={!@headerless} class="flex shrink-0 items-center gap-2 px-1">
         <span class="text-[11.5px] font-semibold uppercase tracking-widest text-text2">
           {@title}
         </span>
@@ -311,14 +313,18 @@ defmodule CodeLeadWeb.BoardLive do
           {length(@tasks)}
         </span>
       </div>
-      <.empty_state :if={@tasks == []} title="No tasks" icon="hero-inbox" />
-      <.board_card
-        :for={task <- @tasks}
-        id={"#{@id_prefix}task-card-#{task.id}"}
-        task={task}
-        column={@column}
-        ctx={@ctx}
-      />
+      <%!-- Inert on mobile: with no definite height above it, `flex-1` resolves
+            to auto and the cards grow the board pane instead. --%>
+      <div class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto">
+        <.empty_state :if={@tasks == []} title="No tasks" icon="hero-inbox" />
+        <.board_card
+          :for={task <- @tasks}
+          id={"#{@id_prefix}task-card-#{task.id}"}
+          task={task}
+          column={@column}
+          ctx={@ctx}
+        />
+      </div>
     </div>
     """
   end

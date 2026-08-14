@@ -11,19 +11,34 @@ defmodule CodeLeadWeb.Layouts do
   # and other static content.
   embed_templates "layouts/*"
 
+  # Every navigation row is the same box in both widths: a label row when
+  # expanded, the rail's 38px square when collapsed. Kept as one literal so the
+  # `collapsed:` candidates stay greppable for Tailwind's source scanner.
+  @nav_row "flex items-center gap-2.5 overflow-hidden whitespace-nowrap rounded-[10px] px-2.5 py-2 " <>
+             "text-[13.5px] collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:p-0"
+
   @doc """
-  Renders the app layout: project sidebar (full or icon rail on desktop,
-  overlay drawer on mobile) plus the main content area.
+  Renders the app layout: project sidebar (expanded or collapsed to a glyph rail
+  on desktop, overlay drawer on mobile) plus the main content area.
 
   The sidebar is identical on every authenticated page — it renders entirely
   from the `@nav` map that `CodeLeadWeb.NavContext` assigns, so pages never
   assemble the navigation themselves. Pages render their own header row inside
   the content area and open the mobile drawer with `<.sidebar_toggle />`.
 
+  Width is the user's choice, remembered in `localStorage["cl:nav"]` and applied
+  as CSS through the `collapsed` variant — the server never learns it. A page
+  that needs a particular width passes `sidebar={:open}` or `sidebar={:closed}`,
+  which wins over the preference and hides the toggle.
+
   ## Examples
 
       <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope}>
         <h1>Content</h1>
+      </Layouts.app>
+
+      <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope} sidebar={:closed}>
+        <h1>Content that wants the width</h1>
       </Layouts.app>
 
   """
@@ -33,28 +48,43 @@ defmodule CodeLeadWeb.Layouts do
     required: true,
     doc: "the navigation state assigned by `CodeLeadWeb.NavContext`"
 
-  attr :sidebar, :atom, default: :full, values: [:full, :rail]
+  attr :sidebar, :atom,
+    default: :user,
+    values: [:user, :open, :closed],
+    doc: "`:user` follows the remembered preference; `:open`/`:closed` override it"
+
   attr :current_scope, :any, default: nil, doc: "the signed-in scope, when there is one"
 
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <div class="flex min-h-screen bg-bg">
+    <%!-- The shell owns the viewport height: `h-dvh` + `overflow-hidden` means
+          the window never scrolls, so every page under this layout must put its
+          content in a `min-h-0 flex-1 overflow-y-auto` pane of its own. --%>
+    <div class="flex h-dvh overflow-hidden bg-bg">
+      <%!-- The aside itself stays `overflow: visible` — the project switcher's
+            flyout has to escape the 232px/64px column. The scroll region lives
+            *inside* it instead, around the nav links (see `sidebar_content`). --%>
       <aside
-        :if={@sidebar == :full}
-        class="hidden w-[232px] shrink-0 flex-col gap-1.5 border-r border-border bg-surface px-3.5 py-4 lg:flex"
+        id="sidebar"
+        data-sidebar={sidebar_mode(@sidebar)}
+        class={[
+          "hidden w-[232px] shrink-0 flex-col gap-1.5 border-r border-border bg-surface px-3.5 py-4 lg:flex",
+          "transition-[width] duration-200 ease-out motion-reduce:transition-none",
+          "collapsed:w-16 collapsed:items-center collapsed:gap-2 collapsed:px-2"
+        ]}
       >
-        <.sidebar_content nav={@nav} current_scope={@current_scope} />
+        <.sidebar_content
+          nav={@nav}
+          current_scope={@current_scope}
+          collapsible={@sidebar == :user}
+        />
       </aside>
 
-      <aside
-        :if={@sidebar == :rail}
-        class="hidden w-16 shrink-0 flex-col items-center gap-3.5 border-r border-border bg-surface py-4 lg:flex"
-      >
-        <.sidebar_rail nav={@nav} current_scope={@current_scope} />
-      </aside>
-
+      <%!-- The drawer is a sibling of the aside and carries neither state
+            attribute, so no branch of the `collapsed` variant reaches it: it is
+            always the expanded sidebar, whatever the desktop width is. --%>
       <div id="mobile-drawer" class="fixed inset-0 z-40 hidden lg:hidden">
         <div class="absolute inset-0 bg-black/45" phx-click={hide_drawer()} aria-hidden="true" />
         <div class="absolute inset-y-0 left-0 flex w-[300px] flex-col gap-1.5 border-r border-border bg-surface px-3.5 py-4 shadow-2xl">
@@ -64,7 +94,7 @@ defmodule CodeLeadWeb.Layouts do
 
       <.project_store project={@nav.project} />
 
-      <main class="flex min-w-0 flex-1 flex-col">
+      <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
         {render_slot(@inner_block)}
       </main>
 
@@ -166,14 +196,19 @@ defmodule CodeLeadWeb.Layouts do
   attr :nav, :map, required: true
   attr :current_scope, :any, default: nil
   attr :closable, :boolean, default: false
+  attr :collapsible, :boolean, default: false
 
   defp sidebar_content(assigns) do
     ~H"""
-    <div class="flex items-center gap-2.5 px-1.5 pb-3">
-      <.link navigate={~p"/"} class="flex items-center gap-2.5" title="CodeLead">
+    <div class="flex shrink-0 items-center gap-2.5 overflow-hidden px-1.5 pb-3 collapsed:flex-col collapsed:gap-1.5 collapsed:px-0 collapsed:pb-2">
+      <.link navigate={~p"/"} class="flex items-center gap-2.5" title="CodeLead" aria-label="CodeLead">
         <.logo_glyph />
-        <span class="text-[15px] font-bold tracking-tight text-text">CodeLead</span>
+        <span class="whitespace-nowrap text-[15px] font-bold tracking-tight text-text collapsed:hidden">
+          CodeLead
+        </span>
       </.link>
+      <%!-- The drawer closes, the desktop sidebar collapses. Never both, which
+            is what keeps `#sidebar-collapse` a unique id for its hook. --%>
       <button
         :if={@closable}
         type="button"
@@ -183,62 +218,86 @@ defmodule CodeLeadWeb.Layouts do
       >
         <.icon name="hero-x-mark" class="size-4" />
       </button>
+      <.sidebar_collapse_button :if={!@closable && @collapsible} />
     </div>
 
     <.project_switcher id={nav_id(@closable, "project-switcher")} nav={@nav} />
 
-    <div class="h-2.5" />
+    <div class="h-2.5 shrink-0 collapsed:h-1.5" />
 
-    <.link
-      id={nav_id(@closable, "nav-dashboard")}
-      navigate={~p"/"}
-      class={nav_class(@nav.current == :dashboard)}
-    >
-      <.icon name="hero-squares-2x2" class="size-4" /> Dashboard
-    </.link>
-    <.link
-      :if={@nav.project}
-      id={nav_id(@closable, "nav-board")}
-      navigate={~p"/projects/#{@nav.project.id}/board"}
-      class={nav_class(@nav.current == :board)}
-    >
-      <.icon name="hero-view-columns" class="size-4" /> Board
-    </.link>
-    <span
-      :if={is_nil(@nav.project)}
-      id={nav_id(@closable, "nav-board")}
-      class={nav_class(:disabled)}
-      aria-disabled="true"
-      title="No project yet"
-    >
-      <.icon name="hero-view-columns" class="size-4" /> Board
-    </span>
-    <span class={nav_class(:disabled)} aria-disabled="true" title="Coming soon">
-      <.icon name="hero-chart-bar" class="size-4" /> Metrics
-    </span>
-    <.link
-      id={nav_id(@closable, "nav-settings")}
-      navigate={~p"/settings"}
-      class={nav_class(@nav.current == :settings)}
-    >
-      <.icon name="hero-cog-6-tooth" class="size-4" /> Settings
-    </.link>
-
-    <div class="h-3.5" />
-
-    <.link
-      :if={@nav.project && @nav.attention_count > 0}
-      id={nav_id(@closable, "attention-pill")}
-      navigate={~p"/projects/#{@nav.project.id}/board"}
-      class="flex items-center gap-2.5 rounded-[10px] border border-warn-border bg-warn-soft px-2.5 py-2 text-[13px] font-semibold text-warn"
-    >
-      <span class="size-[7px] animate-pulse rounded-full bg-warn" /> Needs attention
-      <span class="ml-auto rounded-[7px] bg-warn px-1.5 font-mono text-xs text-surface">
-        {@nav.attention_count}
+    <%!-- The links are the only part of the sidebar allowed to scroll: it is a
+          flex-1 region, so it doubles as the spring that pins the budget and
+          account cards to the bottom of the viewport-height aside. --%>
+    <div class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto collapsed:items-center">
+      <.link
+        id={nav_id(@closable, "nav-dashboard")}
+        navigate={~p"/"}
+        class={nav_class(@nav.current == :dashboard)}
+        title="Dashboard"
+        aria-label="Dashboard"
+      >
+        <.icon name="hero-squares-2x2" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Dashboard</span>
+      </.link>
+      <.link
+        :if={@nav.project}
+        id={nav_id(@closable, "nav-board")}
+        navigate={~p"/projects/#{@nav.project.id}/board"}
+        class={nav_class(@nav.current == :board)}
+        title="Board"
+        aria-label="Board"
+      >
+        <.icon name="hero-view-columns" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Board</span>
+      </.link>
+      <span
+        :if={is_nil(@nav.project)}
+        id={nav_id(@closable, "nav-board")}
+        class={nav_class(:disabled)}
+        aria-disabled="true"
+        title="Board — no project yet"
+        aria-label="Board"
+      >
+        <.icon name="hero-view-columns" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Board</span>
       </span>
-    </.link>
+      <span
+        class={nav_class(:disabled)}
+        aria-disabled="true"
+        title="Metrics — coming soon"
+        aria-label="Metrics"
+      >
+        <.icon name="hero-chart-bar" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Metrics</span>
+      </span>
+      <.link
+        id={nav_id(@closable, "nav-settings")}
+        navigate={~p"/settings"}
+        class={nav_class(@nav.current == :settings)}
+        title="Settings"
+        aria-label="Settings"
+      >
+        <.icon name="hero-cog-6-tooth" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Settings</span>
+      </.link>
 
-    <div class="flex-1" />
+      <div class="h-3.5 collapsed:h-2" />
+
+      <.link
+        :if={@nav.project && @nav.attention_count > 0}
+        id={nav_id(@closable, "attention-pill")}
+        navigate={~p"/projects/#{@nav.project.id}/board"}
+        title="Tasks needing attention"
+        aria-label="Tasks needing attention"
+        class="flex items-center gap-2.5 overflow-hidden whitespace-nowrap rounded-[10px] border border-warn-border bg-warn-soft px-2.5 py-2 text-[13px] font-semibold text-warn collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:rounded-full collapsed:border-0 collapsed:bg-transparent collapsed:p-0"
+      >
+        <span class="size-[7px] shrink-0 animate-pulse rounded-full bg-warn collapsed:hidden" />
+        <span class="collapsed:hidden">Needs attention</span>
+        <span class="ml-auto rounded-[7px] bg-warn px-1.5 font-mono text-xs text-surface collapsed:ml-0 collapsed:flex collapsed:size-[26px] collapsed:items-center collapsed:justify-center collapsed:rounded-full collapsed:bg-warn-soft collapsed:px-0 collapsed:text-warn">
+          {@nav.attention_count}
+        </span>
+      </.link>
+    </div>
 
     <.budget_card
       :if={@nav.spend}
@@ -260,11 +319,81 @@ defmodule CodeLeadWeb.Layouts do
   defp nav_id(true, name), do: "m-" <> name
   defp nav_id(false, name), do: name
 
+  defp sidebar_mode(:user), do: "user"
+  defp sidebar_mode(:open), do: "open"
+  defp sidebar_mode(:closed), do: "closed"
+
+  # Width is a client-side preference, so the button drives CSS rather than an
+  # assign: a plain click listener (not `phx-click`, which needs a connected
+  # socket) flips `localStorage["cl:nav"]` and `<html data-nav>`. `aria-expanded`
+  # is set by the hook and re-set in `updated()`, because the aside lives inside
+  # the LiveView-managed tree and morphdom would otherwise patch it back.
+  defp sidebar_collapse_button(assigns) do
+    ~H"""
+    <button
+      id="sidebar-collapse"
+      type="button"
+      phx-hook=".NavCollapse"
+      aria-controls="sidebar"
+      class="ml-auto inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-lg text-text3 hover:bg-surface2 hover:text-text2 collapsed:ml-0"
+    >
+      <.icon name="hero-chevron-double-left" class="size-4 collapsed:hidden" />
+      <.icon name="hero-chevron-double-right" class="hidden size-4 collapsed:block" />
+    </button>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".NavCollapse">
+      export default {
+        mounted() {
+          this.onClick = () => this.set(this.collapsed() ? "expanded" : "collapsed")
+          this.onKey = (e) => {
+            if (e.key === "b" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              this.onClick()
+            }
+          }
+          this.onStorage = (e) => {
+            if (e.key === "cl:nav") { this.apply(e.newValue); this.sync() }
+          }
+          this.el.addEventListener("click", this.onClick)
+          window.addEventListener("keydown", this.onKey)
+          window.addEventListener("storage", this.onStorage)
+          this.sync()
+        },
+        updated() { this.sync() },
+        destroyed() {
+          this.el.removeEventListener("click", this.onClick)
+          window.removeEventListener("keydown", this.onKey)
+          window.removeEventListener("storage", this.onStorage)
+        },
+        collapsed() { return document.documentElement.dataset.nav === "collapsed" },
+        apply(value) {
+          document.documentElement.dataset.nav = value === "collapsed" ? "collapsed" : "expanded"
+        },
+        set(value) {
+          window.localStorage.setItem("cl:nav", value)
+          this.apply(value)
+          this.sync()
+        },
+        sync() {
+          const open = !this.collapsed()
+          this.el.setAttribute("aria-expanded", String(open))
+          this.el.setAttribute("aria-label", open ? "Collapse sidebar" : "Expand sidebar")
+        }
+      }
+    </script>
+    """
+  end
+
   @doc """
   Signed-in identity, the theme switch, and the account actions. Rendered in
   the sidebar and on the welcome page — every authenticated surface needs a
   way out. Pass `theme_toggle={false}` where the surrounding shell already
   offers one; the row then spells the email out instead.
+
+  Collapsed it becomes the avatar over the log-out button. The theme switch is
+  dropped: a three-segment control does not survive 48px, and theme is a
+  set-and-forget preference reachable from every expanded page. The `collapsed:`
+  classes are inert under `Layouts.auth`, which has no sidebar for the variant
+  to match against.
   """
   attr :id, :string, default: "account-card"
   attr :user, :map, required: true
@@ -272,21 +401,30 @@ defmodule CodeLeadWeb.Layouts do
 
   def account_card(assigns) do
     ~H"""
-    <div id={@id} class="mt-2.5 flex items-center gap-2 border-t border-border pt-2.5">
-      <span
+    <div
+      id={@id}
+      class="mt-2.5 flex shrink-0 items-center gap-2 border-t border-border pt-2.5 collapsed:mt-2 collapsed:flex-col collapsed:gap-1.5 collapsed:border-t-0 collapsed:pt-2"
+    >
+      <.link
+        id={"#{@id}-avatar"}
+        navigate={~p"/users/settings"}
         class="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-surface2 font-mono text-[11px] font-semibold uppercase text-text2"
         title={@user.email}
+        aria-label={"Your account (#{@user.email})"}
       >
         {String.first(@user.email)}
-      </span>
-      <.theme_toggle :if={@theme_toggle} class="mr-auto" />
-      <span :if={!@theme_toggle} class="min-w-0 flex-1 truncate text-[12.5px] text-text2">
+      </.link>
+      <.theme_toggle :if={@theme_toggle} class="mr-auto collapsed:hidden" />
+      <span
+        :if={!@theme_toggle}
+        class="min-w-0 flex-1 truncate text-[12.5px] text-text2 collapsed:hidden"
+      >
         {@user.email}
       </span>
       <.link
         id={"#{@id}-settings"}
         navigate={~p"/users/settings"}
-        class="inline-flex size-[26px] items-center justify-center rounded-lg text-text3 hover:bg-surface2 hover:text-text2"
+        class="inline-flex size-[26px] items-center justify-center rounded-lg text-text3 hover:bg-surface2 hover:text-text2 collapsed:hidden"
         title="Your account"
       >
         <.icon name="hero-cog-6-tooth" class="size-4" />
@@ -301,94 +439,6 @@ defmodule CodeLeadWeb.Layouts do
         <.icon name="hero-arrow-right-start-on-rectangle" class="size-4" />
       </.link>
     </div>
-    """
-  end
-
-  attr :nav, :map, required: true
-  attr :current_scope, :any, default: nil
-
-  # Item-for-item the same navigation as `sidebar_content/1`, collapsed to
-  # glyphs: project · Dashboard · Board · Metrics · Settings · attention ·
-  # account.
-  defp sidebar_rail(assigns) do
-    ~H"""
-    <.link navigate={~p"/"} title="CodeLead">
-      <.logo_glyph />
-    </.link>
-    <div class="h-1.5" />
-    <.link
-      :if={@nav.project && @nav.scope == :project}
-      id="rail-project"
-      navigate={~p"/projects/#{@nav.project.id}/board"}
-      class="flex size-[26px] items-center justify-center rounded-[7px] bg-accent font-mono text-[11px] font-semibold uppercase text-surface"
-      title={@nav.project.name}
-    >
-      {String.first(@nav.project.name)}
-    </.link>
-    <span
-      :if={!(@nav.project && @nav.scope == :project)}
-      id="rail-project"
-      class="flex size-[26px] cursor-not-allowed items-center justify-center rounded-[7px] border border-dashed border-border font-mono text-[11px] font-semibold uppercase text-text3"
-      aria-disabled="true"
-      title={(@nav.project && @nav.project.name) || "No project"}
-    >
-      {(@nav.project && String.first(@nav.project.name)) || "—"}
-    </span>
-    <div class="h-1.5" />
-    <.link
-      id="rail-dashboard"
-      navigate={~p"/"}
-      class={rail_class(@nav.current == :dashboard)}
-      title="Dashboard"
-    >
-      <.icon name="hero-squares-2x2" class="size-4" />
-    </.link>
-    <.link
-      :if={@nav.project}
-      id="rail-board"
-      navigate={~p"/projects/#{@nav.project.id}/board"}
-      class={rail_class(@nav.current == :board)}
-      title="Board"
-    >
-      <.icon name="hero-view-columns" class="size-4" />
-    </.link>
-    <span
-      :if={is_nil(@nav.project)}
-      id="rail-board"
-      class={rail_class(:disabled)}
-      aria-disabled="true"
-      title="Board — no project yet"
-    >
-      <.icon name="hero-view-columns" class="size-4" />
-    </span>
-    <span class={rail_class(:disabled)} aria-disabled="true" title="Metrics — coming soon">
-      <.icon name="hero-chart-bar" class="size-4" />
-    </span>
-    <.link
-      id="rail-settings"
-      navigate={~p"/settings"}
-      class={rail_class(@nav.current == :settings)}
-      title="Settings"
-    >
-      <.icon name="hero-cog-6-tooth" class="size-4" />
-    </.link>
-    <div class="flex-1" />
-    <span
-      :if={@nav.project && @nav.attention_count > 0}
-      id="rail-attention"
-      class="flex size-[26px] items-center justify-center rounded-full bg-warn-soft font-mono text-[11px] font-semibold text-warn"
-      title="Tasks needing attention"
-    >
-      {@nav.attention_count}
-    </span>
-    <.link
-      :if={@current_scope && @current_scope.user}
-      navigate={~p"/users/settings"}
-      class="mt-2.5 flex size-[26px] items-center justify-center rounded-full bg-surface2 font-mono text-[11px] font-semibold uppercase text-text2"
-      title={@current_scope.user.email}
-    >
-      {String.first(@current_scope.user.email)}
-    </.link>
     """
   end
 
@@ -408,16 +458,24 @@ defmodule CodeLeadWeb.Layouts do
 
   # Switching projects only makes sense from a project page, so on general
   # pages the box keeps its place — naming the project you came from — but
-  # stops being a disclosure.
+  # stops being a disclosure. Collapsed, the box becomes the project initial and
+  # the panel re-anchors as a right-hand flyout: a 64px-wide list of truncated
+  # project names would be useless.
   defp project_switcher(%{nav: %{scope: :project, project: %{}}} = assigns) do
     ~H"""
-    <details id={@id} class="relative">
-      <summary class="flex cursor-pointer list-none items-center gap-2 rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold text-text [&::-webkit-details-marker]:hidden">
-        <span class="size-2 rounded-[3px] bg-accent" />
-        <span class="truncate">{@nav.project.name}</span>
-        <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3" />
+    <details id={@id} class="relative shrink-0">
+      <summary
+        title={@nav.project.name}
+        class="flex cursor-pointer list-none items-center gap-2 overflow-hidden rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold text-text [&::-webkit-details-marker]:hidden collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:overflow-visible collapsed:border-0 collapsed:bg-transparent collapsed:p-0"
+      >
+        <span class="size-2 shrink-0 rounded-[3px] bg-accent collapsed:hidden" />
+        <span class="truncate collapsed:hidden">{@nav.project.name}</span>
+        <span class="hidden size-[26px] items-center justify-center rounded-[7px] bg-accent font-mono text-[11px] font-semibold uppercase text-surface collapsed:flex">
+          {String.first(@nav.project.name)}
+        </span>
+        <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3 collapsed:hidden" />
       </summary>
-      <div class="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-[10px] border border-border bg-surface shadow-lg">
+      <div class="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-[10px] border border-border bg-surface shadow-lg collapsed:inset-x-auto collapsed:left-full collapsed:top-0 collapsed:ml-2 collapsed:mt-0 collapsed:w-56">
         <.link
           :for={project <- @nav.projects}
           navigate={~p"/projects/#{project.id}/board"}
@@ -444,13 +502,19 @@ defmodule CodeLeadWeb.Layouts do
         (@nav.project && "#{@nav.project.name} — switch projects from the board") ||
           "No project yet"
       }
-      class="flex cursor-not-allowed items-center gap-2 rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold opacity-60"
+      class="flex shrink-0 cursor-not-allowed items-center gap-2 overflow-hidden rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold opacity-60 collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:border-0 collapsed:bg-transparent collapsed:p-0 collapsed:opacity-100"
     >
-      <span class={["size-2 rounded-[3px]", (@nav.project && "bg-accent") || "bg-border"]} />
-      <span class={["truncate", (@nav.project && "text-text") || "text-text3"]}>
+      <span class={[
+        "size-2 shrink-0 rounded-[3px] collapsed:hidden",
+        (@nav.project && "bg-accent") || "bg-border"
+      ]} />
+      <span class={["truncate collapsed:hidden", (@nav.project && "text-text") || "text-text3"]}>
         {(@nav.project && @nav.project.name) || "No project"}
       </span>
-      <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3" />
+      <span class="hidden size-[26px] items-center justify-center rounded-[7px] border border-dashed border-border font-mono text-[11px] font-semibold uppercase text-text3 collapsed:flex">
+        {(@nav.project && String.first(@nav.project.name)) || "—"}
+      </span>
+      <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3 collapsed:hidden" />
     </div>
     """
   end
@@ -464,7 +528,7 @@ defmodule CodeLeadWeb.Layouts do
 
   defp budget_card(assigns) do
     ~H"""
-    <div id={@id} class="flex flex-col gap-1.5 rounded-xl bg-surface2 p-3">
+    <div id={@id} class="flex shrink-0 flex-col gap-1.5 rounded-xl bg-surface2 p-3 collapsed:hidden">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">
         Budget · {Calendar.strftime(Date.utc_today(), "%B")}
       </span>
@@ -479,28 +543,12 @@ defmodule CodeLeadWeb.Layouts do
     """
   end
 
-  defp nav_class(true),
-    do:
-      "flex items-center gap-2.5 rounded-[10px] bg-accent-soft px-2.5 py-2 text-[13.5px] font-semibold text-accent"
+  defp nav_class(true), do: [@nav_row, "bg-accent-soft font-semibold text-accent"]
 
   defp nav_class(false),
-    do:
-      "flex items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[13.5px] font-medium text-text2 hover:bg-surface2 hover:text-text"
+    do: [@nav_row, "font-medium text-text2 hover:bg-surface2 hover:text-text"]
 
-  defp nav_class(:disabled),
-    do:
-      "flex cursor-not-allowed items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-[13.5px] font-medium text-text3"
-
-  defp rail_class(true),
-    do: "flex size-[38px] items-center justify-center rounded-[10px] bg-accent-soft text-accent"
-
-  defp rail_class(false),
-    do:
-      "flex size-[38px] items-center justify-center rounded-[10px] text-text3 hover:bg-surface2 hover:text-text2"
-
-  defp rail_class(:disabled),
-    do:
-      "flex size-[38px] cursor-not-allowed items-center justify-center rounded-[10px] text-text3"
+  defp nav_class(:disabled), do: [@nav_row, "cursor-not-allowed font-medium text-text3"]
 
   defp show_drawer(js \\ %JS{}), do: JS.remove_class(js, "hidden", to: "#mobile-drawer")
 

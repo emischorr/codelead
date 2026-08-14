@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PW}
+      APP_DB_PW: ${APP_DB_PW}
+    volumes:
+      - pg:/var/lib/postgresql
+      - ./init-app-db.sh:/docker-entrypoint-initdb.d/init-app-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: ghcr.io/emischorr/code_lead:latest
+    command: ["/app/bin/migrate"]
+    restart: "no"
+    environment:
+      DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    image: ghcr.io/emischorr/code_lead:latest
+    command: ["/app/bin/server"]
+    environment:
+      DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      PHX_HOST: localhost
+      SCHEME: http
+      # The port the app listens on inside the container.
+      PORT: "4000"
+      # The port in generated links. Set here because this stack is reached
+      # directly on 4000; behind a proxy on 443, drop it and set SCHEME: https.
+      URL_PORT: "4000"
+      # Extra addresses this instance may be reached at, on top of PHX_HOST.
+      # Bare host = any scheme/port; full origin = exact match; "*" = allow all.
+      # ALLOWED_HOSTS: "192.168.1.50, codelead.local"
+    volumes:
+      - codelead-data:/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pg:
+  codelead-data:

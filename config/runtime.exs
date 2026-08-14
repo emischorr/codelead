@@ -20,6 +20,8 @@ if System.get_env("PHX_SERVER") do
   config :code_lead, CodeLeadWeb.Endpoint, server: true
 end
 
+# The port the endpoint binds to. It has no bearing on the port in generated
+# links — that is URL_PORT, set in the prod block below.
 config :code_lead, CodeLeadWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
@@ -62,7 +64,7 @@ default_workspace =
 
 config :code_lead,
   workspace_root: System.get_env("WORKSPACE_ROOT", default_workspace),
-  max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "2"))
+  max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "3"))
 
 if config_env() == :prod do
   database_url =
@@ -95,11 +97,47 @@ if config_env() == :prod do
       """
 
   host = System.get_env("PHX_HOST") || "example.com"
+  scheme = System.get_env("SCHEME") || "http"
+
+  # The port that appears in generated absolute URLs — independent of the
+  # listen port (PORT, set above). It defaults to the scheme's standard port,
+  # which is what a proxy-fronted instance wants; set it only when the app is
+  # reached directly on a non-standard port.
+  url_port =
+    case System.get_env("URL_PORT") do
+      nil -> if scheme == "https", do: 443, else: 80
+      value -> String.to_integer(value)
+    end
+
+  # Origins allowed to open the LiveView WebSocket. PHX_HOST is always allowed;
+  # ALLOWED_HOSTS adds more, so one instance can be reached at several addresses
+  # at once — e.g. directly by IP over http and through a TLS-terminating proxy
+  # on a domain. Entries are bare hosts ("10.0.0.5", "*.example.com"), which
+  # match any scheme and port, or full origins ("http://10.0.0.5:4000"), which
+  # must match exactly. "*" disables the check entirely.
+  allowed_hosts =
+    "ALLOWED_HOSTS"
+    |> System.get_env("")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+
+  check_origin =
+    if "*" in allowed_hosts do
+      false
+    else
+      [host | allowed_hosts]
+      |> Enum.map(fn entry ->
+        if String.contains?(entry, "//"), do: entry, else: "//" <> entry
+      end)
+      |> Enum.uniq()
+    end
 
   config :code_lead, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :code_lead, CodeLeadWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: url_port, scheme: scheme],
+    check_origin: check_origin,
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

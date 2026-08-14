@@ -114,44 +114,46 @@ defmodule CodeLeadWeb.SettingsLive.Users do
         </:actions>
       </.settings_page_header>
 
-      <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
-        <.section_card label={"#{length(@users)} in this organization"}>
-          <div id="user-list">
-            <.list_row
-              :for={user <- @users}
-              id={"user-row-#{user.id}"}
-              title={user.email}
-              subtitle={access_summary(user)}
-            >
-              <:badges>
-                <.badge variant={if user.role == :admin, do: :accent, else: :neutral}>
-                  {user.role}
-                </.badge>
-                <.badge :if={is_nil(user.confirmed_at)} variant={:warn}>Invite pending</.badge>
-                <.badge :if={user.id == @current_scope.user.id} variant={:ok}>You</.badge>
-              </:badges>
-              <:actions>
-                <.button
-                  :if={is_nil(user.confirmed_at)}
-                  id={"resend-invite-#{user.id}"}
-                  type="button"
-                  variant="ghost"
-                  phx-click="resend_invite"
-                  phx-value-id={user.id}
-                >
-                  Resend invite
-                </.button>
-                <.button patch={~p"/settings/users/#{user.id}/edit"}>Edit</.button>
-                <.delete_button
-                  id={"delete-user-#{user.id}"}
-                  value={user.id}
-                  reason={delete_reason(user, @current_scope.user, @users)}
-                  confirm={"Delete #{user.email}? They lose access immediately."}
-                />
-              </:actions>
-            </.list_row>
-          </div>
-        </.section_card>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
+          <.section_card label={"#{length(@users)} in this organization"}>
+            <div id="user-list">
+              <.list_row
+                :for={user <- @users}
+                id={"user-row-#{user.id}"}
+                title={user.email}
+                subtitle={access_summary(user)}
+              >
+                <:badges>
+                  <.badge variant={if user.role == :admin, do: :accent, else: :neutral}>
+                    {user.role}
+                  </.badge>
+                  <.badge :if={is_nil(user.confirmed_at)} variant={:warn}>Invite pending</.badge>
+                  <.badge :if={user.id == @current_scope.user.id} variant={:ok}>You</.badge>
+                </:badges>
+                <:actions>
+                  <.button
+                    :if={is_nil(user.confirmed_at)}
+                    id={"resend-invite-#{user.id}"}
+                    type="button"
+                    variant="ghost"
+                    phx-click="resend_invite"
+                    phx-value-id={user.id}
+                  >
+                    Resend invite
+                  </.button>
+                  <.button patch={~p"/settings/users/#{user.id}/edit"}>Edit</.button>
+                  <.delete_button
+                    id={"delete-user-#{user.id}"}
+                    value={user.id}
+                    reason={delete_reason(user, @current_scope.user, @users)}
+                    confirm={"Delete #{user.email}? They lose access immediately."}
+                  />
+                </:actions>
+              </.list_row>
+            </div>
+          </.section_card>
+        </div>
       </div>
 
       <.modal

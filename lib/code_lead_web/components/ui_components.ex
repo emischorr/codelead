@@ -368,7 +368,7 @@ defmodule CodeLeadWeb.UIComponents do
       <.timeline_rail />
       <span class="mt-1.5 size-2.5 shrink-0 rounded-full border border-border bg-surface" />
       <span class={[
-        "w-[58px] shrink-0 rounded-md py-0.5 text-center text-[10px] font-bold tracking-wide",
+        "h-[18px] w-[58px] shrink-0 self-start rounded-md text-center text-[10px] font-bold leading-[18px] tracking-wide",
         executor_chip(@executor_type)
       ]}>
         {@executor_type |> Atom.to_string() |> String.upcase()}

@@ -71,43 +71,45 @@ defmodule CodeLeadWeb.SettingsLive.Projects do
         </:actions>
       </.settings_page_header>
 
-      <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
-        <.section_card label="Product workspaces">
-          <div :if={@projects == []}>
-            <.empty_state icon="hero-folder" title="No projects yet">
-              A project holds the tasks, the linked repositories and the env store.
-            </.empty_state>
-          </div>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
+          <.section_card label="Product workspaces">
+            <div :if={@projects == []}>
+              <.empty_state icon="hero-folder" title="No projects yet">
+                A project holds the tasks, the linked repositories and the env store.
+              </.empty_state>
+            </div>
 
-          <div id="project-list">
-            <.list_row
-              :for={project <- @projects}
-              id={"project-row-#{project.id}"}
-              title={project.name}
-              subtitle={repo_line(project.repository_count)}
-              navigate={~p"/settings/projects/#{project.id}"}
-            >
-              <:meta>
-                <span>{task_line(project.task_count)}</span>
-                <span :if={project.budget_limit_cents} class="font-mono">
-                  {Format.cents(project.budget_limit_cents)}/mo
-                </span>
-              </:meta>
-              <:actions>
-                <.button navigate={~p"/settings/projects/#{project.id}"}>Open</.button>
-                <.delete_button
-                  id={"delete-project-#{project.id}"}
-                  value={project.id}
-                  reason={usage_reason(project.task_count)}
-                  confirm={
+            <div id="project-list">
+              <.list_row
+                :for={project <- @projects}
+                id={"project-row-#{project.id}"}
+                title={project.name}
+                subtitle={repo_line(project.repository_count)}
+                navigate={~p"/settings/projects/#{project.id}"}
+              >
+                <:meta>
+                  <span>{task_line(project.task_count)}</span>
+                  <span :if={project.budget_limit_cents} class="font-mono">
+                    {Format.cents(project.budget_limit_cents)}/mo
+                  </span>
+                </:meta>
+                <:actions>
+                  <.button navigate={~p"/settings/projects/#{project.id}"}>Open</.button>
+                  <.delete_button
+                    id={"delete-project-#{project.id}"}
+                    value={project.id}
+                    reason={usage_reason(project.task_count)}
+                    confirm={
                     "Delete #{project.name}? Its repositories, env store and project agents go with it. " <>
                       "The managed clone on disk is left in place."
                   }
-                />
-              </:actions>
-            </.list_row>
-          </div>
-        </.section_card>
+                  />
+                </:actions>
+              </.list_row>
+            </div>
+          </.section_card>
+        </div>
       </div>
 
       <.modal

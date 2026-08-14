@@ -11,7 +11,8 @@ defmodule CodeLead.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      licenses: ["Elastic-2.0"]
     ]
   end
 

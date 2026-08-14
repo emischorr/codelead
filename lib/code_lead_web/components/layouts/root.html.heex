@@ -27,6 +27,13 @@
           applyTheme(mode);
         };
         applyTheme(localStorage.getItem("phx:theme") || "system");
+        // Sidebar width preference, applied before first paint so a collapsed
+        // sidebar never flashes open. Always written, so the CSS vocabulary in
+        // app.css stays total. The .NavCollapse hook owns it from here.
+        document.documentElement.setAttribute(
+          "data-nav",
+          localStorage.getItem("cl:nav") === "collapsed" ? "collapsed" : "expanded"
+        );
         media.addEventListener("change", () => {
           if (!localStorage.getItem("phx:theme")) applyTheme("system");
         });

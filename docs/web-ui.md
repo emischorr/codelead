@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-12)
+# Web UI (last updated: 2026-08-14)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -63,6 +63,16 @@ copy that the wizard and the settings pages share, so the two surfaces
 cannot drift. `CodeLeadWeb.FlashMessages.delete_error/1` renders the
 guarded-delete refusals.
 
+**Secret inputs carry `autocomplete="new-password"`**, plus
+`data-1p-ignore` / `data-lpignore` / `data-bwignore`. A password field
+preceded by a text field looks like a login form, and browsers
+deliberately ignore `autocomplete="off"` there — so the provider modal
+would open prefilled with whatever the password manager had saved.
+Only `new-password` suppresses the fill; the `data-*` attributes are the
+opt-outs for 1Password, LastPass and Bitwarden, which run their own
+heuristics. The text field ahead of a secret gets `autocomplete="off"`
+so it is not treated as the username half of the pair.
+
 **Deletes are guarded in the context, not the UI.** The relevant foreign
 keys nilify or cascade, so an unguarded delete would silently strip
 executors off tasks or erase a project's whole history rather than
@@ -92,7 +102,11 @@ Tokens live in `assets/css/app.css`: a raw palette on `:root` /
 ok, diff add/del, terminal), mapped through a Tailwind v4 `@theme`
 block so utilities like `bg-surface`, `text-text2`, `border-border`
 theme-switch without `dark:` prefixes. The default Tailwind palette is
-dropped (`--color-*: initial`) to enforce token usage. Fonts are
+dropped (`--color-*: initial`) to enforce token usage. Two custom
+variants carry state that the server does not own: `dark`
+(`[data-theme=dark]`) and `collapsed`, which resolves the sidebar width
+from `<html data-nav>` and `#sidebar[data-sidebar]` — see
+[`navigation.md`](navigation.md). Fonts are
 self-hosted variable DM Sans (UI) and JetBrains Mono (numbers/code) in
 `priv/static/fonts/`. daisyUI was removed; the scaffold components in
 `core_components.ex` (flash/button/input) are hand-styled on tokens.
@@ -106,6 +120,25 @@ with `unsafe: false` **and** sanitizes; no call site may opt out.
 The theme script in `root.html.heex` resolves "system" to a concrete
 `data-theme=light|dark` (tracking `prefers-color-scheme`) and stamps
 `data-theme-mode` for the toggle indicator.
+
+**The shell owns the viewport height.** `Layouts.app` opens with `h-dvh
+overflow-hidden` and its `<main>` is `flex flex-col overflow-hidden`, so
+the window itself never scrolls: page headers stay put by construction
+and `sticky` actually works. The contract that follows is that **every
+page under `Layouts.app` must put its content in a `min-h-0 flex-1
+overflow-y-auto` pane** — a page that forgets it gets clipped, not a
+scrollbar. The board, dashboard and task page each have one; the
+settings family wraps its `mx-auto max-w-*` column in one (the classes
+stay on separate divs, because `flex-1` on the centred column would
+stretch it and make `max-w-*` size the scroller instead).
+
+The sidebar follows the same rule internally. The `<aside>` keeps
+`overflow: visible` — the project switcher's flyout has to escape the
+232px/64px column — so the scroll region is the nav-links div inside it,
+`min-h-0 flex-1 overflow-y-auto`. That `flex-1` is also what pins the
+budget and account cards to the bottom of the viewport (it replaced a
+bare `flex-1` spacer); everything above and below it is `shrink-0`, so a
+short viewport squeezes the links rather than the chrome.
 
 ## Component inventory
 
@@ -132,10 +165,13 @@ The theme script in `root.html.heex` resolves "system" to a concrete
   add/del row tints) over `CodeLead.Git.Diff` parser structs, plus
   `file_dom_id/1` — the shared card id, Base64 rather than a slug so
   `a/b.ex` and `a-b.ex` cannot collide on one scroll target.
-- `CodeLeadWeb.Layouts.app`: sidebar navigation — `:full` (232px) or
-  `:rail` (64px icons, task page) on desktop, overlay drawer on mobile
-  (`Layouts.sidebar_toggle` opens it). Takes `flash`, `nav`,
-  `current_scope` and optionally `sidebar`; no context calls in the
+- `CodeLeadWeb.Layouts.app`: sidebar navigation — one collapsible
+  sidebar on desktop (232px expanded, 64px glyph rail collapsed, toggled
+  by `#sidebar-collapse` and remembered in `localStorage["cl:nav"]`),
+  overlay drawer on mobile (`Layouts.sidebar_toggle` opens it). Takes
+  `flash`, `nav`, `current_scope` and optionally `sidebar`
+  (`:user` follows the preference, `:open`/`:closed` override it and hide
+  the toggle — `TaskLive` passes `:closed`); no context calls in the
   layout. The `nav` map and the rules the sidebar renders by are
   documented in [`navigation.md`](navigation.md).
 - `CodeLeadWeb.Layouts.auth`: the chromeless shell (wordmark + theme
@@ -231,6 +267,14 @@ clock button opens the shared `schedule_modal` and starts the run at a
 chosen UTC time instead of now. A queued task with a future
 `scheduled_at` shows `⏱ starts …` in place of the `⏸ queued · #N`
 badge, derived from the task rather than from a persisted hold reason.
+On desktop **each column scrolls on its own**: the pane is
+`lg:overflow-hidden`, the grid is `lg:h-full` (no `items-start`, so the
+columns stretch), and the cards sit in a `min-h-0 flex-1 overflow-y-auto`
+div below a `shrink-0` header. The action bar and all four column
+headers therefore stay fixed, and a long Planning column does not push
+the other three down. Below `lg` the same markup is inert — with no
+definite height above it the inner `flex-1` resolves to auto, so the
+single column grows and the pane scrolls it.
 Mobile: segmented one-column switcher + FAB (DOM ids
 prefixed `m-`); card button ids are derived from the card's own id so
 the two renderings do not collide. New-task modal validates work_type
@@ -381,16 +425,15 @@ mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
   hook turns into `scrollIntoView`. Pushed events are dispatched after
   the DOM patch, so the target is already expanded when the scroll runs.
 
-  **The window is what scrolls, not `#diff-pane`.** `layouts.ex` opens
-  with `min-h-screen` — a floor, not a height — and nothing below it is
-  definite, so `h-full` on the diff-tab root resolves to `auto` and the
-  pane's `overflow-y-auto` never engages. The hook is written to be
-  indifferent to this: `scrollIntoView` moves whichever ancestors need
-  moving, and its listeners sit on `document`, not on the pane. Same
-  root cause makes `#diff-toolbar`'s `sticky top-0`, the per-file sticky
-  headers, and the Agent tab's `sticky bottom-0` composer inert — fixing
-  that means `h-dvh` + `overflow-hidden` on the app shell, which changes
-  scrolling on every page.
+  **`#diff-pane` is what scrolls, not the window.** The app shell is
+  `h-dvh overflow-hidden` (see *Design language*), so `h-full` on the
+  diff-tab root resolves against a real height and the pane's
+  `overflow-y-auto` engages. `#diff-toolbar`'s `sticky top-0`, the
+  per-file headers' `sticky top-0`, and the Agent tab's `sticky
+  bottom-0` composer are all live for the same reason. The
+  `.ScrollToFile` hook is indifferent either way: `scrollIntoView` moves
+  whichever ancestors need moving, and its listeners sit on `document`,
+  not on the pane.
 
   The diff refreshes live: an `{:agent_feed, _, row}` for which
   `AgentFeed.file_changing?/2` holds sets `diff_stale?` and arms a

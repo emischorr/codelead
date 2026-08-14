@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-12)
+# Configuration (last updated: 2026-08-13)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -8,12 +8,30 @@ application code via `Application.get_env(:code_lead, ...)` — never
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and the project env store. Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()` |
+| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and the project env store. Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
 | `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod), `<repo>/tmp/test_workspace` (test) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. |
-| `MAX_CONCURRENT_RUNS` | `2` | Cap on simultaneously executing task runs; excess stays queued. |
-| `DATABASE_URL`, `SECRET_KEY_BASE`, `PHX_HOST`, `PORT`, … | — | Standard Phoenix/Ecto prod settings (see `config/runtime.exs`). |
+| `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
+| `DATABASE_URL` | **required in prod** | `ecto://USER:PASS@HOST/DATABASE`. |
+| `SECRET_KEY_BASE` | **required in prod** | Signs and encrypts cookies. `mix phx.gen.secret` or `openssl rand -base64 48`. |
+| `PHX_HOST` | `example.com` | The canonical hostname — the one in generated links. Feeds the endpoint's `:url` **and** is always allowed by the origin check (host only, any scheme/port). If the address bar shows a host that is neither this nor in `ALLOWED_HOSTS`, the page renders but LiveView never connects. |
+| `ALLOWED_HOSTS` | — | Comma-separated extra addresses the app may be reached at, on top of `PHX_HOST` — so one instance can answer both a LAN IP over http and a domain behind a TLS proxy. A bare host (`192.168.1.50`, `*.example.com`) matches any scheme and port; a full origin (`http://192.168.1.50:4000`) must match exactly; `*` disables the origin check entirely. |
+| `SCHEME` | `http` | Scheme for generated absolute URLs (login links, invites, email-change confirmations). Set to `https` when a proxy terminates TLS in front. |
+| `PORT` | `4000` | The port the endpoint binds to. Nothing else — it does not appear in generated URLs. |
+| `URL_PORT` | `443` when `SCHEME` is `https`, else `80` | The port in generated absolute URLs. Independent of `PORT`, so an instance can listen on 4000 and still emit `https://host` behind a proxy. Set it only when the app is reached directly on a non-standard port (then it equals the *published* port, which need not be `PORT`). |
+| `POOL_SIZE` | `10` | Database connection pool size. |
+| `ECTO_IPV6` | — | `true`/`1` to add `:inet6` to the database socket options. |
+| `DNS_CLUSTER_QUERY` | — | DNS query for node clustering; unused in a single-node deployment. |
 
-Local dev secrets live in `.envrc` (gitignored, direnv).
+**Production serves plain HTTP.** `force_ssl` is commented out in
+`config/prod.exs` — no redirect, no HSTS — because TLS termination belongs to
+whatever proxy the operator already runs. The
+`PHX_HOST`/`SCHEME`/`URL_PORT`/`ALLOWED_HOSTS` combinations for direct,
+proxied, and simultaneous access are in
+[`deployment.md`](deployment.md#urls-phx_host-scheme-url_port-allowed_hosts).
+
+Local dev secrets live in `.envrc` (gitignored, direnv). Deployment secrets go
+in a `.env` made from `deployment/.env.example`; `.env` is gitignored, the
+template is not.
 
 ## Application config keys
 
@@ -176,19 +194,22 @@ bring-your-own there. See *Docker image* below.
 
 ## Docker image
 
-`docker build -t code_lead .` produces a release image that needs no
-manual harness install.
+Published as `ghcr.io/emischorr/code_lead:latest` (multi-arch, amd64 and
+arm64). `docker build -t code_lead .` produces the same release image
+locally; it needs no manual harness install. The buildx invocation used to
+publish is in the `Dockerfile` header comment, and repeated with the rest of
+the deployment story in [`deployment.md`](deployment.md).
 
 | Build arg | Default | Purpose |
 |---|---|---|
 | `CLAUDE_ACP_VERSION` | pinned in the Dockerfile | Version of `@agentclientprotocol/claude-agent-acp` to bundle. Bump it deliberately — the image is reproducible only because it is pinned. |
-| `NODE_IMAGE` | `docker.io/node:22-trixie-slim` | Where Node comes from. Keep the Debian release matching `DEBIAN_VERSION`: the runner copies the Node binary, so glibc/libstdc++ must match. |
+| `ALPINE_VERSION` | pinned in the Dockerfile | Base for both the runner and the harness stage. Node comes from that release's `nodejs` package, so the two always agree on musl; the build fails if it is ever older than Node 22, which the harness requires. |
 
-The harness lands in `/opt/harness` (on `PATH`); Node itself is copied to
-`/usr/local/bin/node`.
+The harness lands in `/opt/harness` (on `PATH`); `npm` stays behind in the
+harness stage, so the runner carries only `nodejs`.
 
-**Mount a volume on `/data`.** The image runs as `nobody` and points two
-variables there:
+**Mount a volume on `/data`.** The image runs as the unprivileged `elixir`
+user (uid 1000) and points two variables there:
 
 - `HOME=/data/home` — the agent harness writes its own config and session
   state under `$HOME`. Without a writable home it starts and then fails.
@@ -196,9 +217,12 @@ variables there:
   folders. Without the override these would land inside the release
   directory.
 
-Migrations are not automatic: run `/app/bin/migrate` (which evals
-`CodeLead.Release.migrate/0`) before or alongside the first boot.
-`/app/bin/server` is the default command.
+Migrations are not automatic *inside the image*: `/app/bin/server` is the
+default command, and `/app/bin/migrate` (which evals
+`CodeLead.Release.migrate/0`) has to be run separately. The compose stack in
+[`deployment/`](../deployment/) does that with a one-shot `migrate` service
+the app waits on, so a deployed instance migrates itself on every
+`docker compose up`.
 
 ## Workspace layout (planned)
 

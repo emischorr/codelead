@@ -40,62 +40,64 @@ defmodule CodeLeadWeb.SettingsLive do
     <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope}>
       <.settings_page_header title="Settings" />
 
-      <div class="mx-auto w-full max-w-5xl p-4 sm:p-6">
-        <p class="mb-5 text-[13px] text-text2">
-          Everything the setup wizard created, plus the people who can sign in.
-        </p>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto w-full max-w-5xl p-4 sm:p-6">
+          <p class="mb-5 text-[13px] text-text2">
+            Everything the setup wizard created, plus the people who can sign in.
+          </p>
 
-        <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-          <.settings_tile
-            id="settings-tile-users"
-            icon="hero-users"
-            label="Users"
-            stat={count(length(@users), "user")}
-            detail={users_detail(@users)}
-            navigate={~p"/settings/users"}
-          />
-          <.settings_tile
-            id="settings-tile-providers"
-            icon="hero-cloud"
-            label="Providers"
-            stat={count(length(@providers), "provider")}
-            detail={join_names(Enum.map(@providers, &FormOptions.provider_kind_label(&1.kind)))}
-            navigate={~p"/settings/providers"}
-          />
-          <.settings_tile
-            id="settings-tile-agents"
-            icon="hero-sparkles"
-            label="Agents"
-            stat={count(length(@agents), "org agent")}
-            detail={agents_detail(@agents)}
-            navigate={~p"/settings/agents"}
-          />
-          <.settings_tile
-            id="settings-tile-projects"
-            icon="hero-folder"
-            label="Projects"
-            stat={count(length(@projects), "project")}
-            detail={join_names(Enum.map(@projects, & &1.name))}
-            navigate={~p"/settings/projects"}
-          />
-          <.settings_tile
-            id="settings-tile-organization"
-            icon="hero-building-office"
-            label="Organization"
-            stat={@organization.name}
-            detail="Budget limits and instance config"
-          />
-        </div>
+          <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+            <.settings_tile
+              id="settings-tile-users"
+              icon="hero-users"
+              label="Users"
+              stat={count(length(@users), "user")}
+              detail={users_detail(@users)}
+              navigate={~p"/settings/users"}
+            />
+            <.settings_tile
+              id="settings-tile-providers"
+              icon="hero-cloud"
+              label="Providers"
+              stat={count(length(@providers), "provider")}
+              detail={join_names(Enum.map(@providers, &FormOptions.provider_kind_label(&1.kind)))}
+              navigate={~p"/settings/providers"}
+            />
+            <.settings_tile
+              id="settings-tile-agents"
+              icon="hero-sparkles"
+              label="Agents"
+              stat={count(length(@agents), "org agent")}
+              detail={agents_detail(@agents)}
+              navigate={~p"/settings/agents"}
+            />
+            <.settings_tile
+              id="settings-tile-projects"
+              icon="hero-folder"
+              label="Projects"
+              stat={count(length(@projects), "project")}
+              detail={join_names(Enum.map(@projects, & &1.name))}
+              navigate={~p"/settings/projects"}
+            />
+            <.settings_tile
+              id="settings-tile-organization"
+              icon="hero-building-office"
+              label="Organization"
+              stat={@organization.name}
+              detail="Budget limits and instance config"
+            />
+          </div>
 
-        <div class="mt-3.5">
-          <.section_card label="Your account">
-            <p class="text-[13px] text-text2">
-              Your own email, password and preferences live on the account page.
-            </p>
-            <div>
-              <.button navigate={~p"/users/settings"}>Open account settings</.button>
-            </div>
-          </.section_card>
+          <div class="mt-3.5">
+            <.section_card label="Your account">
+              <p class="text-[13px] text-text2">
+                Your own email, password and preferences live on the account page.
+              </p>
+              <div>
+                <.button navigate={~p"/users/settings"}>Open account settings</.button>
+              </div>
+            </.section_card>
+          </div>
         </div>
       </div>
     </Layouts.app>

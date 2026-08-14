@@ -23,7 +23,7 @@ update the affected doc and `docs/INDEX.md` in the same session.
 
 The domain layer, the runtime, and the first web surfaces exist: schemas and migrations for the full model, the `Tasks`/`Projects`/`Agents`/`Reviews`/`Costs`/`Planning` contexts, the ACP driver + scheduler + task runner, the board and task LiveViews, `phx.gen.auth` with a `/setup` gate (see `docs/setup-and-auth.md`), and the `/settings` area — users, providers, org agents and projects, each with list/create/edit and guarded deletes (see `docs/web-ui.md`). Self-signup is closed: the wizard creates the first admin and every later account comes from `/settings/users`. Still missing: the Profile page, organization/instance settings (the overview tile is a placeholder), and most of the "designed-for-now, built later" items. There is no authorization anywhere — `users.role` is stored and displayed but never enforced. Derive the delta from the specs rather than assuming a surface exists.
 
-The app has never been deployed. It runs locally only, so prefer dropping and recreating the database (`mix ecto.reset`) over writing data migrations when the schema changes.
+The app is deployed: a published image (`ghcr.io/emischorr/code_lead`) and the compose stack in `deployment/` run a real instance — see `docs/deployment.md`. **Schema changes therefore ship as new forward migrations**; folding a change into an existing migration or assuming a drop-and-recreate is no longer acceptable. `mix ecto.reset` stays a local-dev convenience, not the upgrade path.
 
 ## Commands
 

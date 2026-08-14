@@ -43,6 +43,21 @@ defmodule CodeLeadWeb.SettingsLive.ProvidersTest do
       assert Agents.get_provider_by_name("Anthropic").config == %{"api_key" => "sk-new"}
     end
 
+    # Browsers ignore `autocomplete="off"` on password fields and fill them from
+    # saved credentials, using the preceding text input as the username. Only
+    # `new-password` suppresses that. The symptom is client-side, so this pins
+    # the rendered attributes rather than reproducing the autofill itself.
+    test "the new form opens blank and opts out of autofill", %{conn: conn} do
+      provider_fixture(%{name: "Anthropic", config: %{"api_key" => "sk-super-secret"}})
+
+      {:ok, view, _html} = live(conn, ~p"/settings/providers/new")
+
+      assert has_element?(view, "#provider_name[value='']")
+      assert has_element?(view, "#provider_name[autocomplete=off]")
+      assert has_element?(view, "#provider_credential[value='']")
+      assert has_element?(view, "#provider_credential[autocomplete='new-password']")
+    end
+
     test "a blank credential keeps the form open", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/settings/providers/new")
 

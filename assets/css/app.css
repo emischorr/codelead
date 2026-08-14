@@ -191,6 +191,25 @@
 /* Use the data attribute for dark mode  */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
+/* The desktop sidebar is one component in two widths. `<html data-nav>` carries
+   the remembered user preference (client-owned, written before first paint in
+   root.html.heex); `#sidebar[data-sidebar]` carries the page's override
+   (server-owned, from the `sidebar` attr on `Layouts.app`). Collapsed = the page
+   forced it closed, or the page defers and the preference is collapsed.
+
+   The two attributes deliberately have different names: `<html>` is an ancestor
+   of everything, so a shared name would collapse `<main>`, the mobile drawer and
+   every card on the page. As it stands no branch can match outside the aside, so
+   the drawer — a sibling of the aside carrying neither attribute — is exempt by
+   construction and always renders expanded. The first and third branches exist
+   because the aside also styles itself (`collapsed:w-16`). */
+@custom-variant collapsed (
+  &[data-sidebar=closed],
+  [data-sidebar=closed] &,
+  [data-nav=collapsed] &[data-sidebar=user],
+  [data-nav=collapsed] [data-sidebar=user] &
+);
+
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 

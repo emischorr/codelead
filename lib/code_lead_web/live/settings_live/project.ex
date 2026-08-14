@@ -189,12 +189,14 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         </:actions>
       </.settings_page_header>
 
-      <div class="mx-auto flex w-full max-w-4xl flex-col gap-3.5 p-4 sm:p-6">
-        <ProjectSections.details form={@details_form} />
-        <ProjectSections.finalize form={@finalize_form} />
-        <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
-        <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
-        <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto flex w-full max-w-4xl flex-col gap-3.5 p-4 sm:p-6">
+          <ProjectSections.details form={@details_form} />
+          <ProjectSections.finalize form={@finalize_form} />
+          <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
+          <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
+          <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
+        </div>
       </div>
 
       <.modal
@@ -251,7 +253,10 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             field={@env_form[:value]}
             type="password"
             label="Value"
-            autocomplete="off"
+            autocomplete="new-password"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
             spellcheck="false"
             required
             phx-mounted={JS.focus()}

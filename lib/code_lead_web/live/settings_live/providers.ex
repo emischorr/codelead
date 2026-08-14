@@ -97,42 +97,44 @@ defmodule CodeLeadWeb.SettingsLive.Providers do
         </:actions>
       </.settings_page_header>
 
-      <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
-        <.section_card label="Model backends">
-          <div :if={@providers == []}>
-            <.empty_state icon="hero-cloud" title="No provider connected">
-              Agents need a backend to talk to. Add one to get anything running.
-            </.empty_state>
-          </div>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
+          <.section_card label="Model backends">
+            <div :if={@providers == []}>
+              <.empty_state icon="hero-cloud" title="No provider connected">
+                Agents need a backend to talk to. Add one to get anything running.
+              </.empty_state>
+            </div>
 
-          <div id="provider-list">
-            <.list_row
-              :for={provider <- @providers}
-              id={"provider-row-#{provider.id}"}
-              title={provider.name}
-              subtitle={provider.endpoint}
-            >
-              <:badges>
-                <.badge variant={:neutral}>{FormOptions.provider_kind_label(provider.kind)}</.badge>
-              </:badges>
-              <:meta>
-                <.secret_value :if={provider.secret?} set?={provider.credential_set?} />
-                <.badge :if={!provider.secret? and !provider.credential_set?} variant={:warn}>
-                  No endpoint
-                </.badge>
-              </:meta>
-              <:actions>
-                <.button patch={~p"/settings/providers/#{provider.id}/edit"}>Edit</.button>
-                <.delete_button
-                  id={"delete-provider-#{provider.id}"}
-                  value={provider.id}
-                  reason={usage_reason(provider.used_by)}
-                  confirm={"Delete #{provider.name}? Its stored credential is destroyed."}
-                />
-              </:actions>
-            </.list_row>
-          </div>
-        </.section_card>
+            <div id="provider-list">
+              <.list_row
+                :for={provider <- @providers}
+                id={"provider-row-#{provider.id}"}
+                title={provider.name}
+                subtitle={provider.endpoint}
+              >
+                <:badges>
+                  <.badge variant={:neutral}>{FormOptions.provider_kind_label(provider.kind)}</.badge>
+                </:badges>
+                <:meta>
+                  <.secret_value :if={provider.secret?} set?={provider.credential_set?} />
+                  <.badge :if={!provider.secret? and !provider.credential_set?} variant={:warn}>
+                    No endpoint
+                  </.badge>
+                </:meta>
+                <:actions>
+                  <.button patch={~p"/settings/providers/#{provider.id}/edit"}>Edit</.button>
+                  <.delete_button
+                    id={"delete-provider-#{provider.id}"}
+                    value={provider.id}
+                    reason={usage_reason(provider.used_by)}
+                    confirm={"Delete #{provider.name}? Its stored credential is destroyed."}
+                  />
+                </:actions>
+              </.list_row>
+            </div>
+          </.section_card>
+        </div>
       </div>
 
       <.modal
@@ -145,6 +147,7 @@ defmodule CodeLeadWeb.SettingsLive.Providers do
           <.input
             field={@form[:name]}
             label="Display name"
+            autocomplete="off"
             required
             phx-mounted={JS.focus()}
           />
@@ -159,7 +162,10 @@ defmodule CodeLeadWeb.SettingsLive.Providers do
             type={FormOptions.credential_type(@form[:kind].value)}
             label={FormOptions.credential_label(@form[:kind].value)}
             placeholder={credential_placeholder(@live_action, @form[:kind].value)}
-            autocomplete="off"
+            autocomplete="new-password"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
             spellcheck="false"
             required={@live_action == :new}
           />

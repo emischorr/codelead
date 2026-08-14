@@ -141,17 +141,44 @@ defmodule CodeLeadWeb.NavigationTest do
     end
   end
 
-  describe "rail" do
-    test "carries the same items as the full sidebar", %{conn: conn} do
+  # Collapsing is CSS driven off `<html data-nav>` and `#sidebar[data-sidebar]`,
+  # so the effective width, the localStorage read and the toggle's click handler
+  # are not observable here — there is no browser driver in the suite. What is
+  # testable is the server half: which state a page asks for, and that the one
+  # sidebar carries the same ids everywhere. Asserting on `collapsed:` class
+  # strings would test the stylesheet, not a behaviour.
+  describe "collapsible sidebar" do
+    test "the task page forces the collapsed sidebar and offers no toggle", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id)
 
       {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/tasks/#{task.id}")
 
-      assert has_element?(view, ~s{#rail-project[href="/projects/#{project.id}/board"]})
-      assert has_element?(view, ~s{#rail-dashboard[href="/"]})
-      assert has_element?(view, ~s{#rail-board[href="/projects/#{project.id}/board"]})
-      assert has_element?(view, ~s{#rail-settings[href="/settings"]})
+      assert has_element?(view, ~s{#sidebar[data-sidebar="closed"]})
+      refute has_element?(view, "#sidebar-collapse")
+    end
+
+    test "the collapsed page carries the same items under the same ids", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/tasks/#{task.id}")
+
+      assert has_element?(view, "details#project-switcher")
+      assert has_element?(view, ~s{#nav-dashboard[href="/"]})
+      assert has_element?(view, ~s{#nav-board[href="/projects/#{project.id}/board"]})
+      assert has_element?(view, ~s{#nav-settings[href="/settings"]})
+      assert has_element?(view, "#account-card")
+      assert has_element?(view, "#m-nav-dashboard")
+    end
+
+    test "every other page defers to the remembered preference", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, ~s{#sidebar[data-sidebar="user"]})
+      assert has_element?(view, ~s{#sidebar-collapse[aria-controls="sidebar"]})
     end
   end
 end
