@@ -80,7 +80,9 @@ defmodule CodeLeadWeb.Router do
       live "/", DashboardLive, :index
 
       live "/users/settings", UserLive.Settings, :edit
-      live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+      live "/users/settings/email", UserLive.Settings.Email, :edit
+      live "/users/settings/confirm-email/:token", UserLive.Settings.Email, :confirm_email
+      live "/users/settings/password", UserLive.Settings.Password, :edit
 
       live "/settings", SettingsLive, :index
 
