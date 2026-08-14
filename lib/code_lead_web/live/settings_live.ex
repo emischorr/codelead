@@ -42,6 +42,18 @@ defmodule CodeLeadWeb.SettingsLive do
 
       <div class="min-h-0 flex-1 overflow-y-auto">
         <div class="mx-auto w-full max-w-5xl p-4 sm:p-6">
+          <.link
+            id="settings-tile-account"
+            navigate={~p"/users/settings"}
+            class="mb-3.5 flex items-center gap-2.5 rounded-[14px] border border-border bg-surface p-4 transition-colors hover:border-accent hover:bg-surface2"
+          >
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-accent-soft text-accent">
+              <.icon name="hero-user-circle" class="size-4" />
+            </span>
+            <span class="text-[13.5px] font-semibold text-text">Your account</span>
+            <.icon name="hero-chevron-right" class="ml-auto size-4 text-text3" />
+          </.link>
+
           <p class="mb-5 text-[13px] text-text2">
             Everything the setup wizard created, plus the people who can sign in.
           </p>
@@ -86,17 +98,6 @@ defmodule CodeLeadWeb.SettingsLive do
               stat={@organization.name}
               detail="Budget limits and instance config"
             />
-          </div>
-
-          <div class="mt-3.5">
-            <.section_card label="Your account">
-              <p class="text-[13px] text-text2">
-                Your own email, password and preferences live on the account page.
-              </p>
-              <div>
-                <.button navigate={~p"/users/settings"}>Open account settings</.button>
-              </div>
-            </.section_card>
           </div>
         </div>
       </div>
