@@ -311,6 +311,12 @@ label reads *Approve & push branch*.
 One `header_actions/1` clause feeds both the desktop toolbar and the
 mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
 
+The mobile bar is an in-flow `shrink-0` flex child of `<main>`, not
+`fixed` — it shortens the scroll pane above it rather than covering it.
+Tab panes therefore add **no** bottom padding to clear it (the pane used
+to carry `pb-24`), and a tab that docks its own bottom chrome lands
+above the bar instead of underneath it.
+
 - **Task tab** — attention banner (with Allow/Deny when a permission
   `ref` is stored; Answer/Skip when a question one is — Answer patches
   to the Agent tab rather than duplicating the form, Skip declines in
@@ -373,6 +379,15 @@ mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
   row shares. Composer is disabled: the ACP driver's mid-run
   `send_message` is a stub.
 
+  Like the Diff tab, this tab owns its scrolling: the root is `h-full
+  min-h-0 flex-col`, `#agent-pane` is the `min-h-0 flex-1
+  overflow-y-auto` scrollport, and the composer is a `shrink-0` sibling
+  *outside* it. The composer must not go back to `sticky bottom-0` — a
+  sticky element cannot leave its containing block, and with the feed
+  scrolling in the page pane that block is one screenful tall, so the
+  composer detaches and paints over the transcript's tail (which on a
+  short viewport buries an unanswered question's buttons for good).
+
   Tool rows read `label: detail`, and the detail is shortened against the
   run's working directory (`context_root/1` — the worktree for a `:repo`
   task, the task folder for a `:folder` one) via
@@ -428,9 +443,8 @@ mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
   **`#diff-pane` is what scrolls, not the window.** The app shell is
   `h-dvh overflow-hidden` (see *Design language*), so `h-full` on the
   diff-tab root resolves against a real height and the pane's
-  `overflow-y-auto` engages. `#diff-toolbar`'s `sticky top-0`, the
-  per-file headers' `sticky top-0`, and the Agent tab's `sticky
-  bottom-0` composer are all live for the same reason. The
+  `overflow-y-auto` engages — which is also what makes `#diff-toolbar`'s
+  `sticky top-0` and the per-file headers' `sticky top-0` live. The
   `.ScrollToFile` hook is indifferent either way: `scrollIntoView` moves
   whichever ancestors need moving, and its listeners sit on `document`,
   not on the pane.

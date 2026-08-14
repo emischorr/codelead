@@ -91,10 +91,10 @@ defmodule CodeLeadWeb.TaskLive.DiffTab do
 
       const typing = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)
 
-      // The app shell has no fixed height, so the window is what scrolls —
-      // not this pane. Every listener therefore sits on the document, and
-      // scrolling is delegated to scrollIntoView, which moves whichever
-      // ancestors actually need to move.
+      // This pane is what scrolls, not the window — the app shell is h-dvh
+      // overflow-hidden. Listeners still sit on the document (key events
+      // reach it wherever focus is), and scrolling is delegated to
+      // scrollIntoView, which moves whichever ancestors need to move.
       export default {
         mounted() {
           this.programmatic = false
