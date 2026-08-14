@@ -1,4 +1,4 @@
-# Setup & authentication (last updated: 2026-08-10)
+# Setup & authentication (last updated: 2026-08-14)
 
 How a fresh instance bootstraps itself and how requests are gated
 afterwards. Product spec §11/§12 (first-run `/setup` wizard) and §4
@@ -139,6 +139,17 @@ generated output:
   the sidebar. `/users/settings` is signed-in and therefore renders in the
   normal app shell like the rest of `/settings` — see
   [`navigation.md`](navigation.md).
+- **`/users/settings` itself is not sudo-gated** — it only displays the
+  current email and links out to the two sensitive actions. Sudo mode is
+  enforced per-action instead, each on its own route/module:
+  `UserLive.Settings.Email` (`/users/settings/email`, also
+  `/users/settings/confirm-email/:token`) and `UserLive.Settings.Password`
+  (`/users/settings/password`), both carrying
+  `on_mount {UserAuth, :require_sudo_mode}`. This means visiting the
+  account page day-to-day never forces a re-login; only actually changing
+  the email or password does. Password stays sudo-gated even though it
+  could in principle be treated as a "safe" field, because a hijacked
+  session that can set a new password can lock the real owner out.
 
 ### Known gaps
 
@@ -147,8 +158,9 @@ generated output:
   can manage users, providers, agents and projects from `/settings`. The
   Users page therefore shows the role read-only rather than offering a
   select that would imply enforcement.
-- Sudo mode guards the account-settings page only; `/settings/*` is not
-  sudo-gated.
+- Sudo mode guards the email- and password-change pages only
+  (`/users/settings/email`, `/users/settings/password`); neither the
+  account overview (`/users/settings`) nor `/settings/*` is sudo-gated.
 
 ## Testing
 
