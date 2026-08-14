@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-11)
+# Architecture overview (last updated: 2026-08-14)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -55,6 +55,12 @@ note is the "how it works today" map.
   dispatched on the task's target and its resolved finalize mode (PR,
   merge, squash, artifact, commit-to-path).
 - `CodeLead.Vault` — Cloak encryption (provider config, project env).
+- `CodeLead.Agents.SubscriptionUsageCache` — polls every
+  `:anthropic_subscription` provider's rate-limit windows on a timer,
+  reading Anthropic's undocumented `anthropic-ratelimit-unified-*`
+  response headers (no supported API exists for this); feeds the
+  sidebar's rate-limit tile via `NavContext`. Best-effort by design — see
+  `docs/navigation.md`.
 - Oban — `rollups` queue (nightly `Costs.RollupWorker` cron) and
   `dispatch` queue (`Runtime.ScheduledDispatchWorker` wake-ups for
   scheduled runs).
