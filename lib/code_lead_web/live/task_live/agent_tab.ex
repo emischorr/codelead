@@ -29,7 +29,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     assigns = assign(assigns, :root, context_root(assigns.task))
 
     ~H"""
-    <div class="flex h-full flex-col">
+    <div class="flex h-full min-h-0 flex-col">
       <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2.5 sm:px-6">
         <span class="truncate font-mono text-[11px] text-text3">
           {session_label(@task.acp_session_id)}
@@ -44,64 +44,68 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
         </span>
       </div>
 
-      <div :if={not @all_runs?} class="mx-auto w-full max-w-3xl px-4 pt-4 sm:px-6">
-        <button
-          type="button"
-          phx-click="show_earlier_runs"
-          id="show-earlier-runs"
-          class="text-[11px] text-text3 transition-colors hover:text-text2"
+      <%!-- The transcript scrolls here, not in the page pane, so the composer
+            below stays a sibling of the scrollport and docks for real. --%>
+      <div id="agent-pane" class="min-h-0 flex-1 overflow-y-auto">
+        <div :if={not @all_runs?} class="mx-auto w-full max-w-3xl px-4 pt-4 sm:px-6">
+          <button
+            type="button"
+            phx-click="show_earlier_runs"
+            id="show-earlier-runs"
+            class="text-[11px] text-text3 transition-colors hover:text-text2"
+          >
+            Show earlier runs
+          </button>
+        </div>
+
+        <div
+          id="agent-events"
+          phx-update="stream"
+          class="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4 sm:p-6"
         >
-          Show earlier runs
-        </button>
-      </div>
-
-      <div
-        id="agent-events"
-        phx-update="stream"
-        class="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4 sm:p-6"
-      >
-        <div class="hidden text-center text-[13px] text-text3 only:block" id="agent-events-empty">
-          No agent activity yet — events appear here live during a run.
-        </div>
-        <.feed_block
-          :for={{id, block} <- @blocks}
-          id={id}
-          block={block}
-          executing?={@executing?}
-          root={@root}
-        />
-      </div>
-
-      <div
-        :if={@live_message}
-        class="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6"
-        id="agent-live-message"
-      >
-        <div class="flex flex-col gap-1.5 rounded-[11px] border border-accent/40 bg-surface p-3.5">
-          <div class="flex items-center gap-2">
-            <span class="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-accent">
-              MSG
-            </span>
-            <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+          <div class="hidden text-center text-[13px] text-text3 only:block" id="agent-events-empty">
+            No agent activity yet — events appear here live during a run.
           </div>
-          <.markdown text={@live_message.text} class="text-[13px] leading-relaxed text-text" />
+          <.feed_block
+            :for={{id, block} <- @blocks}
+            id={id}
+            block={block}
+            executing?={@executing?}
+            root={@root}
+          />
+        </div>
+
+        <div
+          :if={@live_message}
+          class="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6"
+          id="agent-live-message"
+        >
+          <div class="flex flex-col gap-1.5 rounded-[11px] border border-accent/40 bg-surface p-3.5">
+            <div class="flex items-center gap-2">
+              <span class="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-accent">
+                MSG
+              </span>
+              <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+            </div>
+            <.markdown text={@live_message.text} class="text-[13px] leading-relaxed text-text" />
+          </div>
         </div>
       </div>
 
-      <div class="sticky bottom-0 mt-auto border-t border-border bg-surface p-3.5">
+      <div class="shrink-0 border-t border-border bg-surface p-2.5 sm:p-3.5">
         <div class="mx-auto flex max-w-3xl gap-2.5">
           <input
             type="text"
             placeholder="Message the agent…"
             disabled
             title="Mid-run messages aren't supported by the ACP driver yet"
-            class="h-11 min-w-0 flex-1 cursor-not-allowed rounded-xl border border-border bg-bg px-3.5 text-[13px] text-text placeholder:text-text3 opacity-60"
+            class="h-10 min-w-0 flex-1 cursor-not-allowed rounded-xl border border-border bg-bg px-3.5 text-[13px] text-text placeholder:text-text3 opacity-60 sm:h-11"
           />
           <button
             type="button"
             disabled
             title="Mid-run messages aren't supported by the ACP driver yet"
-            class="flex size-11 shrink-0 cursor-not-allowed items-center justify-center rounded-xl bg-accent text-white opacity-50"
+            class="flex size-10 shrink-0 cursor-not-allowed items-center justify-center rounded-xl bg-accent text-white opacity-50 sm:size-11"
             aria-label="Send (unavailable)"
           >
             <.icon name="hero-paper-airplane" class="size-4" />

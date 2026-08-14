@@ -930,7 +930,7 @@ defmodule CodeLeadWeb.TaskLive do
         <.tab_nav tabs={tab_links(@project, @task)} active={@tab} class="mt-3 px-4 sm:px-6" />
       </header>
 
-      <div class="min-h-0 flex-1 overflow-auto pb-24 lg:pb-0">
+      <div class="min-h-0 flex-1 overflow-auto">
         <TaskTab.task_tab
           :if={@tab == :task}
           task={@task}
@@ -982,7 +982,10 @@ defmodule CodeLeadWeb.TaskLive do
         <TerminalTab.terminal_tab :if={@tab == :terminal} task={@task} />
       </div>
 
-      <div class="fixed inset-x-0 bottom-0 z-30 flex gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden">
+      <%!-- In flow, not `fixed`: it shortens the scroll pane above it, so a tab
+            that docks its own bottom chrome (the Agent composer) lands above
+            this bar instead of underneath it. --%>
+      <div class="flex shrink-0 gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden">
         <.header_actions
           task={@task}
           scheduled?={Task.scheduled?(@task)}
