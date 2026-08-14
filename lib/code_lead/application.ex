@@ -7,6 +7,10 @@ defmodule CodeLead.Application do
 
   @impl true
   def start(_type, _args) do
+    # Before any child can read a licensed limit. Never raises — an
+    # unusable key resolves to the community tier.
+    CodeLead.License.load()
+
     children =
       [
         CodeLeadWeb.Telemetry,

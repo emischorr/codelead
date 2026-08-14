@@ -72,6 +72,8 @@ Reviewers are deliberately **not** a separate abstraction — they are ordinary 
 
 **Background jobs:** Oban is installed and supervised — queues `rollups` (nightly cost rollups) and `dispatch` (scheduled-run wake-ups). Cloak.Ecto has landed — `CodeLead.Vault` encrypts provider credentials and the project env store, keyed by an instance `ENCRYPTION_KEY`. The project env store is also where git/forge access tokens live (`GITHUB_TOKEN`/`GITLAB_TOKEN`); see `docs/configuration.md`.
 
+**Licensing.** The project is Elastic License 2.0, and `CodeLead.License` is the entitlement seam ELv2's key clause refers to. **It gates nothing** — `@gated_features` is empty, so `feature_enabled?/1` is always true and every instance runs as `:community`. That is deliberate, not unfinished. Entitlements come from an offline Ed25519-signed `LICENSE_KEY` resolved once at boot, are instance-scoped like the singleton `organization`, and fail *open* to community on any problem. Making a feature paid means adding its atom to `@gated_features` and checking `feature_enabled?/1` at the call site **and** in the authoritative server-side action — never a UI-only check. Read `docs/licensing.md` before touching any of it; note that unlike `Executor`/`Scheduler` the source is deliberately **not** config-swappable.
+
 `:req` is the HTTP client — do not add HTTPoison, Tesla, or `:httpc`.
 
 ## Further instructions

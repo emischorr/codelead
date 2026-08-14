@@ -43,6 +43,9 @@ services:
       # Extra addresses this instance may be reached at, on top of PHX_HOST.
       # Bare host = any scheme/port; full origin = exact match; "*" = allow all.
       # ALLOWED_HOSTS: "192.168.1.50, codelead.local"
+      # Signed license key. Optional — without one the instance runs the
+      # community tier, which today grants everything. See docs/licensing.md.
+      # LICENSE_KEY: ${LICENSE_KEY}
     volumes:
       - codelead-data:/data
     ports:

@@ -206,7 +206,7 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 - Plan mode as an execution sub-phase (an agent planning inside a run, before it edits).
 - Cross-project queue ordering and priorities.
 - Multi-repo tasks; timeline view.
-- Agent marketplace and licensing/monetization.
+- Agent marketplace and licensing/monetization. The entitlement *seam* has shipped (`CodeLead.License`, architecture spec §5.6) but declares no paid feature, so every instance runs as `:community` with everything enabled.
 
 **Out of scope on purpose**
 - Releasing: tags, changelogs, deploy pipelines. (Merging into the default branch *is* in scope — as local git, see §6.)

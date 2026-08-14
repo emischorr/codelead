@@ -54,6 +54,11 @@ config :code_lead, CodeLead.Vault,
        tag: "AES.GCM.V1", key: Base.decode64!(encryption_key), iv_length: 12}
   ]
 
+# Signed license key for the instance. Optional everywhere, including
+# prod: absent means the community tier, which today grants everything.
+# See `CodeLead.License` and docs/licensing.md.
+config :code_lead, CodeLead.License, key: System.get_env("LICENSE_KEY")
+
 # Root directory for CodeLead-managed working state: base clones,
 # per-task git worktrees, and task folders.
 default_workspace =

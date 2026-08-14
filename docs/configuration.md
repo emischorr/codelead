@@ -11,6 +11,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and the project env store. Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
 | `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod), `<repo>/tmp/test_workspace` (test) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
+| `LICENSE_KEY` | — | Signed license key for the instance. Optional everywhere including prod — absent means the community tier, which today grants everything. Verified offline at boot; anything unusable (bad signature, expired, malformed) logs a warning and falls back to community rather than failing the boot. See [`licensing.md`](licensing.md). |
 | `DATABASE_URL` | **required in prod** | `ecto://USER:PASS@HOST/DATABASE`. |
 | `SECRET_KEY_BASE` | **required in prod** | Signs and encrypts cookies. `mix phx.gen.secret` or `openssl rand -base64 48`. |
 | `PHX_HOST` | `example.com` | The canonical hostname — the one in generated links. Feeds the endpoint's `:url` **and** is always allowed by the origin check (host only, any scheme/port). If the address bar shows a host that is neither this nor in `ALLOWED_HOSTS`, the page renders but LiveView never connects. |
@@ -38,6 +39,11 @@ template is not.
 - `:workspace_root` — see above.
 - `:max_concurrent_runs` — see above.
 - `CodeLead.Vault` — Cloak cipher config (set from `ENCRYPTION_KEY`).
+- `CodeLead.License` — `key:` only, set from `LICENSE_KEY`. Resolved once in
+  `CodeLead.Application.start/2` and cached in `:persistent_term`; nothing
+  re-reads it at runtime. There is deliberately no config key for the gated
+  feature list or the verification public key — a runtime switch for either
+  would be a bypass. See [`licensing.md`](licensing.md).
 - `:harnesses` — launch argv per ACP harness, e.g.
   `%{claude_code: ["claude-code-acp"], codex: ["codex", "acp"]}`. See
   *Harness prerequisites* below.

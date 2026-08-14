@@ -29,6 +29,7 @@ Map of the repo's documentation. Design notes describe how things work
 - [`web-ui.md`](web-ui.md) — the LiveView layer: the dashboard at `/`, board + task page, the `/settings` area, the mode-derived Approve button and artifact download, design tokens, the app-shell height contract, component inventory, PubSub wiring, the live/collapsible diff and its JS hook.
 - [`navigation.md`](navigation.md) — the sidebar contract: the `@nav` map and its `on_mount` hook, what is enabled/deactivated/hidden where, the one collapsible sidebar and its expanded/collapsed/drawer renderings, and how the selected project and the sidebar width are remembered client-side.
 - [`setup-and-auth.md`](setup-and-auth.md) — the `setup_done` flag, the setup/auth router gates, the first-run wizard, and how the generated auth stack was merged.
+- [`licensing.md`](licensing.md) — the ELv2 posture and the `CodeLead.License` entitlement seam: why it gates nothing today, the offline signed key and its `LICENSE_KEY` env var, tier baselines merged with per-key grants, fail-open-to-community, why unknown feature names are dropped, how to add a gated feature, and minting.
 
 ## ADRs
 

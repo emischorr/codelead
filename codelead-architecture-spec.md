@@ -185,6 +185,21 @@ Normal completion raises no attention; the human asked for it. A question or per
 
 A `:plan` agent is not an executor: the Planning→Running guard stays keyed on `:execute`.
 
+### 5.6 License / entitlements — `CodeLead.License`
+
+The seam ELv2's license-key clause refers to. **Instance-scoped** (one deployment is one org, like the singleton `organization`), resolved once at boot and cached in `:persistent_term`. API: `feature_enabled?/1`, `limit/2`, `tier/0`.
+
+**It gates nothing.** `@gated_features` ships empty, so `feature_enabled?/1` is always true and `limit/2` returns the caller's own default. The seam is present so monetizing a feature is later a data change — add the atom, check it at the call site *and* the authoritative server-side action, grant it — rather than a hunt through the app for check sites.
+
+Grants are not community-vs-everything: a key names a `tier`, and the resolved grant is `tier_baseline/1` **overlaid with that key's explicit `features`/`limits`** (union; key wins on limits). So a baseline edit re-prices every key already issued against that tier, while a bespoke deal needs no new tier.
+
+- **`Source.SignedKey` (MVP):** an Ed25519-signed token in `LICENSE_KEY`, verified **offline**. A self-hosted instance must not need a vendor server to keep working, which rules out online activation and remote revocation; `expires_at` is the only expiry. Names the build does not know are dropped rather than raising, so a newer key degrades on an older release.
+- **Hosted activation (later):** a source trading the token for a server-issued grant. The boot path and everything downstream are unchanged.
+
+Two deliberate departures from §5.2/§5.3. Any failure — missing, forged, expired, malformed — **fails open to `:community`** with a warning rather than halting the boot: a lapsed commercial key must degrade a self-hosted instance, not brick it. And there is **no `impl/0` resolver** — a config-swappable source, gated-feature list, or public key would each be a bypass rather than an extension point.
+
+See `docs/licensing.md`.
+
 ---
 
 ## 6. ACP integration
@@ -267,7 +282,7 @@ The task view auto-selects the tab matching `tasks.state`; Agent/Review/Develope
 
 - Single Docker image bundling the app + agent CLIs (Claude Code, Codex).
 - Mounts: Postgres (external or sibling), one **persistent volume** (base clones, worktrees, task folders), **docker socket** (for the later container executor — harmless if unused in MVP).
-- Env: `DATABASE_URL`, `ENCRYPTION_KEY`, `SECRET_KEY_BASE`, optional `MAX_CONCURRENT_RUNS`.
+- Env: `DATABASE_URL`, `ENCRYPTION_KEY`, `SECRET_KEY_BASE`, optional `MAX_CONCURRENT_RUNS` and `LICENSE_KEY` (absent ⇒ community tier; see §5.6).
 - First run: self-signup creates the admin; wizard guides project → repo → provider → agent.
 
 ---
@@ -292,3 +307,4 @@ The task view auto-selects the tab matching `tasks.state`; Agent/Review/Develope
 | Custom / multi-stage workflows | the `%CodeLead.Workflow{}` struct (§4.1) + `tasks.workflow_key` — a future DB loader produces the same struct |
 | Generalised auto-transitions | `trigger: :auto` on transitions — today only running → review carries it |
 | Per-stage context reset for multi-execute pipelines | `context_policy` is already per-edge, not per-workflow |
+| Paid tiers / license enforcement | the `CodeLead.License` seam (§5.6) — `@gated_features` + `tier_baseline/1` + the `SignedKey` source; empty today, so nothing is gated |
