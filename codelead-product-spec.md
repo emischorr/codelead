@@ -115,7 +115,7 @@ Finalization (no agent) follows the task's **target** and its resolved **finaliz
 
 | Mode | What Done does |
 |---|---|
-| *Pull request* (default) | On GitHub/GitLab open an MR/PR, otherwise show a compare link. Nothing is merged; the remote branch stays for the PR to point at. |
+| *Pull request* (default) | On GitHub/GitLab open an MR/PR, otherwise show a compare link. Nothing is merged; the remote branch stays for the PR to point at. The description comes from the project's editable **PR template** (see §13), defaulting to a built-in one. |
 | *Merge* | Merge the branch into the repository's default branch and push it (a merge commit). |
 | *Squash* | The same, condensed into a single commit. |
 
@@ -246,6 +246,6 @@ In Planning only the Task tab is populated; the Agent / Review / Developer tabs 
 
 - **Settings** (instance / admin): users, providers + credentials, organization budget limits, instance config (e.g. max concurrent runs).
 - **Profile** (per user): language, theme (light/dark), UI preferences.
-- **Projects**: create/edit projects, link repositories, project env store, project budget limits, project **default reviewers** per work type.
+- **Projects**: create/edit projects, link repositories, project env store, project budget limits, project **default reviewers** per work type, and an editable **PR template** for the description used when Approve opens a pull request (defaults to a built-in template).
 - **Agents**: create/edit agents — roles, work type, driver, harness, provider + model, system prompt, memory (seam) — with a scope selector for org vs project.
 

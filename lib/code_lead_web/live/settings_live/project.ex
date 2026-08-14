@@ -1,10 +1,11 @@
 defmodule CodeLeadWeb.SettingsLive.Project do
   @moduledoc """
-  Everything about one project: details and budgets, linked repositories, the
-  encrypted env store, and the per-work-type default reviewer sets.
+  Everything about one project: details and budgets, approve defaults, the
+  PR template, linked repositories, the encrypted env store, and the
+  per-work-type default reviewer sets.
 
-  A full page rather than a modal over the list, because the four sections are
-  independent surfaces; their own add/edit dialogs are patched over it.
+  A full page rather than a modal over the list, because the sections are
+  independent surfaces; the repository and env dialogs are patched over it.
   """
 
   use CodeLeadWeb, :live_view
@@ -29,6 +30,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
      |> assign(page_title: project.name, project: project)
      |> assign_details_form(%{})
      |> assign_finalize_form()
+     |> assign_pr_template_form()
      |> load_project()}
   end
 
@@ -102,6 +104,22 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Could not save the approve defaults.")}
+    end
+  end
+
+  ## PR template
+
+  def handle_event("save_pr_template", %{"pr_template" => %{"template" => template}}, socket) do
+    case Projects.put_pr_template(socket.assigns.project, template) do
+      {:ok, project} ->
+        {:noreply,
+         socket
+         |> assign(project: project)
+         |> put_flash(:info, "PR template updated.")
+         |> assign_pr_template_form()}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save the PR template.")}
     end
   end
 
@@ -193,6 +211,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         <div class="mx-auto flex w-full max-w-4xl flex-col gap-3.5 p-4 sm:p-6">
           <ProjectSections.details form={@details_form} />
           <ProjectSections.finalize form={@finalize_form} />
+          <ProjectSections.pr_template form={@pr_template_form} />
           <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
           <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
           <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
@@ -333,6 +352,14 @@ defmodule CodeLeadWeb.SettingsLive.Project do
   # the built-in the finalizer would fall back to.
   defp mode_value(nil, target), do: to_string(Task.default_finalize_mode(target))
   defp mode_value(mode, _target), do: to_string(mode)
+
+  # Prefilled with the effective template (custom or built-in), so the
+  # field always shows what the finalizer would actually render.
+  defp assign_pr_template_form(socket) do
+    template = Projects.pr_template(socket.assigns.project.id)
+
+    assign(socket, pr_template_form: to_form(%{"template" => template}, as: "pr_template"))
+  end
 
   defp assign_env_form(socket, key, params, errors \\ []) do
     socket
