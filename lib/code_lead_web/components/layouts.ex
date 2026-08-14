@@ -299,6 +299,12 @@ defmodule CodeLeadWeb.Layouts do
       </.link>
     </div>
 
+    <.rate_limit_card
+      :if={@nav.rate_limit}
+      id={nav_id(@closable, "rate-limit-card")}
+      usage={@nav.rate_limit}
+    />
+
     <.budget_card
       :if={@nav.spend}
       id={nav_id(@closable, "budget-card")}
@@ -518,6 +524,46 @@ defmodule CodeLeadWeb.Layouts do
     </div>
     """
   end
+
+  # `usage` comes from `CodeLead.Agents.SubscriptionUsageCache` — an
+  # undocumented, best-effort reading (see its moduledoc). A window that
+  # failed to parse is simply `nil` and its row is omitted.
+  attr :id, :string, required: true
+  attr :usage, :map, required: true
+
+  defp rate_limit_card(assigns) do
+    ~H"""
+    <div id={@id} class="flex shrink-0 flex-col gap-2.5 rounded-xl bg-surface2 p-3 collapsed:hidden">
+      <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">
+        {@usage.provider_name} · Subscription
+      </span>
+      <.rate_limit_window label="5h window" window={@usage.five_hour} />
+      <.rate_limit_window label="Weekly" window={@usage.seven_day} />
+    </div>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :window, :map, default: nil
+
+  defp rate_limit_window(assigns) do
+    ~H"""
+    <div :if={@window} class="flex flex-col gap-1">
+      <div class="flex items-center justify-between font-mono text-[13px] font-semibold text-text">
+        <span class="font-sans font-normal text-text3">{@label}</span>
+        <span>{round(@window.utilization * 100)}%</span>
+      </div>
+      <.meter
+        value={round(@window.utilization * 100)}
+        max={100}
+        tone={rate_limit_tone(@window.utilization)}
+      />
+    </div>
+    """
+  end
+
+  defp rate_limit_tone(utilization) when utilization >= 0.9, do: :warn
+  defp rate_limit_tone(_utilization), do: :accent
 
   # `spend` is month-to-date (`Costs.project_spend_month/1`) because the
   # limit it is measured against runs on the calendar month too — the

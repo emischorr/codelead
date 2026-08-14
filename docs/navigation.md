@@ -47,7 +47,8 @@ from — LiveViews never assemble navigation themselves:
   scope: :project | :general, # is this page inside a project?
   current: :dashboard | :board | :settings | :account | nil,
   attention_count: 0,
-  spend: nil                  # month-to-date %{cost_cents: _, tokens: _} | nil
+  spend: nil,                 # month-to-date %{cost_cents: _, tokens: _} | nil
+  rate_limit: nil             # subscription usage snapshot | nil — see below
 }
 ```
 
@@ -73,6 +74,20 @@ from — LiveViews never assemble navigation themselves:
   is measured against runs on the calendar month too. The board header's
   separate "today" figure (`Costs.project_spend_today/1`) is the shorter
   window, not the same number rendered twice.
+- `rate_limit` is **not** project-scoped, so unlike `spend` it is read
+  directly by `NavContext.on_mount/4` from
+  `CodeLead.Agents.SubscriptionUsageCache.current/1` rather than pushed in
+  by a page — it renders identically on every page, including
+  `DashboardLive`. The cache polls every configured `:anthropic_subscription`
+  provider's rate-limit windows every 3 minutes by reading the
+  undocumented `anthropic-ratelimit-unified-*` headers Anthropic's API
+  returns on any OAuth-authenticated response (the same signal Claude
+  Code's own status line is fed from — there is no supported API for this).
+  Anthropic can change or remove these headers without notice, so a
+  failed or missing reading is indistinguishable from "no subscription
+  provider configured": `rate_limit` is `nil` and the tile does not
+  render. See `CodeLead.Agents.SubscriptionUsage` and
+  `CodeLead.Agents.SubscriptionUsageCache`.
 
 Every page therefore renders the identical call, the task page adding only
 the forced width:
@@ -126,11 +141,12 @@ places, all from the same markup, so an item added once appears everywhere:
 
 - **Desktop, expanded** — 232px, labels. The default.
 - **Desktop, collapsed** — 64px glyphs. Same items in the same order, labels
-  hidden. Two deliberate omissions: the **budget tile**, which cannot carry
-  `$0.40 / $10.39` plus a meter in a 48px inner column, and the **theme
-  switch**, because a three-segment control does not survive 48px and theme is
-  a set-and-forget preference reachable from every expanded page. Log-out
-  stays — being unable to sign out on the task page was a bug, not a design.
+  hidden. Deliberate omissions: the **budget tile** and the **rate-limit
+  tile**, neither of which can carry a label plus two meters in a 48px inner
+  column, and the **theme switch**, because a three-segment control does not
+  survive 48px and theme is a set-and-forget preference reachable from every
+  expanded page. Log-out stays — being unable to sign out on the task page
+  was a bug, not a design.
 - **Mobile drawer** — always rendered, `lg:hidden`, opened by
   `Layouts.sidebar_toggle` from each page's own header. It renders a second
   copy, so its DOM ids are prefixed `m-` via `nav_id/2`. The drawer is
@@ -138,8 +154,8 @@ places, all from the same markup, so an item added once appears everywhere:
 
 Stable ids for tests: `sidebar`, `sidebar-collapse`, `project-switcher`,
 `nav-dashboard`, `nav-board`, `nav-settings`, `attention-pill`,
-`budget-card`, `account-card`, plus the `m-` variants and
-`nav-project-store`.
+`rate-limit-card`, `budget-card`, `account-card`, plus the `m-` variants
+and `nav-project-store`.
 
 ### Remembering the width
 

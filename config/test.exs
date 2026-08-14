@@ -29,6 +29,15 @@ config :code_lead, Oban, testing: :manual
 # LLM calls hit a Req.Test stub instead of the network
 config :code_lead, :llm_api_req_options, plug: {Req.Test, CodeLead.LlmApiStub}
 
+# Subscription rate-limit pings hit a Req.Test stub instead of the network
+config :code_lead, :subscription_usage_req_options,
+  plug: {Req.Test, CodeLead.SubscriptionUsageStub}
+
+# Never auto-poll in test — the always-running singleton would otherwise
+# fire an unprompted Repo query outside any test's Ecto Sandbox ownership.
+# Tests that need it start their own named instance and call refresh_now/1.
+config :code_lead, CodeLead.Agents.SubscriptionUsageCache, auto_refresh: false
+
 # In test we don't send emails
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Test
 

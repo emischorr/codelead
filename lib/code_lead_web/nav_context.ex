@@ -12,12 +12,17 @@ defmodule CodeLeadWeb.NavContext do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4]
 
+  alias CodeLead.Agents.SubscriptionUsageCache
   alias CodeLead.Projects
   alias Phoenix.LiveView.Socket
 
   @doc """
   Resolves the selected project and the highlighted nav section, and installs
   the handler for the client's `"nav:restore_project"` push.
+
+  `rate_limit` is read directly from `SubscriptionUsageCache` here rather
+  than pushed in via `put_stats/3` — unlike `spend`, it isn't project-scoped,
+  so every page (including `DashboardLive`) gets the same reading.
   """
   def on_mount(:default, params, _session, socket) do
     projects = Projects.list_projects()
@@ -29,7 +34,8 @@ defmodule CodeLeadWeb.NavContext do
       scope: scope,
       current: section(socket.view),
       attention_count: 0,
-      spend: nil
+      spend: nil,
+      rate_limit: SubscriptionUsageCache.current()
     }
 
     {:cont,
