@@ -11,7 +11,7 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
   setup :register_and_log_in_user
 
   describe "list" do
-    test "shows org agents only", %{conn: conn} do
+    test "shows both org and project agents", %{conn: conn} do
       project = project_fixture()
       org_agent = agent_fixture()
       project_agent = agent_fixture(%{scope: :project, project_id: project.id})
@@ -19,7 +19,9 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
       {:ok, view, _html} = live(conn, ~p"/settings/agents")
 
       assert has_element?(view, "#agent-row-#{org_agent.id}")
-      refute has_element?(view, "#agent-row-#{project_agent.id}")
+      assert has_element?(view, "#agent-row-#{project_agent.id}")
+      assert has_element?(view, "#agent-row-#{org_agent.id}", "All projects")
+      assert has_element?(view, "#agent-row-#{project_agent.id}", project.name)
     end
 
     test "routes to the provider page when none is connected", %{conn: conn} do
@@ -54,7 +56,7 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
 
       assert_patch(view, ~p"/settings/agents")
 
-      assert [agent] = Agents.list_org_agents()
+      assert [agent] = Agents.list_all_agents()
       assert agent.roles == [:execute, :review]
       assert agent.scope == :org
       assert agent.harness == :claude_code
@@ -79,10 +81,35 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
 
       assert_patch(view, ~p"/settings/agents")
 
-      assert [agent] = Agents.list_org_agents()
+      assert [agent] = Agents.list_all_agents()
       assert agent.driver == :llm_api
       assert agent.roles == [:review]
       refute agent.harness
+    end
+
+    test "picking a project binds the agent to it", %{conn: conn, provider: provider} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/settings/agents/new")
+
+      view
+      |> form("#agent-form",
+        agent: %{
+          name: "Judy",
+          project_id: project.id,
+          work_type: "code",
+          roles: "execute,review",
+          driver: "llm_api",
+          provider_id: provider.id
+        }
+      )
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/agents")
+
+      assert [agent] = Agents.list_all_agents()
+      assert agent.scope == :project
+      assert agent.project_id == project.id
     end
   end
 
@@ -106,6 +133,51 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
 
       assert_patch(view, ~p"/settings/agents")
       assert Agents.get_agent!(agent.id).name == "New"
+    end
+
+    test "moves an org agent to a project and back", %{conn: conn} do
+      project = project_fixture()
+      agent = agent_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/settings/agents/#{agent.id}/edit")
+
+      view
+      |> form("#agent-form",
+        agent: %{
+          name: agent.name,
+          project_id: project.id,
+          work_type: "code",
+          roles: "execute",
+          driver: "llm_api",
+          provider_id: agent.provider_id
+        }
+      )
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/agents")
+      reloaded = Agents.get_agent!(agent.id)
+      assert reloaded.scope == :project
+      assert reloaded.project_id == project.id
+
+      {:ok, view, _html} = live(conn, ~p"/settings/agents/#{agent.id}/edit")
+
+      view
+      |> form("#agent-form",
+        agent: %{
+          name: agent.name,
+          project_id: "",
+          work_type: "code",
+          roles: "execute",
+          driver: "llm_api",
+          provider_id: agent.provider_id
+        }
+      )
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/agents")
+      reloaded = Agents.get_agent!(agent.id)
+      assert reloaded.scope == :org
+      refute reloaded.project_id
     end
   end
 

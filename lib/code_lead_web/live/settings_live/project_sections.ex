@@ -257,6 +257,55 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   end
 
   @doc """
+  The project's own agents — bound here specifically, not the shared org
+  pool (those stay selectable in every project without appearing in this
+  list). Creating and editing happens on the shared agents page; this tile
+  only surveys and links there.
+  """
+  attr :project_agents, :list, required: true
+
+  def agents(assigns) do
+    ~H"""
+    <.section_card label="Agents">
+      <:actions>
+        <.button navigate={~p"/settings/agents"}>Manage agents</.button>
+      </:actions>
+
+      <p class="text-[12px] leading-relaxed text-text3">
+        Agents bound to this project only. Org-wide agents are also selectable
+        here but are managed from Settings → Agents.
+      </p>
+
+      <div :if={@project_agents == []}>
+        <.empty_state icon="hero-sparkles" title="No project-only agents">
+          Bind an agent to this project from
+          <.link navigate={~p"/settings/agents/new"} class="font-semibold text-accent">
+            Settings → Agents
+          </.link>
+          .
+        </.empty_state>
+      </div>
+
+      <div id="project-agent-list">
+        <.list_row
+          :for={agent <- @project_agents}
+          id={"project-agent-row-#{agent.id}"}
+          title={agent.name}
+        >
+          <:badges>
+            <.badge variant={:accent}>{agent.work_type}</.badge>
+            <.badge :for={role <- agent.roles} variant={:neutral}>{role}</.badge>
+          </:badges>
+          <:actions>
+            <.button navigate={~p"/settings/agents/#{agent.id}/edit"}>Edit</.button>
+          </:actions>
+        </.list_row>
+      </div>
+    </.section_card>
+    """
+  end
+
+  @doc """
   Default reviewers per work type. Saving replaces the set for that work
   type, so an empty submit clears it.
   """

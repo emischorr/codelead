@@ -229,6 +229,33 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     end
   end
 
+  describe "agents" do
+    test "shows only this project's own agents, not org-wide ones", %{
+      conn: conn,
+      project: project
+    } do
+      other_project = project_fixture()
+      _org_agent = agent_fixture()
+      project_agent = agent_fixture(%{scope: :project, project_id: project.id, name: "Mine"})
+      _foreign_agent = agent_fixture(%{scope: :project, project_id: other_project.id})
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert has_element?(view, "#project-agent-row-#{project_agent.id}", "Mine")
+      refute render(view) =~ "No project-only agents"
+    end
+
+    test "shows the empty state and a link to add one when there are none", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert render(view) =~ "No project-only agents"
+      assert has_element?(view, ~s(a[href="#{~p"/settings/agents/new"}"]))
+    end
+  end
+
   describe "default reviewers" do
     test "saves the set for a work type", %{conn: conn, project: project} do
       reviewer = agent_fixture(%{roles: [:review], work_type: :code})
