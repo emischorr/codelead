@@ -416,7 +416,7 @@ defmodule CodeLead.Tasks do
   """
   @spec delete_task(Task.t()) :: {:ok, Task.t()} | {:error, :not_deletable}
   def delete_task(%Task{state: state} = task) when state in [:planning, :cancelled] do
-    Repo.delete(task)
+    task |> Repo.delete() |> broadcast_board_change()
   end
 
   def delete_task(%Task{}), do: {:error, :not_deletable}

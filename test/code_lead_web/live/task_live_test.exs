@@ -188,6 +188,32 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "delete" do
+    test "the delete link is planning-only", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+      assert has_element?(view, "#delete-task")
+
+      task = put_context!(task, %{state: :review})
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+      refute has_element?(view, "#delete-task")
+    end
+
+    test "deleting removes the task and returns to the board", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#delete-task") |> render_click()
+
+      assert_redirect(view, ~p"/projects/#{project.id}/board")
+      refute Tasks.get_task(task.id)
+    end
+  end
+
   describe "planning agent selection" do
     test "an llm_api planner offers the chat, not the survey", %{conn: conn} do
       project = project_fixture()
