@@ -482,9 +482,16 @@ defmodule CodeLeadWeb.Layouts do
         title={@nav.project.name}
         class="flex cursor-pointer list-none items-center gap-2 overflow-hidden rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold text-text [&::-webkit-details-marker]:hidden collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:overflow-visible collapsed:border-0 collapsed:bg-transparent collapsed:p-0"
       >
-        <span class="size-2 shrink-0 rounded-[3px] bg-accent collapsed:hidden" />
+        <.project_dot
+          color={@nav.project.color}
+          pulse={project_running?(@nav.project_stats, @nav.project.id)}
+          class="collapsed:hidden"
+        />
         <span class="truncate collapsed:hidden">{@nav.project.name}</span>
-        <span class="hidden size-[26px] items-center justify-center rounded-[7px] bg-accent font-mono text-[11px] font-semibold uppercase text-surface collapsed:flex">
+        <span class={[
+          "hidden size-[26px] items-center justify-center rounded-[7px] font-mono text-[11px] font-semibold uppercase text-surface collapsed:flex",
+          project_color_class(@nav.project.color)
+        ]}>
           {String.first(@nav.project.name)}
         </span>
         <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3 collapsed:hidden" />
@@ -499,8 +506,17 @@ defmodule CodeLeadWeb.Layouts do
             project.id != @nav.project.id && "text-text2"
           ]}
         >
-          <span class="size-2 rounded-[3px] bg-accent opacity-70" />
+          <.project_dot
+            color={project.color}
+            pulse={project_running?(@nav.project_stats, project.id)}
+          />
           <span class="truncate">{project.name}</span>
+          <span
+            :if={project_attention(@nav.project_stats, project.id) > 0}
+            class="ml-auto shrink-0 rounded-[7px] bg-warn px-1.5 font-mono text-[11px] font-semibold text-surface"
+          >
+            {project_attention(@nav.project_stats, project.id)}
+          </span>
         </.link>
       </div>
     </details>
@@ -518,19 +534,50 @@ defmodule CodeLeadWeb.Layouts do
       }
       class="flex shrink-0 cursor-not-allowed items-center gap-2 overflow-hidden rounded-[10px] border border-border bg-surface2 px-2.5 py-2 text-[13px] font-semibold opacity-60 collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:border-0 collapsed:bg-transparent collapsed:p-0 collapsed:opacity-100"
     >
-      <span class={[
-        "size-2 shrink-0 rounded-[3px] collapsed:hidden",
-        (@nav.project && "bg-accent") || "bg-border"
-      ]} />
+      <.project_dot
+        :if={@nav.project}
+        color={@nav.project.color}
+        pulse={project_running?(@nav.project_stats, @nav.project.id)}
+        class="collapsed:hidden"
+      />
+      <span :if={!@nav.project} class="size-2 shrink-0 rounded-[3px] bg-border collapsed:hidden" />
       <span class={["truncate collapsed:hidden", (@nav.project && "text-text") || "text-text3"]}>
         {(@nav.project && @nav.project.name) || "No project"}
       </span>
-      <span class="hidden size-[26px] items-center justify-center rounded-[7px] border border-dashed border-border font-mono text-[11px] font-semibold uppercase text-text3 collapsed:flex">
-        {(@nav.project && String.first(@nav.project.name)) || "—"}
+      <span
+        :if={@nav.project}
+        class={[
+          "hidden size-[26px] items-center justify-center rounded-[7px] font-mono text-[11px] font-semibold uppercase text-surface collapsed:flex",
+          project_color_class(@nav.project.color)
+        ]}
+      >
+        {String.first(@nav.project.name)}
+      </span>
+      <span
+        :if={!@nav.project}
+        class="hidden size-[26px] items-center justify-center rounded-[7px] border border-dashed border-border font-mono text-[11px] font-semibold uppercase text-text3 collapsed:flex"
+      >
+        —
       </span>
       <.icon name="hero-chevron-down" class="ml-auto size-3.5 shrink-0 text-text3 collapsed:hidden" />
     </div>
     """
+  end
+
+  # `project_stats` is keyed by every project with at least one non-archived,
+  # non-cancelled task; a project with none is absent rather than zeroed.
+  defp project_running?(stats, project_id) do
+    case Map.get(stats, project_id) do
+      %{running: running} -> running > 0
+      _no_tasks -> false
+    end
+  end
+
+  defp project_attention(stats, project_id) do
+    case Map.get(stats, project_id) do
+      %{attention: attention} -> attention
+      _no_tasks -> 0
+    end
   end
 
   # `usage` comes from `CodeLead.Agents.SubscriptionUsageCache` — an

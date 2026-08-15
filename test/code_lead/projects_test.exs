@@ -268,5 +268,14 @@ defmodule CodeLead.ProjectsTest do
 
       assert %{budget_limit_cents: _} = errors_on(changeset)
     end
+
+    test "color defaults to :blue and only accepts a listed color" do
+      assert %Project{color: :blue} = %Project{}
+
+      assert %{valid?: true} = Projects.change_project(%Project{}, %{name: "x", color: "teal"})
+
+      changeset = Projects.change_project(%Project{}, %{name: "x", color: "orange"})
+      assert %{color: _} = errors_on(changeset)
+    end
   end
 end

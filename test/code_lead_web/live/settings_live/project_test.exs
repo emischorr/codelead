@@ -16,6 +16,20 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
   end
 
   describe "details" do
+    test "defaults to blue and saves a chosen color", %{conn: conn, project: project} do
+      assert project.color == :blue
+
+      {:ok, view, html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert html =~ "bg-proj-blue"
+
+      view
+      |> form("#project-details-form", project: %{name: project.name, color: "violet"})
+      |> render_submit()
+
+      assert Projects.get_project!(project.id).color == :violet
+    end
+
     test "saves the budget limits", %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
 

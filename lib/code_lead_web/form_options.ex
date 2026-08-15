@@ -62,6 +62,28 @@ defmodule CodeLeadWeb.FormOptions do
   def targets, do: [{"Repository", "repo"}, {"Folder", "folder"}]
 
   @doc """
+  The 10 selectable project identity colors, in the order the swatch
+  picker offers them. Orange is left out — it is `--warn`'s color, used
+  for the attention pill and banner, so a project could otherwise look
+  like it needs attention when it doesn't.
+  """
+  @spec project_colors() :: [{String.t(), String.t()}]
+  def project_colors do
+    [
+      {"Blue", "blue"},
+      {"Indigo", "indigo"},
+      {"Violet", "violet"},
+      {"Pink", "pink"},
+      {"Red", "red"},
+      {"Cyan", "cyan"},
+      {"Teal", "teal"},
+      {"Green", "green"},
+      {"Lime", "lime"},
+      {"Yellow", "yellow"}
+    ]
+  end
+
+  @doc """
   Finalize modes a target can use, labelled with what each one does.
   """
   @spec finalize_modes(:repo | :folder) :: [{String.t(), String.t()}]

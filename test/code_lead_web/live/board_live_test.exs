@@ -220,4 +220,45 @@ defmodule CodeLeadWeb.BoardLiveTest do
       assert render(view) =~ "Appeared via PubSub"
     end
   end
+
+  describe "project switcher" do
+    test "colors each project's dot and pulses it while a task is running", %{conn: conn} do
+      project = project_fixture(%{color: "teal"})
+      other = project_fixture(%{color: "violet"})
+      task_fixture(other.id) |> put_context!(%{state: :running})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(
+               view,
+               ~s(#project-switcher a[href="/projects/#{project.id}/board"] span.bg-proj-teal)
+             )
+
+      assert has_element?(
+               view,
+               ~s(#project-switcher a[href="/projects/#{other.id}/board"] span.bg-proj-violet.animate-pulse)
+             )
+
+      refute has_element?(
+               view,
+               ~s(#project-switcher a[href="/projects/#{project.id}/board"] span.animate-pulse)
+             )
+    end
+
+    test "shows a live attention badge for every project, not just the open one", %{conn: conn} do
+      project = project_fixture()
+      other = project_fixture()
+      other_task = task_fixture(other.id)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      badge_selector = ~s(#project-switcher a[href="/projects/#{other.id}/board"] span.bg-warn)
+      refute has_element?(view, badge_selector)
+
+      {:ok, _task} = Tasks.set_attention(other_task, :run_failed, "boom")
+      send(view.pid, {:board_changed, other.id, other_task.id})
+
+      assert has_element?(view, badge_selector, "1")
+    end
+  end
 end

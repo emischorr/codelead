@@ -5,7 +5,7 @@ every authenticated page. This note records the contract it renders from,
 the rules for what is enabled where, and why the project selection is
 remembered the way it is.
 
-(last updated: 2026-08-14)
+(last updated: 2026-08-15)
 
 ## Two principles
 
@@ -47,6 +47,7 @@ from — LiveViews never assemble navigation themselves:
   scope: :project | :general, # is this page inside a project?
   current: :dashboard | :board | :settings | :account | nil,
   attention_count: 0,
+  project_stats: %{},         # Tasks.project_summaries/0 — every project, not just the open one
   spend: nil,                 # month-to-date %{cost_cents: _, tokens: _} | nil
   rate_limit: nil             # subscription usage snapshot | nil — see below
 }
@@ -69,6 +70,20 @@ from — LiveViews never assemble navigation themselves:
   `NavContext` stays free of the costs/tasks domains. `DashboardLive`
   deliberately does not: it is org-wide, and both readouts are
   project-scoped.
+- `project_stats` is the one exception to "`NavContext` stays free of the
+  tasks domain" — it backs the project selector's dropdown, which lists
+  *every* project, not just the open one, so it cannot ride in on a
+  single page's own board subscription. `on_mount` loads it once from
+  `Tasks.project_summaries/0` and, when connected, subscribes to
+  `Tasks.subscribe_org/0` and refreshes it on every `{:board_changed, ...}`
+  via an `attach_hook/4` on `:handle_info` — always returning `:cont`, so
+  a page that also subscribes to its own project's board topic (`BoardLive`,
+  `TaskLive`) still gets the message a second time for its own reload.
+  That double delivery is intentionally left alone rather than
+  deduplicated: both handlers are idempotent reloads, not one-shot side
+  effects, on the one path that isn't (a task deleted out from under
+  `TaskLive`) the second delivery repeats an identical flash and redirect,
+  not a new one.
 - `spend` is **month-to-date** (`Costs.project_spend_month/1`), because
   the budget tile's headline names the current month and the limit it
   is measured against runs on the calendar month too. The board header's
@@ -141,6 +156,17 @@ navigation control whose only destination is a board, and picking one from
 inside `/settings/users` would silently mean "leave this page". So on
 general pages it degrades to a label that answers *which project am I
 coming back to*, which is the same question the Board link answers.
+
+Every row in the dropdown — and the closed disclosure's own summary —
+carries three project-specific readouts, all driven off `project_stats`:
+the leading dot renders in the project's chosen `color` (`Projects.Project`,
+`FormOptions.project_colors/0` for the 10-swatch picker on the settings
+page — orange is left out, it is `--warn`'s color), the same dot gets
+`animate-pulse` while the project has a task in the Running column, and a
+row with `attention > 0` gets a small `bg-warn` count badge pinned to the
+far right with `ml-auto`. The badge is per-project and additive to, not a
+replacement for, the sidebar's own project-scoped attention pill below —
+that one only ever reads the *open* project's count.
 
 ## One sidebar, two widths
 
