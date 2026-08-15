@@ -386,7 +386,10 @@ defmodule CodeLeadWeb.UIComponents do
       {Format.relative(@at)}
     </span>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
-      const FMT = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"})
+      // `data-timezone` is the signed-in user's saved preference (root.html.heex);
+      // empty means "follow the browser", same as `Intl`'s own default.
+      const tz = document.documentElement.dataset.timezone || undefined
+      const FMT = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short", timeZone: tz})
 
       // The server-rendered UTC title is the no-JS fallback, and morphdom puts
       // it back on every patch — so updated() has to re-localize, not just mounted().
