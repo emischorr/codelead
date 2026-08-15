@@ -622,6 +622,21 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert_patched(view, task_path(project, task, "agent"))
     end
+
+    test "the Agent tab headline flags attention while another tab is active", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "diff"))
+
+      refute has_element?(view, "#task-tab-agent.text-warn")
+      refute has_element?(view, "#task-tab-agent .hero-hand-raised")
+
+      {:ok, _task} = Tasks.set_attention(task, :agent_question, "Which one?", ref: "80")
+
+      assert has_element?(view, "#task-tab-agent.text-warn")
+      assert has_element?(view, "#task-tab-agent .hero-hand-raised")
+    end
   end
 
   describe "run meta" do
