@@ -85,7 +85,7 @@ defmodule CodeLeadWeb.FormatTest do
     end
 
     test "resets later today" do
-      at = DateTime.add(DateTime.utc_now(), 2 * 3_600 + 31 * 60, :second)
+      at = DateTime.add(DateTime.utc_now(), 2 * 3_600 + 31 * 60 + 5, :second)
       assert Format.reset_in(at) == "2h 31m"
     end
 

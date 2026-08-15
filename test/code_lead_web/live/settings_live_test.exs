@@ -26,7 +26,7 @@ defmodule CodeLeadWeb.SettingsLiveTest do
 
       assert render(element(view, "#settings-tile-users")) =~ "1 user"
       assert render(element(view, "#settings-tile-providers")) =~ "2 providers"
-      assert render(element(view, "#settings-tile-agents")) =~ "1 org agent"
+      assert render(element(view, "#settings-tile-agents")) =~ "1 agent"
       assert render(element(view, "#settings-tile-projects")) =~ "1 project"
     end
 
