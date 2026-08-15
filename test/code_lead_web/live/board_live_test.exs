@@ -112,17 +112,46 @@ defmodule CodeLeadWeb.BoardLiveTest do
   end
 
   describe "actions" do
-    test "start_task on a task without executor flashes an error", %{conn: conn} do
+    test "a task without an executor hides Start/Schedule on the card", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id, %{agent_id: nil})
 
       {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
 
-      view
-      |> element("#task-card-#{task.id} button", "Start")
-      |> render_click()
+      refute has_element?(view, "#task-card-#{task.id}-start")
+      refute has_element?(view, "#task-card-#{task.id}-schedule")
 
+      # The handler still guards even if a stale render lets the event through.
+      render_click(view, "start_task", %{"id" => to_string(task.id)})
       assert render(view) =~ "Select an executor agent"
+    end
+
+    test "a repo-target task without a repository hides Start/Schedule on the card", %{
+      conn: conn
+    } do
+      project = project_fixture()
+      executor = agent_fixture(%{roles: [:execute], work_type: :code})
+
+      task =
+        task_fixture(project.id, %{
+          target: :repo,
+          repository_id: nil,
+          agent_id: executor.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      refute has_element?(view, "#task-card-#{task.id}-start")
+      refute has_element?(view, "#task-card-#{task.id}-schedule")
+    end
+
+    test "a runnable task shows Start/Schedule on the card", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#task-card-#{task.id}-start")
+      assert has_element?(view, "#task-card-#{task.id}-schedule")
     end
 
     test "scheduling a run moves the card to Running and shows the start time", %{conn: conn} do
