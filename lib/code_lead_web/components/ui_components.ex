@@ -395,7 +395,10 @@ defmodule CodeLeadWeb.UIComponents do
   @doc """
   Renders the underline tab navigation.
 
-  Tabs are maps: `%{id: :task, label: "Task", patch: ~p"..."}`.
+  Tabs are maps: `%{id: :task, label: "Task", patch: ~p"...", warn: false}`.
+  A `warn: true` tab renders its label and icon in the attention color,
+  regardless of whether it's the active tab, so a viewer on another tab
+  still sees that a tab needs attention.
   """
   attr :tabs, :list, required: true
   attr :active, :atom, required: true
@@ -406,18 +409,26 @@ defmodule CodeLeadWeb.UIComponents do
     <nav class={["flex gap-5 overflow-x-auto border-b border-border", @class]}>
       <.link
         :for={tab <- @tabs}
+        id={"task-tab-#{tab.id}"}
         patch={tab.patch}
         class={[
-          "whitespace-nowrap pb-2.5 text-[13.5px]",
-          tab.id == @active && "-mb-px border-b-2 border-accent font-semibold text-accent",
-          tab.id != @active && "font-medium text-text2 hover:text-text"
+          "flex items-center gap-1.5 whitespace-nowrap pb-2.5 text-[13.5px]",
+          tab.id == @active && "-mb-px border-b-2 font-semibold",
+          tab.id != @active && "font-medium",
+          tab_nav_color(tab, tab.id == @active)
         ]}
       >
         {tab.label}
+        <.icon :if={tab[:warn]} name="hero-hand-raised" class="size-3.5 text-warn" />
       </.link>
     </nav>
     """
   end
+
+  defp tab_nav_color(%{warn: true}, true), do: "border-warn text-warn"
+  defp tab_nav_color(%{warn: true}, false), do: "text-warn"
+  defp tab_nav_color(_tab, true), do: "border-accent text-accent"
+  defp tab_nav_color(_tab, false), do: "text-text2 hover:text-text"
 
   @doc """
   Renders a kanban column: uppercase header with count, then the card stack.

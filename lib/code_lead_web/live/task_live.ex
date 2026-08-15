@@ -1044,7 +1044,8 @@ defmodule CodeLeadWeb.TaskLive do
       %{
         id: tab,
         label: tab_label(tab),
-        patch: ~p"/projects/#{project.id}/tasks/#{task.id}?tab=#{tab}"
+        patch: ~p"/projects/#{project.id}/tasks/#{task.id}?tab=#{tab}",
+        warn: tab == :agent and task.attention != nil
       }
     end
   end
