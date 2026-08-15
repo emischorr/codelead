@@ -61,6 +61,22 @@
   --del-text: #a5544c;
   --term-bg: #14151a;
   --term-text: #c9cdd6;
+
+  /* Project identity colors — a fixed 10-swatch palette users pick from,
+     independent of the semantic tokens above (accent/run/warn/ok already
+     mean something specific elsewhere, so a project's color must not
+     borrow one). --proj-blue is the default and matches the old static
+     accent dot, so existing projects render unchanged. */
+  --proj-blue: #7c7ae6;
+  --proj-indigo: #5b6fd8;
+  --proj-violet: #9c5fd0;
+  --proj-pink: #c15b93;
+  --proj-red: #c0564c;
+  --proj-cyan: #3d87a8;
+  --proj-teal: #2f8b93;
+  --proj-green: #4f8f5c;
+  --proj-lime: #7c9c3f;
+  --proj-yellow: #ab9430;
 }
 
 :root[data-theme="dark"] {
@@ -85,6 +101,17 @@
   --add-text: #8cc7a0;
   --del-bg: #342220;
   --del-text: #d89189;
+
+  --proj-blue: #9c9af2;
+  --proj-indigo: #8b9af0;
+  --proj-violet: #bc8ce8;
+  --proj-pink: #dd8fb8;
+  --proj-red: #d98a82;
+  --proj-cyan: #6cbdd8;
+  --proj-teal: #5fb8c2;
+  --proj-green: #82c28f;
+  --proj-lime: #a8cf6e;
+  --proj-yellow: #d9c467;
 }
 
 @theme {
@@ -117,6 +144,17 @@
   --color-del-text: var(--del-text);
   --color-term-bg: var(--term-bg);
   --color-term-text: var(--term-text);
+
+  --color-proj-blue: var(--proj-blue);
+  --color-proj-indigo: var(--proj-indigo);
+  --color-proj-violet: var(--proj-violet);
+  --color-proj-pink: var(--proj-pink);
+  --color-proj-red: var(--proj-red);
+  --color-proj-cyan: var(--proj-cyan);
+  --color-proj-teal: var(--proj-teal);
+  --color-proj-green: var(--proj-green);
+  --color-proj-lime: var(--proj-lime);
+  --color-proj-yellow: var(--proj-yellow);
 
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;

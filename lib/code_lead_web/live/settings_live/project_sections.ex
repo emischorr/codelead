@@ -27,6 +27,10 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
       >
         <.input field={@form[:name]} label="Project name" required />
 
+        <.color_picker field={@form[:color]} options={FormOptions.project_colors()}>
+          <:label>Color</:label>
+        </.color_picker>
+
         <div class="grid gap-x-3 sm:grid-cols-2">
           <div>
             <.input
