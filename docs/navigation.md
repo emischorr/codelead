@@ -87,7 +87,12 @@ from — LiveViews never assemble navigation themselves:
   failed or missing reading is indistinguishable from "no subscription
   provider configured": `rate_limit` is `nil` and the tile does not
   render. See `CodeLead.Agents.SubscriptionUsage` and
-  `CodeLead.Agents.SubscriptionUsageCache`.
+  `CodeLead.Agents.SubscriptionUsageCache`. Each window's row also shows
+  when it resets, via `CodeLeadWeb.Format.reset_in/1` against
+  `window.resets_at`: a countdown (`"2h 31m"`) inside 24h, a weekday and
+  clock time (`"Tue 22:10"`) beyond that — computed at render time from
+  the same best-effort reading, so it is only as fresh as the last poll
+  or page navigation, same as the utilization percentage next to it.
 
 Every page therefore renders the identical call, the task page adding only
 the forced width:

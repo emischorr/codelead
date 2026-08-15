@@ -558,7 +558,9 @@ defmodule CodeLeadWeb.Layouts do
     ~H"""
     <div :if={@window} class="flex flex-col gap-1">
       <div class="flex items-center justify-between font-mono text-[13px] font-semibold text-text">
-        <span class="font-sans font-normal text-text3">{@label}</span>
+        <span class="font-sans font-normal text-text3">
+          {@label} · {CodeLeadWeb.Format.reset_in(@window.resets_at)}
+        </span>
         <span>{round(@window.utilization * 100)}%</span>
       </div>
       <.meter

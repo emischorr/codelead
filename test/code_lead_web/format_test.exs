@@ -70,6 +70,31 @@ defmodule CodeLeadWeb.FormatTest do
     end
   end
 
+  describe "reset_in/1" do
+    test "nothing to show" do
+      assert Format.reset_in(nil) == "—"
+    end
+
+    test "already reset" do
+      assert Format.reset_in(DateTime.add(DateTime.utc_now(), -5, :minute)) == "now"
+    end
+
+    test "resets within the hour" do
+      at = DateTime.add(DateTime.utc_now(), 31 * 60 + 5, :second)
+      assert Format.reset_in(at) == "31m"
+    end
+
+    test "resets later today" do
+      at = DateTime.add(DateTime.utc_now(), 2 * 3_600 + 31 * 60, :second)
+      assert Format.reset_in(at) == "2h 31m"
+    end
+
+    test "resets beyond a day shows the weekday and clock time" do
+      at = DateTime.add(DateTime.utc_now(), 2, :day)
+      assert Format.reset_in(at) == Calendar.strftime(at, "%a %H:%M")
+    end
+  end
+
   describe "run_stat/4" do
     test "joins the segments it has" do
       assert Format.run_stat(207, 183_512, 134_000) == "$2.07 · 183.5k · 2m 14s"
