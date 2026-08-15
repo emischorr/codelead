@@ -10,10 +10,11 @@ defmodule CodeLeadWeb.NavContext do
   """
 
   import Phoenix.Component, only: [assign: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4]
+  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1]
 
   alias CodeLead.Agents.SubscriptionUsageCache
   alias CodeLead.Projects
+  alias CodeLead.Tasks
   alias Phoenix.LiveView.Socket
 
   @doc """
@@ -23,10 +24,17 @@ defmodule CodeLeadWeb.NavContext do
   `rate_limit` is read directly from `SubscriptionUsageCache` here rather
   than pushed in via `put_stats/3` — unlike `spend`, it isn't project-scoped,
   so every page (including `DashboardLive`) gets the same reading.
+
+  `project_stats` backs the project switcher's per-project running-pulse
+  and attention badge, so it covers every project rather than just the
+  open one — that needs the org-wide topic, not the page's own board
+  subscription (if any).
   """
   def on_mount(:default, params, _session, socket) do
     projects = Projects.list_projects()
     {project, scope} = resolve_project(params, projects)
+
+    if connected?(socket), do: Tasks.subscribe_org()
 
     nav = %{
       projects: projects,
@@ -34,6 +42,7 @@ defmodule CodeLeadWeb.NavContext do
       scope: scope,
       current: section(socket.view),
       attention_count: 0,
+      project_stats: Tasks.project_summaries(),
       spend: nil,
       rate_limit: SubscriptionUsageCache.current()
     }
@@ -41,7 +50,8 @@ defmodule CodeLeadWeb.NavContext do
     {:cont,
      socket
      |> assign(:nav, nav)
-     |> attach_hook(:nav_context, :handle_event, &handle_nav_event/3)}
+     |> attach_hook(:nav_context, :handle_event, &handle_nav_event/3)
+     |> attach_hook(:nav_context_info, :handle_info, &handle_nav_info/2)}
   end
 
   @doc """
@@ -82,6 +92,16 @@ defmodule CodeLeadWeb.NavContext do
   end
 
   defp handle_nav_event(_event, _params, socket), do: {:cont, socket}
+
+  ## Project stats
+
+  # Always :cont — the page's own `handle_info` for the same message (board
+  # reload, attention pill, task feed, …) still needs to run after this.
+  defp handle_nav_info({:board_changed, _project_id, _task_id}, %{assigns: %{nav: nav}} = socket) do
+    {:cont, assign(socket, :nav, %{nav | project_stats: Tasks.project_summaries()})}
+  end
+
+  defp handle_nav_info(_message, socket), do: {:cont, socket}
 
   ## Highlighted section
 

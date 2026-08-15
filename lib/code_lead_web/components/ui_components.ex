@@ -112,6 +112,75 @@ defmodule CodeLeadWeb.UIComponents do
   end
 
   @doc """
+  Renders a project's identity dot in its chosen color. `pulse` is set
+  by the caller when the project has a task in Running — the dot then
+  animates in its own color rather than borrowing `--run`, so it stays
+  legible against whatever color the project was given.
+  """
+  attr :color, :atom, required: true
+  attr :pulse, :boolean, default: false
+  attr :class, :any, default: nil
+
+  def project_dot(assigns) do
+    ~H"""
+    <span class={[
+      "size-2 shrink-0 rounded-[3px]",
+      project_color_class(@color),
+      @pulse && "animate-pulse",
+      @class
+    ]} />
+    """
+  end
+
+  @doc """
+  Maps a project color to its Tailwind background utility.
+  """
+  @spec project_color_class(atom()) :: String.t()
+  def project_color_class(:blue), do: "bg-proj-blue"
+  def project_color_class(:indigo), do: "bg-proj-indigo"
+  def project_color_class(:violet), do: "bg-proj-violet"
+  def project_color_class(:pink), do: "bg-proj-pink"
+  def project_color_class(:red), do: "bg-proj-red"
+  def project_color_class(:cyan), do: "bg-proj-cyan"
+  def project_color_class(:teal), do: "bg-proj-teal"
+  def project_color_class(:green), do: "bg-proj-green"
+  def project_color_class(:lime), do: "bg-proj-lime"
+  def project_color_class(:yellow), do: "bg-proj-yellow"
+
+  @doc """
+  Renders a row of color swatches as a radio group, for picking a
+  project's identity color. `options` is `FormOptions.project_colors/0`.
+  """
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :options, :list, required: true
+  slot :label
+
+  def color_picker(assigns) do
+    ~H"""
+    <fieldset class="mb-4">
+      <legend :if={@label != []} class="mb-1.5 text-[13.5px] font-medium text-text">
+        {render_slot(@label)}
+      </legend>
+      <div class="flex flex-wrap gap-2">
+        <label :for={{label, value} <- @options} class="cursor-pointer" title={label}>
+          <input
+            type="radio"
+            name={@field.name}
+            value={value}
+            checked={to_string(@field.value) == value}
+            class="peer sr-only"
+          />
+          <span class={[
+            "block size-7 rounded-full ring-2 ring-transparent ring-offset-2 ring-offset-surface transition-shadow peer-checked:ring-text peer-focus-visible:ring-text",
+            project_color_class(String.to_existing_atom(value))
+          ]} />
+        </label>
+      </div>
+    </fieldset>
+    """
+  end
+
+  @doc """
   Renders the mono run stat, e.g. `$2.07 · 183.5k · 2m 14s`.
 
   `cost_mode` says how to read the money: `:exact` was billed,
