@@ -12,7 +12,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
 | `TEST_WORKSPACE_ROOT` | `<repo>/tmp/test_workspace` | Test-env-only workspace root override (for CI). Must resolve to a path inside the checkout — `test_helper.exs` refuses to wipe anything outside it. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
-| `LICENSE_KEY` | — | Signed license key for the instance. Optional everywhere including prod — absent means the community tier, which today grants everything. Verified offline at boot; anything unusable (bad signature, expired, malformed) logs a warning and falls back to community rather than failing the boot. See [`licensing.md`](licensing.md). |
+| `LICENSE_KEY` | — | Signed license key for the instance. Optional everywhere including prod — absent means the community tier, which grants everything except container execution (tasks whose Execution is set to Container). Verified offline at boot; anything unusable (bad signature, expired, malformed) logs a warning and falls back to community rather than failing the boot. See [`licensing.md`](licensing.md). |
 | `DATABASE_URL` | **required in prod** | `ecto://USER:PASS@HOST/DATABASE`. |
 | `SECRET_KEY_BASE` | **required in prod** | Signs and encrypts cookies. `mix phx.gen.secret` or `openssl rand -base64 48`. |
 | `PHX_HOST` | `example.com` | The canonical hostname — the one in generated links. Feeds the endpoint's `:url` **and** is always allowed by the origin check (host only, any scheme/port). If the address bar shows a host that is neither this nor in `ALLOWED_HOSTS`, the page renders but LiveView never connects. |
@@ -52,7 +52,8 @@ template is not.
   `CodeLead.Application.start/2` and cached in `:persistent_term`; nothing
   re-reads it at runtime. There is deliberately no config key for the gated
   feature list or the verification public key — a runtime switch for either
-  would be a bypass. See [`licensing.md`](licensing.md).
+  would be a bypass, which is also why there is no dev-only way to enable
+  container execution without a key. See [`licensing.md`](licensing.md).
 - `:harnesses` — launch argv per ACP harness, e.g.
   `%{claude_code: ["claude-code-acp"], codex: ["codex", "acp"]}`. See
   *Harness prerequisites* below.
@@ -325,8 +326,11 @@ image on the repository (Settings → Project → Repositories, or
 Execution to Container — the agent then runs inside that image, with
 the project's exact toolchain, over the docker socket
 ([ADR-0003](adr/0003-container-execution-model.md),
-[ADR-0004](adr/0004-container-executor-iteration-two.md)). There is
-deliberately no fallback image: an undeclared environment blocks the
+[ADR-0004](adr/0004-container-executor-iteration-two.md)). Container
+execution is the one licensed feature — `:container_execution_env` — so
+an instance with no `LICENSE_KEY` can declare an image but cannot select
+or start Container execution; see [`licensing.md`](licensing.md). There
+is deliberately no fallback image: an undeclared environment blocks the
 start instead of running somewhere nobody chose. The
 `devcontainer_path`/`dockerfile` fields and `agents.tool_features`
 remain dormant seams. The declared image must provide `sleep` (the idle
@@ -339,6 +343,11 @@ the workspace volume holding bun plus the adapter's package tree
 node, nothing harness-related.
 
 ### Container execution in dev
+
+Dev needs a `LICENSE_KEY` granting `:container_execution_env` — the gate
+applies to a dev instance exactly as it does to a deployed one, and there
+is no config override. Mint yourself an `owner` key
+(see [`licensing.md`](licensing.md)) and export it from `.envrc`.
 
 The BEAM runs on the host in dev, so sibling containers bind-mount the
 workspace at its real path — Docker Desktop's file sharing must cover

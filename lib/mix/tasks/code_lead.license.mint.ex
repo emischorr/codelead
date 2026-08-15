@@ -13,7 +13,10 @@ defmodule Mix.Tasks.CodeLead.License.Mint do
 
       LICENSE_SIGNING_KEY=... mix code_lead.license.mint \\
         --org "Custom Deal" --tier pro \\
-        --features agent_marketplace --limit max_concurrent_runs=50
+        --features container_execution_env --limits max_concurrent_runs=50
+
+      LICENSE_SIGNING_KEY=... mix code_lead.license.mint \\
+        --org "Enrico Mischorr" --tier owner
 
   The operator then sets the printed key as `LICENSE_KEY` on their
   instance.
@@ -22,12 +25,15 @@ defmodule Mix.Tasks.CodeLead.License.Mint do
 
     * `--tier`     — tier label; defaults to `commercial`. Resolves through
       `CodeLead.License.tier_baseline/1`, so a tier this build does not
-      define grants only what `--features`/`--limit` add.
+      define grants only what `--features`/`--limits` add. `owner` grants
+      every gated feature, including ones added after minting.
     * `--org`      — display name, carried as metadata. Not enforced.
     * `--features` — comma-separated feature atoms, granted on top of the
       tier baseline.
-    * `--limit`    — `key=value`, repeatable. Overrides the tier baseline.
-      Integer-looking values are minted as integers.
+    * `--limits`   — comma-separated `key=value` pairs.
+    * `--limit`    — a single `key=value`, repeatable. Same effect as
+      `--limits`; use whichever reads better. Both override the tier
+      baseline, and integer-looking values are minted as integers.
     * `--expires`  — ISO 8601 date (`YYYY-MM-DD`). Omit for a perpetual key.
       An expired key degrades the instance to community, it does not stop it.
 
@@ -41,7 +47,14 @@ defmodule Mix.Tasks.CodeLead.License.Mint do
 
   alias CodeLead.License.Source.SignedKey
 
-  @switches [org: :string, tier: :string, features: :string, limit: :keep, expires: :string]
+  @switches [
+    org: :string,
+    tier: :string,
+    features: :string,
+    limit: :keep,
+    limits: :string,
+    expires: :string
+  ]
 
   @impl Mix.Task
   def run(args) do
@@ -63,9 +76,10 @@ defmodule Mix.Tasks.CodeLead.License.Mint do
     Mix.shell().info(SignedKey.mint(claims, private_key))
   end
 
+  # `--limit k=v` repeated and `--limits k=v,k=v` are the same thing said
+  # two ways; a key may use either or both.
   defp parse_limits(opts) do
-    opts
-    |> Keyword.get_values(:limit)
+    (Keyword.get_values(opts, :limit) ++ String.split(opts[:limits] || "", ",", trim: true))
     |> Map.new(fn pair ->
       case String.split(pair, "=", parts: 2) do
         [key, value] -> {key, parse_value(value)}

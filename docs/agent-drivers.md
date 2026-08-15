@@ -69,10 +69,18 @@ output — needs its own payload budget) and `agent_thought_chunk`
   fall back to a fresh session) → `session/prompt`, and translates
   `session/update` notifications into normalized events. Extra event:
   `{:session_started, id}` for the runner to persist.
-  - **Permission policy:** in-sandbox requests are auto-granted;
-    requests whose tool-call locations leave the context path surface
-    as `{:permission_request, %{id:, detail:}}` and wait for
-    `Acp.answer_permission/3`.
+  - **Permission policy:** in-sandbox requests are auto-granted. A
+    request whose tool-call locations all sit under the context path
+    passes regardless of kind; a location-less request passes only for
+    known-inert kinds plus `execute` (shell is bounded by the sandbox
+    cwd and the scrubbed env). Everything else — a location leaving the
+    context path, a destructive kind (`delete`/`move`) without
+    locations, an unrecognized or missing kind, or a malformed
+    location — surfaces as `{:permission_request, %{id:, detail:}}`
+    and waits for `Acp.answer_permission/3`. A human Deny with no
+    reject-kind option answers `cancelled`, never a fallback option.
+    `terminal/create` is confined the same way: an out-of-sandbox
+    `cwd` is refused with a JSON-RPC error.
   - **Asking the human (elicitation):** the client advertises
     `clientCapabilities.elicitation.form`, and that advertisement is
     what makes the harness offer its ask-the-human tool at all —

@@ -37,6 +37,14 @@ defmodule CodeLead.AgentDriver.AcpTest do
     })
   end
 
+  defp use_permission_probe(tool_call, options \\ nil) do
+    args =
+      ["permission_probe", JSON.encode!(tool_call)] ++
+        if(options, do: [JSON.encode!(options)], else: [])
+
+    Application.put_env(:code_lead, :harnesses, %{claude_code: ["elixir", @script | args]})
+  end
+
   defp collect_until_result(handle, acc \\ []) do
     receive do
       {:agent_event, ^handle, {:result, result}} -> {Enum.reverse(acc), result}
@@ -243,6 +251,178 @@ defmodule CodeLead.AgentDriver.AcpTest do
 
     assert_receive {:agent_event, ^handle, {:result, %{status: :cancelled}}}, 5_000
     assert_receive {:DOWN, ^ref, :process, ^handle, :normal}, 5_000
+  end
+
+  describe "permission escalation policy" do
+    test "location-less execute auto-grants", ctx do
+      use_permission_probe(%{toolCallId: "tc-sh", title: "Run tests", kind: "execute"})
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Run the tests")
+      {events, result} = collect_until_result(handle)
+
+      refute Enum.any?(events, &match?({:permission_request, _}, &1))
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ ~s(allow)
+      assert result.status == :ok
+    end
+
+    test "location-less delete escalates and a human grant goes through", ctx do
+      use_permission_probe(%{toolCallId: "tc-rm", title: "rm -rf build", kind: "delete"})
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Clean up")
+
+      assert_receive {:agent_event, ^handle, {:permission_request, %{id: id}}}, 15_000
+      :ok = Acp.answer_permission(handle, id, true)
+
+      {events, result} = collect_until_result(handle)
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ ~s(allow)
+      assert result.status == :ok
+    end
+
+    test "a missing kind escalates", ctx do
+      use_permission_probe(%{toolCallId: "tc-x", title: "mystery tool"})
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Do something")
+
+      assert_receive {:agent_event, ^handle, {:permission_request, %{id: id}}}, 15_000
+      :ok = Acp.answer_permission(handle, id, false)
+
+      {events, _result} = collect_until_result(handle)
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ ~s(reject)
+    end
+
+    test "an unrecognized kind escalates", ctx do
+      use_permission_probe(%{toolCallId: "tc-x", title: "custom tool", kind: "other"})
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Do something")
+
+      assert_receive {:agent_event, ^handle, {:permission_request, _}}, 15_000
+      :ok = Acp.cancel(handle)
+    end
+
+    test "a location without a readable path fails closed", ctx do
+      use_permission_probe(%{
+        toolCallId: "tc-x",
+        title: "odd read",
+        kind: "read",
+        locations: [%{path: nil}]
+      })
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Read something")
+
+      assert_receive {:agent_event, ^handle, {:permission_request, %{id: id}}}, 15_000
+      :ok = Acp.answer_permission(handle, id, false)
+
+      {events, _result} = collect_until_result(handle)
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ ~s(reject)
+    end
+
+    test "in-sandbox locations auto-grant even for destructive kinds", ctx do
+      use_permission_probe(%{
+        toolCallId: "tc-rm",
+        title: "Remove scratch file",
+        kind: "delete",
+        locations: [%{path: Path.join(ctx.context.path, "lib/foo.ex")}]
+      })
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Clean up")
+      {events, result} = collect_until_result(handle)
+
+      refute Enum.any?(events, &match?({:permission_request, _}, &1))
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ ~s(allow)
+      assert result.status == :ok
+    end
+
+    test "a deny with only allow options answers cancelled, never an allow", ctx do
+      use_permission_probe(
+        %{
+          toolCallId: "tc-esc",
+          title: "Delete /etc/passwd",
+          kind: "delete",
+          locations: [%{path: "/etc/passwd"}]
+        },
+        [%{optionId: "allow", name: "Allow", kind: "allow_once"}]
+      )
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Try something naughty")
+
+      assert_receive {:agent_event, ^handle, {:permission_request, %{id: id}}}, 15_000
+      :ok = Acp.answer_permission(handle, id, false)
+
+      {events, _result} = collect_until_result(handle)
+      chunks = Enum.join(for {:message_chunk, text} <- events, do: text)
+      assert chunks =~ ~s(cancelled)
+      refute chunks =~ ~s(optionId)
+    end
+
+    test "answering a permission on a dead run returns not_running", ctx do
+      use_scenario("happy")
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Do the thing")
+      ref = Process.monitor(handle)
+      {_events, _result} = collect_until_result(handle)
+      assert_receive {:DOWN, ^ref, :process, ^handle, :normal}, 5_000
+
+      assert Acp.answer_permission(handle, "1", true) == {:error, :not_running}
+    end
+
+    test "cancel settles a pending permission on the wire", ctx do
+      use_scenario("permission_settled_on_cancel")
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Slow work")
+      assert_receive {:agent_event, ^handle, {:permission_request, _}}, 15_000
+
+      ref = Process.monitor(handle)
+      :ok = Acp.cancel(handle)
+      assert_receive {:DOWN, ^ref, :process, ^handle, :normal}, 5_000
+
+      # The fake agent (a separate OS process) records the outcome it
+      # received before the pipe closed; give it a moment to flush.
+      settled = Path.join(ctx.context.path, "settled.txt")
+      assert wait_for_file(settled) =~ ~s(cancelled)
+    end
+  end
+
+  describe "terminal cwd sandbox" do
+    test "an out-of-sandbox cwd is refused", ctx do
+      use_scenario("terminal_bad_cwd")
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Run a command")
+      {events, result} = collect_until_result(handle)
+
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ "outside sandbox"
+      assert result.status == :ok
+    end
+
+    test "an explicit sandbox-root cwd passes", ctx do
+      use_scenario("terminal_root_cwd")
+
+      {:ok, handle} = Acp.start_run(ctx.task, ctx.agent, ctx.context, "Run a command")
+      {events, result} = collect_until_result(handle)
+
+      chunks = for {:message_chunk, text} <- events, do: text
+      assert Enum.join(chunks) =~ "terminal-says-hi"
+      assert result.status == :ok
+    end
+  end
+
+  defp wait_for_file(path, attempts \\ 50) do
+    case File.read(path) do
+      {:ok, content} ->
+        content
+
+      {:error, _reason} when attempts > 0 ->
+        Process.sleep(100)
+        wait_for_file(path, attempts - 1)
+
+      {:error, reason} ->
+        flunk("#{path} never appeared: #{inspect(reason)}")
+    end
   end
 
   test "unknown harness command fails to start", ctx do

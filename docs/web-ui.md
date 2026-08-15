@@ -372,10 +372,17 @@ above the bar instead of underneath it.
   button; the repository and execution selects only appear for a
   `:repo` target (a folder task is structurally local), and
   switching to `:folder` leaves `repository_id` alone because the
-  `:commit_to_path` finalize mode still uses it. A Container task whose
-  repository declares no image is not startable — the Start button's
-  tooltip carries the `:missing_execution_env` copy, and the repository
-  modal in project settings is where the image is declared — a single
+  `:commit_to_path` finalize mode still uses it. Container execution is
+  the one licensed feature, so on an instance without a granting
+  `LICENSE_KEY` the Container `<option>` renders `disabled` (never
+  dropped — a task already set to Container would otherwise show Local
+  and misreport itself) under a one-line note, and the Start button's
+  tooltip carries the `:unlicensed_execution_env` copy; see
+  [`licensing.md`](licensing.md). A Container task whose
+  repository declares no image is not startable either — that tooltip
+  carries the `:missing_execution_env` copy instead. The repository
+  modal in project settings is where the image is declared (not itself
+  gated: declaring an image is a repository property) — a single
   image-reference field (`env_kind` is derived from it: set = container
   environment declared, cleared = local-only), with a
   `container: <ref>` badge in the repo list. Outside Planning the

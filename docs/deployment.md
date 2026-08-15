@@ -125,6 +125,11 @@ assumption ([ADR-0003](adr/0003-container-execution-model.md),
 container execution, remove the socket mount and the `WORKSPACE_VOLUME` env —
 container-selecting tasks then refuse to start with a clear message.
 
+Container execution is also the one **licensed** feature
+(`:container_execution_env`). An instance with no `LICENSE_KEY` cannot select
+or start it, whether or not the socket is mounted; everything else runs
+unrestricted on the community tier. See [`licensing.md`](licensing.md).
+
 ### What you must add
 
 `restart: unless-stopped` on `db` and `app`, so the instance survives a host

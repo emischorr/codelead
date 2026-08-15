@@ -255,9 +255,13 @@ Both are **blocking** escalations: the agent's prompt turn is held open
 on the wire, so the run stays `run_state: :executing` and cannot reach
 the automatic Running→Review edge until a human settles it (or cancels
 the run, whose human-triggered edge clears the attention flag on its
-way to Planning). Because two can be open at once, answering one
-re-points `attention` at the oldest still-pending escalation rather
-than clearing it outright.
+way to Planning). Permission escalations arise for tool calls whose
+locations leave the sandbox as well as location-less calls of
+destructive or unrecognized kinds (see `docs/agent-drivers.md`).
+Cancelling a run settles any still-pending permission on the wire with
+a `cancelled` outcome, just as it cancels pending questions. Because
+two can be open at once, answering one re-points `attention` at the
+oldest still-pending escalation rather than clearing it outright.
 
 ## Console usage (IEx)
 

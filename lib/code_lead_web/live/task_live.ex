@@ -14,6 +14,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Finalizer
   alias CodeLead.Git
   alias CodeLead.Git.DiffFile
+  alias CodeLead.License
   alias CodeLead.Planning
   alias CodeLead.Projects
   alias CodeLead.Reviews
@@ -75,7 +76,8 @@ defmodule CodeLeadWeb.TaskLive do
         folder_artifact: nil,
         live_usage: nil,
         tick_timer: nil,
-        now: DateTime.utc_now()
+        now: DateTime.utc_now(),
+        container_licensed?: License.feature_enabled?(:container_execution_env)
       )
       |> load_task()
       |> stream_configure(:feed, dom_id: &"agent-block-#{&1.id}")
@@ -983,6 +985,7 @@ defmodule CodeLeadWeb.TaskLive do
           show_feedback?={@show_feedback?}
           finalize_mode={@finalize_mode}
           project_finalize_mode={@project_finalize_mode}
+          container_licensed?={@container_licensed?}
         />
         <AgentTab.agent_tab
           :if={@tab == :agent}

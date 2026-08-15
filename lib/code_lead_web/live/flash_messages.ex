@@ -26,6 +26,11 @@ defmodule CodeLeadWeb.FlashMessages do
         "a container image. Set one under Settings → Project → Repositories, or " <>
         "switch the task's execution back to Local."
 
+  def transition_error(:unlicensed_execution_env),
+    do:
+      "Container execution requires a commercial license. Switch this task's " <>
+        "execution back to Local, or set a LICENSE_KEY that grants it."
+
   def transition_error(other), do: "Action failed: #{inspect(other)}"
 
   @doc """

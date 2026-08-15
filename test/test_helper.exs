@@ -24,6 +24,12 @@ end
 
 File.rm_rf!(workspace_root)
 
+# The suite runs as a licensed (:owner) instance, so gated features —
+# container execution today — are exercised by the ordinary tests instead
+# of being refused everywhere. Tests that assert the gate itself install a
+# community grant in their own setup; see `CodeLead.LicenseHelpers`.
+CodeLead.LicenseHelpers.grant_owner!()
+
 # :docker tests need a real Docker daemon; run them with `mix test --only docker`.
 ExUnit.start(exclude: [:docker])
 Ecto.Adapters.SQL.Sandbox.mode(CodeLead.Repo, :manual)
