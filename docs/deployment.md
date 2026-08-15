@@ -26,7 +26,7 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 
 ## The image
 
-`ghcr.io/emischorr/code_lead:latest`, built from the repo's `Dockerfile`.
+`ghcr.io/emischorr/codelead:latest`, built from the repo's `Dockerfile`.
 
 | | |
 |---|---|

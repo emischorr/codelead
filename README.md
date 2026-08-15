@@ -84,7 +84,7 @@ Merging is plain local git — `git merge` and `git push` — never a forge acti
 
 ## Getting started
 
-You need Docker and about five minutes. CodeLead ships as a published image — `ghcr.io/emischorr/code_lead:latest`, multi-arch for amd64 and arm64 — plus a PostgreSQL database. A ready made compose stack lives in [`deployment/`](deployment/).
+You need Docker and about five minutes. CodeLead ships as a published image — `ghcr.io/emischorr/codelead:latest`, multi-arch for amd64 and arm64 — plus a PostgreSQL database. A ready made compose stack lives in [`deployment/`](deployment/).
 
 **1. Copy the `deployment/` folder** — `docker-compose.yml`, `.env.example`, and `init-app-db.sh` — into a directory on the host.
 
