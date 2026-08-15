@@ -169,13 +169,12 @@ defmodule CodeLead.Agents do
   ## Agents
 
   @doc """
-  Creates an agent. Pass `project_id` only for project-scoped agents.
+  Creates an agent. `project_id` binds it to one project; a blank value
+  keeps it org-wide (see `Agent.changeset/2`).
   """
   @spec create_agent(map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def create_agent(attrs) do
-    project_id = attrs[:project_id] || attrs["project_id"]
-
-    %Agent{project_id: project_id}
+    %Agent{}
     |> Agent.changeset(attrs)
     |> Repo.insert()
   end
@@ -194,11 +193,25 @@ defmodule CodeLead.Agents do
   def change_agent(%Agent{} = agent, attrs \\ %{}), do: Agent.changeset(agent, attrs)
 
   @doc """
-  Every org-scoped agent — the shared pool managed from Settings.
+  Every agent, org- and project-scoped alike — the pool managed from
+  Settings > Agents.
   """
-  @spec list_org_agents() :: [Agent.t()]
-  def list_org_agents do
-    Repo.all(from a in Agent, where: a.scope == :org, order_by: a.name)
+  @spec list_all_agents() :: [Agent.t()]
+  def list_all_agents do
+    Repo.all(from a in Agent, order_by: a.name)
+  end
+
+  @doc """
+  A project's own agents — bound to it specifically, not the shared org
+  pool. Shown on the project's settings page.
+  """
+  @spec list_project_agents(pos_integer()) :: [Agent.t()]
+  def list_project_agents(project_id) do
+    Repo.all(
+      from a in Agent,
+        where: a.scope == :project and a.project_id == ^project_id,
+        order_by: a.name
+    )
   end
 
   @doc """

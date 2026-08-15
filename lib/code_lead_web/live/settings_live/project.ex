@@ -214,6 +214,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           <ProjectSections.pr_template form={@pr_template_form} />
           <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
           <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
+          <ProjectSections.agents project_agents={@project_agents} />
           <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
         </div>
       </div>
@@ -321,7 +322,12 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         }
       end)
 
-    assign(socket, repositories: repositories, env_keys: env_keys, reviewer_sets: reviewer_sets)
+    assign(socket,
+      repositories: repositories,
+      env_keys: env_keys,
+      project_agents: Agents.list_project_agents(project_id),
+      reviewer_sets: reviewer_sets
+    )
   end
 
   defp assign_details_form(socket, params) do
