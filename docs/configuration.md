@@ -243,6 +243,56 @@ user (uid 1000) and points two variables there:
   folders. Without the override these would land inside the release
   directory.
 
+### What the agent can run inside the image
+
+An ACP session runs shell commands, so the runner carries a toolbox beyond
+what the release itself needs: `bash` (BusyBox has no `bash` applet, and the
+harness's shell tool invokes bash — without it *every* shell call the agent
+makes fails), the GNU builds of `coreutils`/`findutils`/`grep`/`sed`/
+`diffutils` (BusyBox applets share their names but reject flags agents reach
+for by habit — `grep -P`, `find -printf`, `sort -V`, `date -d`), plus `curl`,
+`jq`, `ripgrep` and `openssh-client`. `SHELL=/bin/bash` is set explicitly
+rather than left to a fallback.
+
+**No language toolchain ships in the image**, and that is the limit worth
+knowing before an agent tries to verify its own work. The release bundles ERTS
+under `/app`, but neither `mix` nor `elixir` is on `PATH`; `npm` stays behind
+in the harness stage (only `nodejs` is copied forward); nothing else — Python,
+Go, Rust, a JVM — is there at all. An agent working on an Elixir project
+therefore cannot run `mix test` in the stock image, however well the shell
+works.
+
+Extend the image with whatever the projects you point CodeLead at need to
+build and test themselves:
+
+```dockerfile
+FROM ghcr.io/emischorr/code_lead:latest
+USER root
+RUN apk add --no-cache elixir     # or nodejs npm / python3 / go / cargo …
+USER elixir
+```
+
+Then swap `image:` for a `build:` in
+[`deployment/docker-compose.yml`](../deployment/docker-compose.yml), or point
+`image:` at your own tag.
+
+Anything `apk` installs lands on `PATH` and needs nothing further. A toolchain
+that installs **elsewhere** (`/opt/...`, a version manager under `$HOME`) does
+need one more line, because Alpine's `/etc/profile` assigns `PATH` outright
+instead of extending it and the harness builds its shell snapshot from a login
+shell — so a bare `ENV PATH=` in your layer will not survive into the agent's
+commands. Drop a profile snippet next to the image's own:
+
+```dockerfile
+RUN printf 'export PATH="/opt/mytool/bin:$PATH"\n' > /etc/profile.d/mytool.sh
+```
+
+> A `PATH` entry in the **project env store** replaces the inherited one for
+> the harness (`Port.open`'s `env:` merges into the parent environment, so a
+> key that is present wins), which hides every tool above. The same caveat as
+> *Harness prerequisites*, one layer down: it does not help the agent find its
+> tools, it stops it.
+
 Migrations are not automatic *inside the image*: `/app/bin/server` is the
 default command, and `/app/bin/migrate` (which evals
 `CodeLead.Release.migrate/0`) has to be run separately. The compose stack in

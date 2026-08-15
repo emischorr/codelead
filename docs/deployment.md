@@ -306,5 +306,8 @@ Known gaps that change how you'd deploy this:
   probe but the TCP port.
 - **The container holds real credentials and real repository access.** Forge
   tokens, model provider keys, and clones of your repositories all live
-  inside it, and agents execute code there. It is not a service to put on a
+  inside it, and agents execute code there — with a real shell and the GNU
+  CLI tools, which is exactly what makes an agent able to run your linters
+  and tests (see *What the agent can run inside the image* in
+  [`configuration.md`](configuration.md)). It is not a service to put on a
   public address for convenience.

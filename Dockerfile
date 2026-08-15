@@ -93,7 +93,23 @@ ARG MIX_ENV
 # ca-certificates: Alpine ships no CA bundle, without it every outbound HTTPS
 #   call (LLM APIs, git over https) fails TLS verification.
 # nodejs: runs the ACP harness copied in below (npm stays in the harness stage).
-RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs
+#
+# The rest is the agent's own toolbox — an ACP session runs shell commands, and
+# on a bare Alpine it has none of this:
+# bash: BusyBox ships no `bash` applet, and the harness's shell tool invokes
+#   bash, so without it every shell call the agent makes fails.
+# coreutils/findutils/grep/sed/diffutils: the GNU builds. BusyBox applets carry
+#   the same names but reject flags agents reach for by habit (`grep -P`,
+#   `find -printf`, `sort -V`, `date -d`); a silently-different flag is worse
+#   than a missing binary.
+# curl/jq/ripgrep: near-universal in agent-authored commands.
+# openssh-client: git remotes over ssh.
+#
+# `bash --version` fails the build loudly if the package ever goes missing,
+# the same guard the harness stage puts on node.
+RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs \
+  bash coreutils findutils grep sed diffutils curl jq ripgrep openssh-client \
+  && bash --version
 
 ENV USER="elixir"
 
@@ -105,7 +121,7 @@ RUN \
   -g 1000 \
   -S "${USER}" \
   && adduser \
-  -s /bin/sh \
+  -s /bin/bash \
   -u 1000 \
   -G "${USER}" \
   -h "/home/${USER}" \
@@ -118,12 +134,24 @@ RUN \
 COPY --from=harness /opt/harness /opt/harness
 ENV PATH="/opt/harness/bin:${PATH}"
 
+# Alpine's /etc/profile assigns PATH outright rather than extending it, so a
+# *login* shell starts with none of the ENV above. That matters because the
+# agent harness builds its shell snapshot from a login shell: without this,
+# anything installed outside the profile's fixed list — the harness here, and
+# any toolchain an operator layers on in /opt or $HOME — is invisible to every
+# command the agent runs.
+RUN printf 'export PATH="/opt/harness/bin:$PATH"\n' > /etc/profile.d/codelead-path.sh
+
 # Mutable state, kept out of the release directory. Mount a volume here:
 # `home` is where the agent harness writes its own config and session state,
 # `workspace` holds base clones, task worktrees and task folders.
 RUN mkdir -p /data/home /data/workspace && chown -R "${USER}":"${USER}" /data
 ENV HOME=/data/home
 ENV WORKSPACE_ROOT=/data/workspace
+
+# The harness reads `$SHELL` to decide what to run agent commands under, and a
+# container inherits none. Naming it here beats letting it fall back.
+ENV SHELL=/bin/bash
 
 # run as user
 USER "${USER}"
