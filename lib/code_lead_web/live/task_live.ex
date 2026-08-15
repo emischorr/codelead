@@ -287,10 +287,13 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
-  # The target form is a bare `phx-change` form, so `repository_id` is
-  # simply absent while the target is `:folder`.
+  # The target form is a bare `phx-change` form, so `repository_id` and
+  # `execution_env` are simply absent while the target is `:folder`.
   def handle_event("set_target", params, socket) do
-    case Tasks.update_task(socket.assigns.task, Map.take(params, ["target", "repository_id"])) do
+    case Tasks.update_task(
+           socket.assigns.task,
+           Map.take(params, ["target", "repository_id", "execution_env"])
+         ) do
       {:ok, _task} ->
         {:noreply, load_task(socket)}
 

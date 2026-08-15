@@ -72,30 +72,61 @@ defmodule CodeLead.Runtime.StageEffects do
   difference is only *when* it is known to be safe.
   """
   @spec discard_context(Task.t()) :: :ok
-  def discard_context(%Task{worktree_path: nil, target: :repo}), do: :ok
+  def discard_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
-  def discard_context(%Task{target: :repo} = task) do
+  def discard_context(%Task{worktree_path: nil, target: :repo} = task) do
+    # No worktree was ever provisioned, but ephemeral resources (a
+    # container) may still exist under the task's identity.
+    context = rebuilt_context(%{task | worktree_path: CodeLead.Workspace.worktree_path(task.id)})
+    context.executor.teardown(context, keep: true)
+  end
+
+  def discard_context(%Task{} = task) do
+    context = rebuilt_context(task)
+    context.executor.teardown(context, keep: false)
+  end
+
+  @doc """
+  Releases the task's ephemeral execution resources — its container —
+  while keeping everything durable: worktree, branch, agent home. A
+  no-op under `LocalSubprocess`, whose contexts hold nothing ephemeral.
+  Two callers: cancel, and the finalize outcomes that keep the context.
+  """
+  @spec release_context(Task.t()) :: :ok
+  def release_context(%Task{target: :repo, repository_id: nil}), do: :ok
+
+  def release_context(%Task{} = task) do
+    context =
+      rebuilt_context(%{
+        task
+        | worktree_path: task.worktree_path || CodeLead.Workspace.worktree_path(task.id)
+      })
+
+    context.executor.teardown(context, keep: true)
+  end
+
+  # The reconstruction the Executor moduledoc warns about: no env, no
+  # exec_ref — executor-private state must resolve from the task id.
+  defp rebuilt_context(%Task{target: :repo} = task) do
     repository = Projects.get_repository!(task.repository_id)
 
-    context = %Context{
+    %Context{
       type: :worktree,
       path: task.worktree_path,
       task_id: task.id,
       base_clone_path: repository.base_clone_path,
-      branch_name: task.branch_name
+      branch_name: task.branch_name,
+      executor: Executor.for_task(task)
     }
-
-    Executor.impl().teardown(context, keep: false)
   end
 
-  def discard_context(%Task{target: :folder} = task) do
-    context = %Context{
+  defp rebuilt_context(%Task{target: :folder} = task) do
+    %Context{
       type: :folder,
       path: CodeLead.Workspace.task_folder(task.id),
-      task_id: task.id
+      task_id: task.id,
+      executor: Executor.for_task(task)
     }
-
-    Executor.impl().teardown(context, keep: false)
   end
 
   @doc """
@@ -128,7 +159,9 @@ defmodule CodeLead.Runtime.StageEffects do
   # Only after the finalize succeeded, and only in the modes that said
   # so: a `:pull_request` or merged branch lives on the remote, so the
   # worktree is redundant, while a folder artifact *is* the deliverable.
-  defp prune_context(%Task{}, :keep_context), do: :ok
+  # Keeping the context still releases the container — Done never leaves
+  # one running.
+  defp prune_context(%Task{} = task, :keep_context), do: release_context(task)
 
   defp prune_context(%Task{} = task, :prune_context) do
     discard_context(task)

@@ -61,15 +61,40 @@ config :code_lead, CodeLead.License, key: System.get_env("LICENSE_KEY")
 
 # Root directory for CodeLead-managed working state: base clones,
 # per-task git worktrees, and task folders.
-default_workspace =
+#
+# The test env deliberately ignores WORKSPACE_ROOT: agent subprocesses
+# inherit the server's environment, so `mix test` inside a task worktree
+# would otherwise resolve — and wipe (test_helper.exs) — the instance's
+# real workspace. TEST_WORKSPACE_ROOT is the explicit opt-out for CI and
+# must point inside the checkout (enforced by test_helper.exs).
+workspace_root =
   case config_env() do
-    :test -> Path.expand("tmp/test_workspace")
-    _dev_or_prod -> Path.expand("workspace")
+    :test -> System.get_env("TEST_WORKSPACE_ROOT", Path.expand("tmp/test_workspace"))
+    _dev_or_prod -> System.get_env("WORKSPACE_ROOT", Path.expand("workspace"))
   end
 
 config :code_lead,
-  workspace_root: System.get_env("WORKSPACE_ROOT", default_workspace),
+  workspace_root: workspace_root,
   max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "3"))
+
+# Container executor (ADR-0003/0004/0005). How sibling task containers see
+# the workspace: a named volume when WORKSPACE_VOLUME is set (the deployed
+# stack), a HOST_DATA_ROOT bind as the escape hatch, else a bind of
+# workspace_root at the identical path (dev, where the BEAM runs on the
+# host). The staged harness (a runtime directory per libc flavor) is built
+# lazily in-docker on the first container run needing the flavor; a
+# HARNESS_SOURCE directory of pre-staged flavor dirs is the air-gapped
+# escape hatch, copied at boot. HARNESS_VERSION's default must stay in
+# sync with the Dockerfile's ARG CLAUDE_ACP_VERSION.
+config :code_lead,
+  container_user: System.get_env("CONTAINER_USER"),
+  container_cpus: System.get_env("CONTAINER_CPUS"),
+  container_memory_mb: System.get_env("CONTAINER_MEMORY_MB"),
+  workspace_volume: System.get_env("WORKSPACE_VOLUME"),
+  workspace_volume_mount: System.get_env("WORKSPACE_VOLUME_MOUNT", "/data"),
+  host_data_root: System.get_env("HOST_DATA_ROOT"),
+  harness_version: System.get_env("HARNESS_VERSION", "0.66.0"),
+  harness_source: System.get_env("HARNESS_SOURCE")
 
 if config_env() == :prod do
   database_url =

@@ -241,8 +241,17 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             required
           />
           <.input field={@repository_form[:default_branch]} label="Default branch" required />
+          <.input
+            field={@repository_form[:image_ref]}
+            label="Container image"
+            placeholder="ghcr.io/acme/dev-env:latest"
+            spellcheck="false"
+          />
           <p class="mb-4 text-[12px] leading-relaxed text-text3">
-            Private HTTPS repositories need a <code class="font-mono">GITHUB_TOKEN</code>
+            Setting an image declares this repository's container environment —
+            tasks can then choose Container execution (Local stays the
+            default). Leave blank for local-only. Private HTTPS repositories
+            need a <code class="font-mono">GITHUB_TOKEN</code>
             or <code class="font-mono">GITLAB_TOKEN</code>
             in the environment section below. SSH URLs use this machine's key.
           </p>

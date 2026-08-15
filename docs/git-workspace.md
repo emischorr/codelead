@@ -1,4 +1,4 @@
-# Git plumbing & workspace (last updated: 2026-08-12)
+# Git plumbing & workspace (last updated: 2026-08-15)
 
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
@@ -12,6 +12,13 @@ tasks use a task folder and skip the branch/push flow.
   tasks/<id>/               task folder per :folder task
   surveys/task-<id>/        disposable read-only planning survey checkout
   merges/task-<id>/         disposable worktree a Done merge is staged in
+  agent-homes/task-<id>/    harness HOME for container runs — session state
+                            that must survive container recreation
+  harness/<version>/<flavor>/ staged harness runtime per libc flavor (musl/
+                            glibc, matched to the task image by probe): a sh
+                            wrapper, the bun runtime, and the adapter's
+                            package tree — assembled in-docker on the first
+                            container run (ADR-0005/0006/0007)
 ```
 
 ## Flow (`CodeLead.Git` + `CodeLead.Executor.LocalSubprocess`)
@@ -35,9 +42,15 @@ tasks use a task folder and skip the branch/push flow.
   volume standing, so `worktrees/task-<id>` may well be a leftover from
   an earlier generation, on an unrelated repository; reusing one
   unchecked runs the agent in the wrong repo and reports nothing. `mix
-  code_lead.workspace.clean` (wired into the `ecto.reset` alias) drops
-  `worktrees/`, `tasks/`, `surveys/` and `merges/` and prunes the base
-  clones, so a reset stops leaving orphans behind.
+  code_lead.workspace.clean` (wired into the `ecto.reset` alias, ahead
+  of `ecto.drop` so its guard can still query the database) drops
+  `worktrees/`, `tasks/`, `surveys/`, `merges/` and `agent-homes/`,
+  prunes the base clones, and best-effort removes labeled task
+  containers, so a reset stops leaving orphans behind. It refuses to
+  run while any task has a live or pending run (`queued`, `dispatched`,
+  `executing` in the database) — cleaning would pull worktrees and
+  containers out from under running agents; `--force` overrides, and a
+  refusal aborts the whole `ecto.reset` before the drop.
 - A task whose recorded branch survives but whose worktree directory is
   gone is re-attached to that branch (`Git.attach_worktree/3`) rather
   than branched afresh — its commits are still wanted. A branch bearing
@@ -171,11 +184,36 @@ because every one of those sentences names the branch being written.
 existing clone, so changing a project's repository URL retargets the
 base clone instead of being silently ignored.
 
-Executor selection: `CodeLead.Executor.impl/0` reads `:executor` app
-config (defaults to `LocalSubprocess`); `DockerContainer` is the
-planned later implementation behind the same behaviour.
-`Executor.available?/1` is the preflight face of the behaviour — see
-`docs/agent-drivers.md`.
+Executor selection: `CodeLead.Executor.for_task/1` resolves per task —
+`:repo` targets with `execution_env: :container` get `DockerContainer`,
+everything else (including every `:folder` target) the configured
+default (`impl/0`, `LocalSubprocess`). The resolved module travels on
+`Context.executor`, so spawn and teardown always use the executor the
+context was built for; hand-built contexts (planning surveys) default
+to local. `Executor.available?/1` is the preflight face of the
+behaviour — see `docs/agent-drivers.md`.
+
+`DockerContainer` ([ADR-0003](adr/0003-container-execution-model.md),
+[ADR-0004](adr/0004-container-executor-iteration-two.md)) delegates all
+git/worktree provisioning to `LocalSubprocess` — git stays host-side —
+and adds the sibling container: created from the repository's declared
+`image_ref` (`env_kind: :image`; no fallback image exists), named
+`codelead-task-<id>`, labeled `codelead.*`, idling on `sleep` so any
+number of `docker exec -i` bridges can attach. The workspace reaches it
+as a named volume (`WORKSPACE_VOLUME`), a `HOST_DATA_ROOT` bind, or —
+in dev, where the BEAM runs on the host — a bind of the workspace root
+at the identical path; all three keep host and container paths
+coincident. Containers are cattle: `spawn` re-ensures the container, so
+external removal costs one recreate; the harness `HOME` lives in
+`agent-homes/task-<id>` on the volume so sessions survive.
+`Context.exec_ref` (the container name) is not durable —
+`StageEffects.discard_context/1` rebuilds a `%Context{}` from DB rows
+before teardown, so the executor recovers identity from the task id
+alone. `teardown(keep: true)` means "release ephemeral, keep durable":
+cancel and Done remove the container while the worktree and agent home
+stay; send-back-to-planning removes all three. The repository's
+`devcontainer_path`/`dockerfile` fields and `agents.tool_features`
+remain dormant seams.
 
 Tests build throwaway `file://` origins via `CodeLead.GitHelpers`
 inside the test workspace root — no network, no real harness needed.

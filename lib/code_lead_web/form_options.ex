@@ -130,6 +130,9 @@ defmodule CodeLeadWeb.FormOptions do
   @spec harnesses() :: [{String.t(), String.t()}]
   def harnesses, do: [{"Claude Code", "claude_code"}, {"Codex", "codex"}]
 
+  @spec execution_envs() :: [{String.t(), String.t()}]
+  def execution_envs, do: [{"Local", "local"}, {"Container", "container"}]
+
   @spec locales() :: [{String.t(), String.t()}]
   def locales, do: [{"English", "en"}]
 

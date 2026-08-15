@@ -14,12 +14,12 @@ Map of the repo's documentation. Design notes describe how things work
 
 ## Operations
 
-- [`deployment.md`](deployment.md) — running it on a server: the plain-HTTP posture and why TLS is the operator's, the published image, the `deployment/` compose stack and what it omits, `PHX_HOST`/`SCHEME`/`URL_PORT` recipes for direct and proxied access, reverse proxy requirements, upgrades, backups, and the gaps to know about before exposing it.
+- [`deployment.md`](deployment.md) — running it on a server: the plain-HTTP posture and why TLS is the operator's, the published image, the `deployment/` compose stack (including the docker socket mount for container execution and the pinned data-volume name with its upgrade note), `PHX_HOST`/`SCHEME`/`URL_PORT` recipes for direct and proxied access, reverse proxy requirements, upgrades, backups, and the gaps to know about before exposing it.
 
 ## Design notes
 
 - [`architecture.md`](architecture.md) — module map: contexts, behaviours, runtime processes.
-- [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout, git credentials (and how to read a forge's refusal), per-project approve defaults and PR template, harness prerequisites, the Docker image and what an agent can actually run inside it (shell and CLI tools yes, language toolchains no — extend the image).
+- [`configuration.md`](configuration.md) — environment variables, application config keys, workspace layout, git credentials (and how to read a forge's refusal), per-project approve defaults and PR template, harness prerequisites, the Docker image and what an agent can actually run inside it (shell and CLI tools yes, language toolchains no — declare a per-repo container image, or extend the image for local runs), container execution in dev.
 - [`task-workflow.md`](task-workflow.md) — the state machine as implemented in `CodeLead.Tasks`: the `CodeLead.Workflow` definition it runs on (stage types, edge policies), transition table, stage effects, finalize modes and their cleanup rule, the scheduler's admission gates and scheduled runs, deviations, IEx usage.
 - [`git-workspace.md`](git-workspace.md) — workspace layout, base clones, worktrees/branches (including when an existing directory may be reused), diff/commit/push, merging a finished branch into the default branch on Done, forge tokens, executor provisioning, `mix code_lead.workspace.clean`.
 - [`agent-drivers.md`](agent-drivers.md) — the AgentDriver behaviour, normalized event contract, LlmApi/Acp implementations, preflight, permission escalations and agent questions (ACP elicitation).
@@ -36,3 +36,8 @@ Map of the repo's documentation. Design notes describe how things work
 - [`adr/README.md`](adr/README.md) — ADR conventions.
 - [`adr/0001-acp-transport.md`](adr/0001-acp-transport.md) — hand-rolled JSON-RPC subset over Erlang Ports instead of ACPex 0.1.x.
 - [`adr/0002-persist-agent-transcript.md`](adr/0002-persist-agent-transcript.md) — `agent_events` as its own table, separate from the `task_steps` audit trail.
+- [`adr/0003-container-execution-model.md`](adr/0003-container-execution-model.md) — the container executor's locked seams: the harness runs inside the execution environment, the named-volume rule, toolchain ownership (repo owns the base runtime, agents add tools), and the dormant schema fields.
+- [`adr/0004-container-executor-iteration-two.md`](adr/0004-container-executor-iteration-two.md) — the built container executor: no default/fallback image, containers as cattle (volume-durable worktree + agent home), the bun-compiled musl-static harness staged at boot, env at exec time, visible refusal over invisible holds, the container-user strategy.
+- [`adr/0005-self-building-harness.md`](adr/0005-self-building-harness.md) — the harness stages itself: pinned version default, lazy serialized in-docker build on the first container run when no baked binary exists; rejected boot-eager builds and downloading prebuilt binaries.
+- [`adr/0006-harness-libc-flavors.md`](adr/0006-harness-libc-flavors.md) — one harness binary per libc flavor, matched by probing the task image at spawn: bun-compiled binaries are dynamically linked and a same-platform `--target` embeds the building bun itself, so the build image selects the flavor; corrects 0004's musl-static assumption.
+- [`adr/0007-harness-staged-runtime.md`](adr/0007-harness-staged-runtime.md) — the staged harness is a runtime directory (flavor-matched bun + real package tree + sh wrapper), not a compiled binary: the SDK's dynamic module/CLI resolution cannot work inside bun's compile-time virtual filesystem; the image bakes no container harness anymore.

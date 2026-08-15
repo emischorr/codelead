@@ -39,7 +39,7 @@ mix test test/path/file_test.exs:42     # single test by line
 
 mix precommit                 # compile --warnings-as-errors + deps.unlock --unused + format + test
 mix credo                     # not part of precommit — run separately
-mix ecto.reset                # drop + wipe per-task workspace state + create + migrate + seed
+mix ecto.reset                # wipe per-task workspace state + drop + create + migrate + seed; refuses while runs are live (mix code_lead.workspace.clean --force to override)
 ```
 
 `mix precommit` runs in `MIX_ENV=test` (set via `preferred_envs`). Run it when you're done with a change and fix anything it reports.
@@ -61,7 +61,7 @@ That table is **data, not code**: the machine dispatches on a stage's `stage_typ
 **Extension points are behaviours, each with exactly one MVP implementation:**
 
 - `CodeLead.AgentDriver` — `Acp` (drives a coding harness like Claude Code/Codex over the Agent Client Protocol: JSON-RPC 2.0 over stdio, bridged via Erlang Ports) and `LlmApi` (a single completion call, used for reviews and short content). Later: nothing new; the driver is independent of the executor.
-- `CodeLead.Executor` — `LocalSubprocess` (MVP) and `DockerContainer` (later). Provisions the worktree or task folder, spawns processes, tears down.
+- `CodeLead.Executor` — `LocalSubprocess` (default) and `DockerContainer` (per-task opt-in: repo-target tasks with `execution_env: :container` run in a sibling container from the repository's declared `image_ref`; no fallback image, ADR-0004). Provisions the worktree or task folder, spawns processes, tears down. `spawn/3` runs the agent *inside* the provisioned context (Model A, ADR-0003).
 - `CodeLead.Scheduler` — `PassThrough` (MVP: admit unless over budget, dispatch immediately) and `Windowed` (later: hold for subscription token-window resets). Bound to the task's *provider connection*, not global.
 
 Reviewers are deliberately **not** a separate abstraction — they are ordinary `agents` rows with `:review` in `roles`, run through the same `AgentDriver` in a read-only posture, fanned out concurrently on Review entry. Their verdicts are advisory and gate nothing.

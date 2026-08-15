@@ -249,7 +249,9 @@ defmodule CodeLead.Reviews do
   end
 
   # ACP reviewers get the execution context read-only; llm_api
-  # reviewers need no filesystem at all.
+  # reviewers need no filesystem at all. The executor follows the task,
+  # so a reviewer of a container task execs into the same task container
+  # (whose spawn re-ensures it if it was removed in between).
   defp review_context(%Task{} = task, %Agent{driver: :acp}) do
     {type, path} =
       case task.worktree_path do
@@ -262,7 +264,8 @@ defmodule CodeLead.Reviews do
       path: path,
       task_id: task.id,
       branch_name: task.branch_name,
-      read_only: true
+      read_only: true,
+      executor: CodeLead.Executor.for_task(task)
     }
   end
 

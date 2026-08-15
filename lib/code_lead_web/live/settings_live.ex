@@ -55,7 +55,7 @@ defmodule CodeLeadWeb.SettingsLive do
           </.link>
 
           <p class="mb-5 text-[13px] text-text2">
-            Everything the setup wizard created, plus the people who can sign in.
+            These settings are on instance level - valid for all projects
           </p>
 
           <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">

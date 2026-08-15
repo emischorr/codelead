@@ -2,7 +2,10 @@ defmodule CodeLead.Agents.Agent do
   @moduledoc """
   A reusable worker persona: role(s), work type, driver, provider +
   model, and system prompt. Lives at org level (shared) or project
-  level. `memory` is a schema seam, unused in MVP logic.
+  level. `memory` and `tool_features` are schema seams, unused in MVP
+  logic — `tool_features` names additive tools layered onto the
+  repository's execution environment; an agent never defines a base
+  runtime or image (ADR-0003).
 
   A role is the *slot* the agent fills — `:execute`, `:review`, or
   `:plan` — and is independent of the driver, which decides what the
@@ -33,6 +36,7 @@ defmodule CodeLead.Agents.Agent do
     field :model_variant, :string
     field :system_prompt, :string
     field :memory, :map, default: %{}
+    field :tool_features, {:array, :string}, default: []
 
     belongs_to :provider, Provider
 
@@ -58,7 +62,8 @@ defmodule CodeLead.Agents.Agent do
       :provider_id,
       :model_variant,
       :system_prompt,
-      :memory
+      :memory,
+      :tool_features
     ])
     |> validate_required([:name, :scope, :roles, :work_type, :driver, :provider_id])
     |> validate_length(:roles, min: 1)

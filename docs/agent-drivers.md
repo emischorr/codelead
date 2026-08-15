@@ -1,4 +1,4 @@
-# Agent drivers (last updated: 2026-08-12, agent questions)
+# Agent drivers (last updated: 2026-08-15, preflight/2)
 
 `CodeLead.AgentDriver` is the behaviour every way of running an agent
 implements. Callbacks: `start_run(task, agent, context, prompt)`,
@@ -108,6 +108,13 @@ output — needs its own payload budget) and `agent_thought_chunk`
     resolved against the server process's own PATH; provider credentials
     are injected as env vars (`Agents.provider_env/1`). The Docker image
     bundles the Claude harness — see `docs/configuration.md`.
+  - Local subprocesses (harness ports and `terminal/*` commands alike)
+    inherit the server's environment, so `CodeLead.Executor.EnvScrub`
+    strips CodeLead-internal vars (`WORKSPACE_ROOT`, `DATABASE_URL`,
+    secrets, container/harness config) before spawning; explicit
+    project/provider env always passes through and wins over the scrub
+    on a name collision. Container execution is unaffected — sibling
+    containers only ever get explicit `-e` env.
   - Tested against `test/support/fake_acp_agent.exs`, a scripted
     stdio agent with happy/tool_updates/writes_file/permission/
     elicitation/terminal/crash/resume scenarios. The `elicitation`
@@ -120,14 +127,25 @@ output — needs its own payload budget) and `agent_thought_chunk`
 
 ## Preflight
 
-`preflight(agent)` answers "could this agent be launched at all?"
-`TaskRunner` calls it *before* `Executor.provision/1`, so a harness that
-isn't installed fails the run without first cloning a repository.
+`preflight(agent, executor)` answers "could this agent be launched at
+all?" The caller resolves and passes the executor module — `TaskRunner`
+passes `Executor.for_task(task)`, `AdvisoryRun` the context's own
+executor (surveys of a container task still run locally) — and calls it
+*before* `provision/1`, so a harness that isn't installed fails the run
+without first cloning a repository.
 
-- `Acp` resolves the `:harnesses` argv and asks the executor whether it
-  can run it (`Executor.available?/1`, `System.find_executable/1` under
-  `LocalSubprocess`). Returns `{:error, {:unknown_harness, harness}}` or
-  `{:error, {:executable_not_found, binary}}`.
+- `Acp` resolves the `:harnesses` argv and asks that executor whether
+  it can run it (`available?/1`). "Available" means runnable *inside
+  the execution environment* ([ADR-0003](adr/0003-container-execution-model.md)):
+  `System.find_executable/1` under `LocalSubprocess`; under
+  `DockerContainer`, the docker CLI resolves and the staged harness
+  binary exists (returning `{:error, {:harness_not_staged, path}}` or
+  `{:error, {:container_command_unsupported, cmd}}` — only the Claude
+  Code harness runs in containers). Local errors stay
+  `{:error, {:unknown_harness, harness}}` and
+  `{:error, {:executable_not_found, binary}}`. The driver's host-side
+  `fs/*` and `terminal/*` handling stays valid only because host and
+  context see the workspace at the same paths.
 - `LlmApi` returns `:ok` — nothing is launched; a bad credential only
   shows up in the provider's response.
 

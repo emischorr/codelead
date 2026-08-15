@@ -57,11 +57,17 @@ defmodule CodeLead.AdvisoryRun do
     driver = AgentDriver.impl(agent)
     deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout, @default_timeout)
 
-    with :ok <- driver.preflight(agent),
+    with :ok <- driver.preflight(agent, context_executor(context)),
          {:ok, handle} <- driver.start_run(task, agent, context, prompt) do
       await(handle, driver, task.id, deadline, "")
     end
   end
+
+  # A nil context (llm_api) launches nothing; a built one names its own
+  # executor — the caller decided (reviewers follow the task, surveys
+  # stay local).
+  defp context_executor(nil), do: CodeLead.Executor.impl()
+  defp context_executor(%Context{executor: executor}), do: executor
 
   # Streamed chunks are accumulated because a driver may report its
   # final text only as chunks, leaving `result.content` nil.

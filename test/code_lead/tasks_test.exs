@@ -20,6 +20,7 @@ defmodule CodeLead.TasksTest do
       assert task.repository_id == repository.id
       assert task.state == :planning
       assert task.run_state == :idle
+      assert task.execution_env == :local
     end
 
     test "content defaults to folder target" do
@@ -46,8 +47,15 @@ defmodule CodeLead.TasksTest do
       project = project_fixture()
       task = task_fixture(project.id, %{work_type: :code})
 
-      assert {:ok, task} = Tasks.update_task(task, %{work_type: :content, target: :folder})
+      assert {:ok, task} =
+               Tasks.update_task(task, %{
+                 work_type: :content,
+                 target: :folder,
+                 execution_env: :container
+               })
+
       assert task.work_type == :content
+      assert task.execution_env == :container
     end
 
     test "a new work type drops an ineligible executor and re-prefills reviewers" do
@@ -106,10 +114,16 @@ defmodule CodeLead.TasksTest do
       %{task: task} = runnable_task_fixture()
       {:ok, task} = Tasks.move_to_running(task)
 
-      {:ok, updated} = Tasks.update_task(task, %{work_type: :content, title: "New title"})
+      {:ok, updated} =
+        Tasks.update_task(task, %{
+          work_type: :content,
+          execution_env: :container,
+          title: "New title"
+        })
 
       assert updated.title == "New title"
       assert updated.work_type == :code
+      assert updated.execution_env == :local
     end
 
     test "set_executor validates eligibility" do
@@ -250,6 +264,40 @@ defmodule CodeLead.TasksTest do
       assert [step] = Tasks.steps(task.id)
       assert step.kind == :transition
       assert step.executor_type == :human
+    end
+
+    test "a container task needs a declared repository image" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      executor = agent_fixture(%{roles: [:execute], work_type: :code})
+
+      task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id,
+          agent_id: executor.id,
+          execution_env: :container
+        })
+
+      assert Tasks.startable(task, executor) == {:error, :missing_execution_env}
+      assert {:error, :missing_execution_env} = Tasks.move_to_running(task)
+
+      {:ok, _} =
+        CodeLead.Projects.update_repository(repository, %{
+          env_kind: :image,
+          image_ref: "ghcr.io/acme/dev:1"
+        })
+
+      assert Tasks.startable(task, executor) == :ok
+      assert {:ok, _task} = Tasks.move_to_running(task)
+    end
+
+    test "a local task is unaffected by an undeclared environment" do
+      %{task: task, executor: executor} = runnable_task_fixture()
+
+      assert task.execution_env == :local
+      assert Tasks.startable(task, executor) == :ok
     end
   end
 

@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-14)
+# Configuration (last updated: 2026-08-16)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -9,7 +9,8 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | Variable | Default | Purpose |
 |---|---|---|
 | `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and the project env store. Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
-| `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod), `<repo>/tmp/test_workspace` (test) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. |
+| `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
+| `TEST_WORKSPACE_ROOT` | `<repo>/tmp/test_workspace` | Test-env-only workspace root override (for CI). Must resolve to a path inside the checkout — `test_helper.exs` refuses to wipe anything outside it. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
 | `LICENSE_KEY` | — | Signed license key for the instance. Optional everywhere including prod — absent means the community tier, which today grants everything. Verified offline at boot; anything unusable (bad signature, expired, malformed) logs a warning and falls back to community rather than failing the boot. See [`licensing.md`](licensing.md). |
 | `DATABASE_URL` | **required in prod** | `ecto://USER:PASS@HOST/DATABASE`. |
@@ -22,6 +23,14 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `POOL_SIZE` | `10` | Database connection pool size. |
 | `ECTO_IPV6` | — | `true`/`1` to add `:inet6` to the database socket options. |
 | `DNS_CLUSTER_QUERY` | — | DNS query for node clustering; unused in a single-node deployment. |
+| `WORKSPACE_VOLUME` | — | Name of the docker volume holding `/data`, **as the host daemon knows it** (`codelead-data` in the shipped stack). When set, sibling task containers mount the workspace by this name. Unset (dev): the workspace root is bind-mounted at the identical path instead. |
+| `WORKSPACE_VOLUME_MOUNT` | `/data` | Where the volume (or `HOST_DATA_ROOT` bind) is mounted inside sibling containers. |
+| `HOST_DATA_ROOT` | — | Escape hatch (ADR-0003) for stacks whose `/data` is a bind mount rather than a named volume: the *host* path of that directory, passed as the bind source for sibling containers. |
+| `CONTAINER_USER` | `1000:1000` in the image, unset in dev | `uid:gid` sibling task containers run as (`docker create --user`), matching the owner of the workspace volume. Unset omits the flag (image default user). |
+| `CONTAINER_CPUS` | — | `--cpus` cap per task container (e.g. `2`). |
+| `CONTAINER_MEMORY_MB` | — | `--memory` cap per task container, in MB. |
+| `HARNESS_VERSION` | `0.66.0`, pinned in `config/runtime.exs` in sync with the image's `CLAUDE_ACP_VERSION` build arg | Version directory the compiled harness binary is staged under (`<WORKSPACE_ROOT>/harness/<version>/`). |
+| `HARNESS_SOURCE` | — | Air-gapped escape hatch: a directory of pre-staged harness runtime dirs, one per libc flavor (`<flavor>/` with `claude-agent-acp`, `bun`, `node_modules/`), copied at boot. Normally unset — the harness runtime is staged lazily in-docker on the first container run needing the flavor (ADR-0005/0007). |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
 `config/prod.exs` — no redirect, no HSTS — because TLS termination belongs to
@@ -63,6 +72,10 @@ template is not.
 - `:git_access_check` — `{module, function}` the first-run wizard calls
   to verify a forge token, default `{CodeLead.Git, :check_access}`. Test
   points it at `CodeLead.GitHelpers` so the suite stays off the network.
+- `:docker_cli` — argv prefix for every docker invocation the container
+  executor makes, default `["docker"]`. Tests swap it for
+  `test/support/fake_docker.sh` the same way `:harnesses` swaps in the
+  fake ACP agent. The CLI honours `DOCKER_HOST` as usual.
 
 ## Git credentials
 
@@ -254,6 +267,18 @@ for by habit — `grep -P`, `find -printf`, `sort -V`, `date -d`), plus `curl`,
 `jq`, `ripgrep` and `openssh-client`. `SHELL=/bin/bash` is set explicitly
 rather than left to a fallback.
 
+**The agent does not see CodeLead's own configuration.** Local subprocesses
+(and ACP terminal commands) inherit the app's environment, so
+`CodeLead.Executor.EnvScrub` strips the instance-internal variables —
+`WORKSPACE_ROOT`, `DATABASE_URL`, `SECRET_KEY_BASE`, `ENCRYPTION_KEY` and
+the rest of the names read in `config/runtime.exs` — before spawning.
+An inherited `WORKSPACE_ROOT` once let an agent's `mix test` (run inside a
+task worktree on CodeLead's own repo) resolve the instance's workspace root
+and wipe it. Operator-exported vars outside that denylist still pass
+through, and a project env store entry always wins over the scrub, even
+under an internal name — a `DATABASE_URL` meant for the *target* app
+reaches the agent untouched.
+
 **No language toolchain ships in the image**, and that is the limit worth
 knowing before an agent tries to verify its own work. The release bundles ERTS
 under `/app`, but neither `mix` nor `elixir` is on `PATH`; `npm` stays behind
@@ -292,6 +317,44 @@ RUN printf 'export PATH="/opt/mytool/bin:$PATH"\n' > /etc/profile.d/mytool.sh
 > key that is present wins), which hides every tool above. The same caveat as
 > *Harness prerequisites*, one layer down: it does not help the agent find its
 > tools, it stops it.
+
+Extending the image is the workaround for **local** execution's single
+shared environment. The per-repository fix is live: declare a container
+image on the repository (Settings → Project → Repositories, or
+`repositories.env_kind: :image` + `image_ref`) and switch the task's
+Execution to Container — the agent then runs inside that image, with
+the project's exact toolchain, over the docker socket
+([ADR-0003](adr/0003-container-execution-model.md),
+[ADR-0004](adr/0004-container-executor-iteration-two.md)). There is
+deliberately no fallback image: an undeclared environment blocks the
+start instead of running somewhere nobody chose. The
+`devcontainer_path`/`dockerfile` fields and `agents.tool_features`
+remain dormant seams. The declared image must provide `sleep` (the idle
+entrypoint) and, practically, a shell and git — beyond that, any musl
+(Alpine) or glibc (Debian bookworm or newer) base works: the image's
+libc is probed at run start and the matching harness flavor is used
+(ADR-0006). The harness ships its own runtime — a staged directory on
+the workspace volume holding bun plus the adapter's package tree
+(ADR-0007), assembled in-docker on first use — so user images need no
+node, nothing harness-related.
+
+### Container execution in dev
+
+The BEAM runs on the host in dev, so sibling containers bind-mount the
+workspace at its real path — Docker Desktop's file sharing must cover
+it. Nothing else to set up: declare a container image on a repository
+(the field in the repository modal — a `container:` badge confirms it),
+set a task's Execution to Container, and Start. The **first** container
+run per libc family stages the matching harness runtime in a one-shot
+bun container (ADR-0005/0007) — a few minutes, logged as `staging
+container harness …`, while the task sits dispatched; it needs
+docker-side network access to the npm registry, and a failed staging
+lands as a `run_failed` attention with the remedy. Every later run
+starts instantly, and `docker ps` shows `codelead-task-<id>` while one
+runs.
+Air-gapped or picky setups can bypass the build by pointing
+`HARNESS_SOURCE` at a pre-built binary. `mix test --only docker` runs
+the real-daemon integration test.
 
 Migrations are not automatic *inside the image*: `/app/bin/server` is the
 default command, and `/app/bin/migrate` (which evals

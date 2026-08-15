@@ -54,15 +54,15 @@ defmodule CodeLead.AgentDriver.Acp do
   alias CodeLead.Acp.Elicitation
   alias CodeLead.AgentDriver
   alias CodeLead.Agents
-  alias CodeLead.Executor
   alias CodeLead.Executor.Context
+  alias CodeLead.Executor.EnvScrub
 
   ## AgentDriver callbacks
 
   @impl CodeLead.AgentDriver
-  def preflight(agent) do
+  def preflight(agent, executor) do
     with {:ok, command} <- harness_command(agent) do
-      Executor.impl().available?(command)
+      executor.available?(command)
     end
   end
 
@@ -577,7 +577,7 @@ defmodule CodeLead.AgentDriver.Acp do
         {output, exit_status} =
           System.cmd(resolved, args,
             cd: cwd,
-            env: env,
+            env: EnvScrub.cmd_env(env),
             stderr_to_stdout: true
           )
 
@@ -613,7 +613,7 @@ defmodule CodeLead.AgentDriver.Acp do
 
     Connection.start_link(
       owner: self(),
-      port_opener: fn -> Executor.impl().spawn(context, command) end
+      port_opener: fn -> context.executor.spawn(context, command) end
     )
   end
 

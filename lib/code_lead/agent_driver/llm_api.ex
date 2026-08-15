@@ -18,7 +18,7 @@ defmodule CodeLead.AgentDriver.LlmApi do
   # Nothing to launch — the provider is reached over HTTP, and a bad
   # credential only shows up in the response.
   @impl CodeLead.AgentDriver
-  def preflight(%Agent{}), do: :ok
+  def preflight(%Agent{}, _executor), do: :ok
 
   @impl CodeLead.AgentDriver
   def start_run(_task, %Agent{} = agent, _context, prompt) do

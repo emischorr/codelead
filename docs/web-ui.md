@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-14)
+# Web UI (last updated: 2026-08-15)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -361,15 +361,24 @@ above the bar instead of underneath it.
   executor/reviewer selection (planning) or verdict
   list, the target card, per-run cost/token/duration rows
   (`Costs.task_runs/1`, with the token split on hover).
-  The **execution shape** — work type, target, repository — is editable
+  The **execution shape** — work type, target, repository, execution
+  environment — is editable
   only in Planning, and is split across two surfaces: work type is a
   select in `#task-edit-form` (it stays a chip in the read view), while
-  target and repository live in `#target-card` on the rail between
+  target, repository and the Local/Container execution select live in
+  `#target-card` on the rail between
   Executor and Cost. `#target-form` is a bare `phx-change` form like
   `#executor-form`, so `set_target` saves on every change with no Save
-  button; the repository select only appears for a `:repo` target, and
+  button; the repository and execution selects only appear for a
+  `:repo` target (a folder task is structurally local), and
   switching to `:folder` leaves `repository_id` alone because the
-  `:commit_to_path` finalize mode still uses it. Outside Planning the
+  `:commit_to_path` finalize mode still uses it. A Container task whose
+  repository declares no image is not startable — the Start button's
+  tooltip carries the `:missing_execution_env` copy, and the repository
+  modal in project settings is where the image is declared — a single
+  image-reference field (`env_kind` is derived from it: set = container
+  environment declared, cleared = local-only), with a
+  `container: <ref>` badge in the repo list. Outside Planning the
   card turns into read-only rows plus the branch name. The same card
   carries the **On approve** selector (`#finalize-form`, another bare
   `phx-change` form) until the task is Done: its first option is

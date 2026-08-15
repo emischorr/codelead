@@ -176,6 +176,9 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
             <.badge variant={if repository.base_clone_path, do: :ok, else: :neutral}>
               {if repository.base_clone_path, do: "Cloned", else: "Not cloned yet"}
             </.badge>
+            <.badge :if={repository.env_kind == :image} variant={:neutral}>
+              container: {repository.image_ref}
+            </.badge>
           </:badges>
           <:actions>
             <.button patch={~p"/settings/projects/#{@project_id}/repositories/#{repository.id}/edit"}>

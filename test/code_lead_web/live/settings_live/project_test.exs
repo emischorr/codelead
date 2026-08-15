@@ -173,6 +173,53 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
       assert Projects.get_repository!(repository.id).default_branch == "develop"
     end
 
+    test "declaring an image derives the container environment", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}/repositories/new")
+
+      view
+      |> form("#repository-form",
+        repository: %{
+          name: "my-app",
+          git_url: "git@github.com:me/my-app.git",
+          default_branch: "main",
+          image_ref: "ghcr.io/acme/dev:1"
+        }
+      )
+      |> render_submit()
+
+      assert [repository] = Projects.list_repositories(project.id)
+      assert repository.env_kind == :image
+      assert repository.image_ref == "ghcr.io/acme/dev:1"
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+      assert render(element(view, "#repository-row-#{repository.id}")) =~ "container: ghcr.io"
+
+      # Clearing the image derives back to a local-only default.
+      {:ok, view, _html} =
+        live(conn, ~p"/settings/projects/#{project.id}/repositories/#{repository.id}/edit")
+
+      view
+      |> form("#repository-form",
+        repository: %{
+          name: repository.name,
+          git_url: repository.git_url,
+          default_branch: repository.default_branch,
+          image_ref: ""
+        }
+      )
+      |> render_submit()
+
+      repository = Projects.get_repository!(repository.id)
+      assert repository.env_kind == :default
+      assert repository.image_ref == nil
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+      refute render(element(view, "#repository-row-#{repository.id}")) =~ "container:"
+    end
+
     test "unlink is blocked while a task targets the repository", %{conn: conn, project: project} do
       repository = repository_fixture(project.id)
       task_fixture(project.id, %{target: :repo, repository_id: repository.id})

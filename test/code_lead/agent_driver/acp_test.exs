@@ -254,22 +254,24 @@ defmodule CodeLead.AgentDriver.AcpTest do
              Acp.start_run(ctx.task, ctx.agent, ctx.context, "hi")
   end
 
-  describe "preflight/1" do
+  describe "preflight/2" do
     test "passes when the harness binary resolves", ctx do
       use_scenario("happy")
-      assert Acp.preflight(ctx.agent) == :ok
+      assert Acp.preflight(ctx.agent, CodeLead.Executor.LocalSubprocess) == :ok
     end
 
     test "names a harness binary that is not installed", ctx do
       Application.put_env(:code_lead, :harnesses, %{claude_code: ["claude-agent-acp-missing"]})
 
-      assert Acp.preflight(ctx.agent) ==
+      assert Acp.preflight(ctx.agent, CodeLead.Executor.LocalSubprocess) ==
                {:error, {:executable_not_found, "claude-agent-acp-missing"}}
     end
 
     test "reports an unconfigured harness", ctx do
       Application.put_env(:code_lead, :harnesses, %{})
-      assert Acp.preflight(ctx.agent) == {:error, {:unknown_harness, :claude_code}}
+
+      assert Acp.preflight(ctx.agent, CodeLead.Executor.LocalSubprocess) ==
+               {:error, {:unknown_harness, :claude_code}}
     end
   end
 end

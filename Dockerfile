@@ -13,6 +13,7 @@ ARG ALPINE_VERSION="3.23.5"
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${ERLANG_VERSION}-alpine-${ALPINE_VERSION}"
 ARG RUNNER_IMAGE="alpine:${ALPINE_VERSION}"
 
+# Keep in sync with the harness_version default in config/runtime.exs.
 ARG CLAUDE_ACP_VERSION=0.66.0
 
 # -----------------------------------------------------------------------------
@@ -105,10 +106,15 @@ ARG MIX_ENV
 # curl/jq/ripgrep: near-universal in agent-authored commands.
 # openssh-client: git remotes over ssh.
 #
+# docker-cli: the container executor drives sibling task containers through
+#   the host daemon (`/var/run/docker.sock` mounted by the compose stack) —
+#   the CLI only, no daemon.
+#
 # `bash --version` fails the build loudly if the package ever goes missing,
 # the same guard the harness stage puts on node.
 RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs \
   bash coreutils findutils grep sed diffutils curl jq ripgrep openssh-client \
+  docker-cli \
   && bash --version
 
 ENV USER="elixir"
@@ -133,6 +139,18 @@ RUN \
 # through PATH to the nodejs installed above.
 COPY --from=harness /opt/harness /opt/harness
 ENV PATH="/opt/harness/bin:${PATH}"
+
+# The container-execution harness is NOT baked into this image: it is a
+# staged runtime directory (bun + package tree, ADR-0007), built lazily
+# onto the workspace volume via the docker socket on the first container
+# run per libc flavor. HARNESS_VERSION pins which adapter version that
+# staging installs.
+ARG CLAUDE_ACP_VERSION
+ENV HARNESS_VERSION=${CLAUDE_ACP_VERSION}
+
+# Sibling task containers run as this uid:gid so files they write to the
+# shared volume stay owned by the service user below.
+ENV CONTAINER_USER=1000:1000
 
 # Alpine's /etc/profile assigns PATH outright rather than extending it, so a
 # *login* shell starts with none of the ENV above. That matters because the

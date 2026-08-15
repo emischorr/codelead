@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-12)
+# Task workflow (last updated: 2026-08-15, container lifecycle)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -33,16 +33,16 @@ it transcribes spec §4 and fails if the definition drifts from it.
 
 | Function | Actor | From (state, run_state) | To | Side effects |
 |---|---|---|---|---|
-| `move_to_running/1` | human | planning | running, queued | executor guard (eligible `:execute` agent; repo target needs repository); clears `next_prompt` |
+| `move_to_running/1` | human | planning | running, queued | executor guard (eligible `:execute` agent; repo target needs repository; a `:container` task needs a declared repository image — `:missing_execution_env` otherwise); clears `next_prompt` |
 | `begin_dispatch/1` | system | running, queued | running, dispatched | runtime provisions context next |
 | `mark_executing/2` | system | running, dispatched | running, executing | persists `acp_session_id` when given |
 | `complete_run/1` | system | running, executing | review, idle | the one automatic column change (completion signal) |
 | `fail_run/2` | system | running, queued/dispatched/executing | running, failed | attention `:run_failed`; **no column change** |
 | `retry_run/1` | human | running, failed | running, queued | clears attention |
-| `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process |
-| `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session; feedback stored in `next_prompt` |
-| `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch |
-| `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned |
+| `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process and releases the task container (`release_context/1` — recreated on the next start) |
+| `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session — and the task container, which the rework reuses; feedback stored in `next_prompt` |
+| `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch, the task container, and the agent home |
+| `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned — the task container is removed either way (cattle) |
 | `archive/1` / `unarchive/1` | human | done | (state unchanged) | sets/clears `archived_at`; board/list exclude archived |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 

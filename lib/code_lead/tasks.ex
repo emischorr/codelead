@@ -250,9 +250,14 @@ defmodule CodeLead.Tasks do
   reporting the failure after the fact.
   """
   @spec startable(Task.t(), Agent.t() | nil) ::
-          :ok | {:error, :no_executor | :executor_ineligible | :missing_repository}
+          :ok
+          | {:error,
+             :no_executor | :executor_ineligible | :missing_repository | :missing_execution_env}
   def startable(%Task{} = task, executor) do
-    with :ok <- check_eligible_executor(task, executor), do: check_repository(task)
+    with :ok <- check_eligible_executor(task, executor),
+         :ok <- check_repository(task) do
+      check_execution_env(task)
+    end
   end
 
   @spec startable?(Task.t(), Agent.t() | nil) :: boolean()
@@ -947,7 +952,10 @@ defmodule CodeLead.Tasks do
   # for it to land in. Keyed on the stage type, so any future execute
   # stage inherits it.
   defp check_stage_entry(%Task{} = task, :execute) do
-    with :ok <- check_executor(task), do: check_repository(task)
+    with :ok <- check_executor(task),
+         :ok <- check_repository(task) do
+      check_execution_env(task)
+    end
   end
 
   defp check_stage_entry(%Task{}, _stage_type), do: :ok
@@ -1033,6 +1041,22 @@ defmodule CodeLead.Tasks do
     do: {:error, :missing_repository}
 
   defp check_repository(%Task{}), do: :ok
+
+  # Queries only for container tasks, so the board's per-card
+  # `startable?/2` stays query-free for the common case. There is no
+  # fallback image by design — an undeclared environment blocks the
+  # start instead of running somewhere nobody chose.
+  defp check_execution_env(
+         %Task{target: :repo, execution_env: :container, repository_id: repository_id} = _task
+       )
+       when not is_nil(repository_id) do
+    case Projects.get_repository!(repository_id) do
+      %{env_kind: :image, image_ref: ref} when is_binary(ref) and ref != "" -> :ok
+      _undeclared -> {:error, :missing_execution_env}
+    end
+  end
+
+  defp check_execution_env(%Task{}), do: :ok
 
   defp maybe_default_repository(%Task{target: :repo, repository_id: nil} = task) do
     case CodeLead.Projects.default_repository(task.project_id) do
