@@ -17,7 +17,6 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   alias CodeLead.Accounts
   alias CodeLead.Accounts.User
   alias CodeLeadWeb.FlashMessages
-  alias CodeLeadWeb.FormOptions
 
   @access_options [
     {"Set an initial password", "password"},
@@ -172,13 +171,6 @@ defmodule CodeLeadWeb.SettingsLive.Users do
             required
             phx-mounted={JS.focus()}
           />
-          <.input
-            field={@form[:locale]}
-            type="select"
-            label="Language"
-            options={FormOptions.locales()}
-          />
-
           <div :if={@live_action == :new}>
             <.input
               field={@form[:access]}

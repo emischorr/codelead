@@ -20,7 +20,7 @@ what exists today.
 | `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, this project's own agents, default reviewers |
 | `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
-| `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings |
+| `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
 
 The project detail page also carries four patch-based sub-routes:
 `/repositories/new`, `/repositories/:repository_id/edit`, `/env/new`

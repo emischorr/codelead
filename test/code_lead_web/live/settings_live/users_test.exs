@@ -41,7 +41,6 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
       |> form("#user-form",
         user: %{
           email: "new@example.com",
-          locale: "en",
           access: "password",
           password: "hello world!123",
           password_confirmation: "hello world!123"
@@ -60,7 +59,7 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
       {:ok, view, _html} = live(conn, ~p"/settings/users/new")
 
       view
-      |> form("#user-form", user: %{email: "invitee@example.com", locale: "en", access: "invite"})
+      |> form("#user-form", user: %{email: "invitee@example.com", access: "invite"})
       |> render_submit()
 
       assert_patch(view, ~p"/settings/users")
