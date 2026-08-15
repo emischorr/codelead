@@ -80,6 +80,10 @@ or failed task is in the Running stage with nothing to hand to Review.
   `:execute` stage. It can only bite if the executor was made
   ineligible while the task sat in Review; previously that case slipped
   through to a failed dispatch.
+  `Tasks.startable/2` / `startable?/2` expose the same check — eligible
+  executor, repository for `:repo` targets — for the board and task
+  page to hide or disable Start/Schedule before a click would hit the
+  guard and flash an error.
 - **`move_to_running/1` no longer requires `run_state: :idle`.** The
   edge lookup rejects every from-state but `:planning`, and a Planning
   task is always idle. The redundant guard went with the hand-written
