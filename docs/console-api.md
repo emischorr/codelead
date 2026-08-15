@@ -1,4 +1,4 @@
-# Console API walkthrough (last updated: 2026-08-12)
+# Console API walkthrough (last updated: 2026-08-15)
 
 The MVP has no web UI yet — the human interface is the IEx console.
 Everything below uses the exact context functions the future LiveView
@@ -34,6 +34,16 @@ Planning.chat(task.id, auditor.id)      # type into the REPL; `exit` to leave
 
 {:ok, task} = Tasks.set_executor(task, judy.id)
 :ok         = Tasks.set_reviewers(task, [auditor.id])
+
+# Optional: run the agent inside a container built from the repo's
+# declared image instead of a local subprocess (ADR-0004). Setting an
+# image derives env_kind: :image; execution stays a per-task choice.
+#
+# Container execution is licensed (:container_execution_env). The console
+# is not a way around that — without a granting LICENSE_KEY the second
+# call returns {:error, changeset}. See licensing.md.
+{:ok, _} = Projects.update_repository(repo, %{image_ref: "elixir:1.18-alpine"})
+{:ok, task} = Tasks.update_task(task, %{execution_env: :container})
 ```
 
 ## 2. Run it
@@ -54,10 +64,13 @@ Runtime.cancel_task(Tasks.get_task!(task.id))
 Runtime.retry_task(Tasks.get_task!(task.id))
 ```
 
-Note: ACP runs need the harness CLI on PATH (`claude-agent-acp` — see
-the `:harnesses` config) and provider credentials on the provider row.
-The Docker image bundles the Claude harness; locally, install it with
-`npm i -g @agentclientprotocol/claude-agent-acp`.
+Note: local ACP runs need the harness CLI on PATH (`claude-agent-acp` —
+see the `:harnesses` config) and provider credentials on the provider
+row. The Docker image bundles the Claude harness; locally, install it
+with `npm i -g @agentclientprotocol/claude-agent-acp`. Container runs
+instead use the compiled binary staged onto the workspace volume at
+boot (`HARNESS_VERSION`/`HARNESS_SOURCE` — see
+[`configuration.md`](configuration.md)).
 
 ## 3. Review
 

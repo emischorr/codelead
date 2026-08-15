@@ -20,10 +20,21 @@ defmodule CodeLead.Application do
         {Oban, Application.fetch_env!(:code_lead, Oban)},
         {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: CodeLead.PubSub},
-        CodeLead.Agents.SubscriptionUsageCache
+        CodeLead.Agents.SubscriptionUsageCache,
+        # Before the run supervisor: TaskRunner preflights (and the
+        # Bootstrap task below) call into it.
+        CodeLead.Executor.HarnessStaging
       ] ++
         CodeLead.Runtime.RunSupervisor.child_specs() ++
         [
+          # One-shot, async: stages the container harness onto the
+          # workspace volume and reaps orphaned task containers. Never
+          # crashes boot; no-ops without docker.
+          Supervisor.child_spec(
+            {Task, &CodeLead.Executor.DockerContainer.Bootstrap.run/0},
+            id: CodeLead.Executor.DockerContainer.Bootstrap,
+            restart: :temporary
+          ),
           # Start to serve requests, typically the last entry
           CodeLeadWeb.Endpoint
         ]

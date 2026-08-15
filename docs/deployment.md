@@ -1,4 +1,4 @@
-# Deployment (last updated: 2026-08-13)
+# Deployment (last updated: 2026-08-15)
 
 How to run CodeLead on a server. For the five-minute version see the
 README's *Getting started*; for the full environment variable reference see
@@ -33,7 +33,8 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 | Platforms | `linux/amd64`, `linux/arm64` |
 | Base | Alpine; Elixir 1.20.3 / Erlang 28.5.0.5 in the build stage |
 | User | `elixir`, uid/gid 1000 — **not root**, so it cannot bind ports below 1024 |
-| Bundled harness | `@agentclientprotocol/claude-agent-acp` at `/opt/harness` (on `PATH`). Codex is bring-your-own |
+| Bundled harness | `@agentclientprotocol/claude-agent-acp` at `/opt/harness` (on `PATH`) for **local** execution. The container-execution harness is not baked in — a runtime directory is staged onto the data volume over the docker socket on the first container run per libc flavor (ADR-0007). Codex is bring-your-own, local-only |
+| Docker CLI | `docker-cli` (no daemon) — drives sibling task containers through the mounted socket |
 | Entrypoints | `/app/bin/server` (default `CMD`) and `/app/bin/migrate` |
 | Mutable state | `/data/home` (`HOME`) and `/data/workspace` (`WORKSPACE_ROOT`) |
 
@@ -86,29 +87,53 @@ deploy instead of starting an app against a half-migrated schema.
 Because `migrate` runs on every `docker compose up`, upgrades need no extra
 step.
 
+### The data volume
+
+The `app` service mounts the **named volume** `codelead-data` at `/data`. It
+holds the agent harness's configuration and session state (`/data/home`) and
+every base clone, task worktree, and task folder (`/data/workspace`) —
+including work that hasn't been merged yet. Without the mount, `docker
+compose down` would discard all of that.
+
+Keep it a *named* volume rather than a bind mount. The container executor
+creates sibling containers through the host docker socket and hands them the
+workspace **by volume name** (`WORKSPACE_VOLUME`) — a bind path from inside
+the app container would be resolved by the host daemon in the *host's* mount
+namespace and point at the wrong place, or nowhere
+([ADR-0003](adr/0003-container-execution-model.md)). `HOST_DATA_ROOT` is the
+escape hatch for operators who insist on a bind mount.
+
+The compose file pins the volume's name (`name: codelead-data`) so
+`WORKSPACE_VOLUME` stays correct regardless of the compose project name.
+**Upgrade note:** a stack created before this pin holds its data in a volume
+compose named `deployment_codelead-data`. Pinning on such a stack makes
+compose create a *new, empty* `codelead-data` — either keep the old name (drop
+the `name:` line and set `WORKSPACE_VOLUME: deployment_codelead-data`), or
+migrate the data once
+(`docker run --rm -v deployment_codelead-data:/from -v codelead-data:/to
+alpine cp -a /from/. /to/`) with the stack down.
+
+### The docker socket
+
+The `app` service mounts `/var/run/docker.sock`, which is what lets a task
+run in its own container built from the repository's declared image. **A
+mounted docker socket is root-equivalent on the host** — anyone who controls
+the CodeLead process can start privileged containers. That trade is accepted,
+and stated here rather than discovered, under the single-tenant, self-hosted
+assumption ([ADR-0003](adr/0003-container-execution-model.md),
+[ADR-0004](adr/0004-container-executor-iteration-two.md)). To run without
+container execution, remove the socket mount and the `WORKSPACE_VOLUME` env —
+container-selecting tasks then refuse to start with a clear message.
+
+Container execution is also the one **licensed** feature
+(`:container_execution_env`). An instance with no `LICENSE_KEY` cannot select
+or start it, whether or not the socket is mounted; everything else runs
+unrestricted on the community tier. See [`licensing.md`](licensing.md).
+
 ### What you must add
 
-The example file **does not mount `/data`**. Add it to the `app` service
-before doing real work:
-
-```yaml
-  app:
-    volumes:
-      - codelead-data:/data
-    # …
-
-volumes:
-  pg:
-  codelead-data:
-```
-
-Without it, `docker compose down` discards the agent harness's configuration
-and session state (`/data/home`) along with every base clone, task worktree,
-and task folder (`/data/workspace`) — including work that hasn't been merged
-yet.
-
-Also worth adding: `restart: unless-stopped` on `db` and `app`, so the
-instance survives a host reboot.
+`restart: unless-stopped` on `db` and `app`, so the instance survives a host
+reboot.
 
 ## URLs: `PHX_HOST`, `SCHEME`, `URL_PORT`, `ALLOWED_HOSTS`
 
@@ -311,3 +336,8 @@ Known gaps that change how you'd deploy this:
   and tests (see *What the agent can run inside the image* in
   [`configuration.md`](configuration.md)). It is not a service to put on a
   public address for convenience.
+- **The compose stack mounts the docker socket** for container execution — a
+  mounted `/var/run/docker.sock` is root-equivalent on the host; the
+  single-tenant, self-hosted assumption is what makes that acceptable
+  ([ADR-0003](adr/0003-container-execution-model.md)). See *The docker
+  socket* above for how to opt out.

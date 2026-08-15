@@ -1,4 +1,4 @@
-# Review cycle (last updated: 2026-08-12)
+# Review cycle (last updated: 2026-08-15)
 
 Implemented in `CodeLead.Reviews`. Reviewers are ordinary agents with
 `:review` in `roles`, matched to the task's work type, selected per
@@ -29,7 +29,12 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
   - `acp` reviewers get the execution context with `read_only: true` —
     `fs/write_text_file` is denied by the driver; reads and terminal
     stay available. Because the terminal is not gated, a read-only
-    posture contains a *disposable* context, not a shared one.
+    posture contains a *disposable* context, not a shared one. On a
+    container task the reviewer execs into the **same** task container
+    (the context carries `Executor.for_task/1`, and the executor's
+    `spawn` recreates the container if it was removed in between) — so
+    reviewer commands hit the same toolchain the executor built
+    against.
 - Each reviewer writes a `reviews` row (advisory `verdict` parsed from
   a trailing `{"verdict": ...}` JSON line, full text as `findings`),
   an `agent_runs` row (cost-tracked, **not** budget-held), and a

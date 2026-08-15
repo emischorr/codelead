@@ -1,4 +1,4 @@
-# Planning surface (last updated: 2026-08-12)
+# Planning surface (last updated: 2026-08-15, surveys stay local)
 
 Implemented in `CodeLead.Planning`, rendered by the Task tab's chat card
 (`CodeLeadWeb.TaskLive.TaskTab`). The planning conversation helps the
@@ -51,7 +51,9 @@ feature branch and no execution worktree — only read-only access to
 current default-branch source. It gets the cheapest thing that provides
 that: a **disposable detached worktree**
 (`Git.create_detached_worktree/3` → `<root>/surveys/task-<id>`), removed
-when the run ends, including on crash.
+when the run ends, including on crash. Surveys always run on the
+**local** executor, whatever the task's `execution_env` says — the
+survey worktree has no container, and never should.
 
 Two reasons it is not the base clone itself:
 

@@ -141,8 +141,11 @@ defmodule CodeLead.AgentDriver do
   Checks that the agent could actually be launched — the harness binary
   exists, the configuration resolves. Run before the execution context is
   provisioned so an unusable agent fails fast rather than after a clone.
+  `executor` is the resolved `CodeLead.Executor` module the run's
+  context will use — the caller resolves it (a survey of a container
+  task still runs locally); drivers that launch nothing ignore it.
   """
-  @callback preflight(agent :: Agent.t()) :: :ok | {:error, term()}
+  @callback preflight(agent :: Agent.t(), executor :: module()) :: :ok | {:error, term()}
 
   @doc """
   Starts a run; events flow to the calling process. `context` is `nil`

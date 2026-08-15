@@ -35,6 +35,38 @@ defmodule CodeLead.ProjectsTest do
       assert length(Projects.list_repositories(project.id)) == 2
     end
 
+    test "env_kind is derived from the image reference" do
+      project = project_fixture()
+      repo = repository_fixture(project.id)
+
+      assert repo.env_kind == :default
+      assert repo.devcontainer_path == nil
+      assert repo.image_ref == nil
+      assert repo.dockerfile == nil
+
+      assert {:ok, updated} =
+               Projects.update_repository(repo, %{image_ref: "ghcr.io/acme/toolchain:1"})
+
+      assert updated.env_kind == :image
+      assert updated.image_ref == "ghcr.io/acme/toolchain:1"
+
+      # Blank (or whitespace) clears both.
+      assert {:ok, cleared} = Projects.update_repository(updated, %{image_ref: "  "})
+      assert cleared.env_kind == :default
+      assert cleared.image_ref == nil
+
+      # A dormant kind set via console is never clobbered by derivation.
+      assert {:ok, dormant} =
+               Projects.update_repository(cleared, %{
+                 env_kind: :devcontainer,
+                 devcontainer_path: ".devcontainer"
+               })
+
+      assert dormant.env_kind == :devcontainer
+      assert {:ok, still} = Projects.update_repository(dormant, %{image_ref: nil})
+      assert still.env_kind == :devcontainer
+    end
+
     test "repository names are unique per project" do
       project = project_fixture()
       repo = repository_fixture(project.id)

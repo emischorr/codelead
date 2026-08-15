@@ -7,6 +7,8 @@ defmodule CodeLead.Workspace do
       <root>/tasks/<id>/          task folder per :folder-target task
       <root>/surveys/task-<id>/   disposable read-only planning survey
       <root>/merges/task-<id>/    disposable worktree a Done merge runs in
+      <root>/agent-homes/task-<id>/ per-task agent HOME, survives container recreation
+      <root>/harness/<version>/<flavor>/ staged harness binary per libc flavor
   """
 
   @spec root() :: String.t()
@@ -47,6 +49,28 @@ defmodule CodeLead.Workspace do
   @spec task_folder(pos_integer()) :: String.t()
   def task_folder(task_id) do
     Path.join([root(), "tasks", Integer.to_string(task_id)])
+  end
+
+  @doc """
+  The task's agent HOME for container execution. On the workspace volume
+  so harness session state survives container recreation; cleared when
+  the task is sent back to Planning.
+  """
+  @spec agent_home(pos_integer()) :: String.t()
+  def agent_home(task_id) do
+    Path.join([root(), "agent-homes", "task-#{task_id}"])
+  end
+
+  @doc """
+  The staged harness binary sibling containers execute, per libc flavor
+  — bun-compiled binaries are dynamically linked, so a musl image and a
+  glibc image need different ones (ADR-0006). Versioned so an image
+  upgrade re-stages next to the old copy instead of overwriting a
+  binary a running container may still be executing.
+  """
+  @spec harness_binary(String.t(), :musl | :glibc) :: String.t()
+  def harness_binary(version, flavor) do
+    Path.join([root(), "harness", version, Atom.to_string(flavor), "claude-agent-acp"])
   end
 
   @doc """

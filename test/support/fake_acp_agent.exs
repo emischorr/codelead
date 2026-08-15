@@ -10,10 +10,19 @@
 #   elixir fake_acp_agent.exs terminal     # runs `echo hi` through the client terminal
 #   elixir fake_acp_agent.exs crash        # exits mid-prompt without a response
 #   elixir fake_acp_agent.exs resume       # advertises loadSession; succeeds session/load
+#
+# Parameterized scenarios take extra argv:
+#
+#   elixir fake_acp_agent.exs permission_probe <toolCall JSON> [<options JSON>]
+#       # requests permission with exactly that toolCall, echoes the outcome
+#   elixir fake_acp_agent.exs permission_settled_on_cancel
+#       # like permission, but records the outcome in settled.txt (cwd)
+#   elixir fake_acp_agent.exs terminal_bad_cwd   # terminal/create with cwd /etc
+#   elixir fake_acp_agent.exs terminal_root_cwd  # terminal/create with explicit cwd = sandbox root
 
 defmodule FakeAcpAgent do
-  def main([scenario]) do
-    loop(%{scenario: scenario, session_counter: 0, capabilities: %{}})
+  def main([scenario | args]) do
+    loop(%{scenario: scenario, args: args, session_counter: 0, capabilities: %{}})
   end
 
   defp loop(state) do
@@ -175,10 +184,68 @@ defmodule FakeAcpAgent do
       ]
     })
 
+    case await_response(60) do
+      # A cancelled outcome here means the client ended the turn and has
+      # already hung up — say nothing more (mirrors the elicitation
+      # scenario). A human decision arrives as a selected option instead.
+      %{"outcome" => %{"outcome" => "cancelled"}} ->
+        System.halt(0)
+
+      outcome ->
+        chunk(session_id, "decision: #{inspect(outcome)}")
+        respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
+    end
+  end
+
+  # The toolCall (and optionally the options) come JSON-encoded from
+  # argv, so one scenario covers the whole escalation matrix without a
+  # clause per case.
+  defp prompt(%{scenario: "permission_probe", args: [tool_call_json | rest]}, id, session_id) do
+    options =
+      case rest do
+        [options_json | _] ->
+          JSON.decode!(options_json)
+
+        [] ->
+          [
+            %{optionId: "allow", name: "Allow", kind: "allow_once"},
+            %{optionId: "reject", name: "Reject", kind: "reject_once"}
+          ]
+      end
+
+    request(60, "session/request_permission", %{
+      sessionId: session_id,
+      toolCall: JSON.decode!(tool_call_json),
+      options: options
+    })
+
     outcome = await_response(60)
 
     chunk(session_id, "decision: #{inspect(outcome)}")
     respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
+  end
+
+  # Records the outcome on disk instead of the wire: the client is
+  # cancelling, so by the time the outcome arrives the pipe may already
+  # be closed for anything the agent tries to say back.
+  defp prompt(%{scenario: "permission_settled_on_cancel"}, _id, session_id) do
+    request(60, "session/request_permission", %{
+      sessionId: session_id,
+      toolCall: %{
+        toolCallId: "tc-esc",
+        title: "Delete /etc/passwd",
+        kind: "delete",
+        locations: [%{path: "/etc/passwd"}]
+      },
+      options: [
+        %{optionId: "allow", name: "Allow", kind: "allow_once"},
+        %{optionId: "reject", name: "Reject", kind: "reject_once"}
+      ]
+    })
+
+    outcome = await_response(60)
+    File.write!("settled.txt", inspect(outcome))
+    System.halt(0)
   end
 
   # Mirrors the real adapter's gate: the ask-the-human tool only exists
@@ -253,6 +320,42 @@ defmodule FakeAcpAgent do
       sessionId: session_id,
       command: "sh",
       args: ["-c", "printf terminal-says-hi"]
+    })
+
+    %{"terminalId" => terminal_id} = await_response(70)
+
+    request(71, "terminal/wait_for_exit", %{sessionId: session_id, terminalId: terminal_id})
+    _exit_status = await_response(71)
+
+    request(72, "terminal/output", %{sessionId: session_id, terminalId: terminal_id})
+    %{"output" => output} = await_response(72)
+
+    chunk(session_id, "terminal output: #{output}")
+    respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
+  end
+
+  defp prompt(%{scenario: "terminal_bad_cwd"}, id, session_id) do
+    request(70, "terminal/create", %{
+      sessionId: session_id,
+      command: "sh",
+      args: ["-c", "printf should-not-run"],
+      cwd: "/etc"
+    })
+
+    result = await_response(70)
+
+    chunk(session_id, "terminal result: #{inspect(result)}")
+    respond(id, %{stopReason: "end_turn", usage: %{input_tokens: 5, output_tokens: 5}})
+  end
+
+  # The agent's own cwd is the sandbox root (spawn sets cd: context
+  # path), so this pins that an explicit root cwd passes the check.
+  defp prompt(%{scenario: "terminal_root_cwd"}, id, session_id) do
+    request(70, "terminal/create", %{
+      sessionId: session_id,
+      command: "sh",
+      args: ["-c", "printf terminal-says-hi"],
+      cwd: File.cwd!()
     })
 
     %{"terminalId" => terminal_id} = await_response(70)

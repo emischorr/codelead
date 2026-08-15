@@ -85,12 +85,18 @@ defmodule CodeLead.Runtime do
   def cancel_task(%Task{} = task) do
     _ = TaskRunner.cancel(task.id)
 
-    task
-    |> advance({:running, :planning},
-      actor: :human,
-      summary: "run cancelled — back to Planning (worktree kept)"
-    )
-    |> drop_prepared()
+    result =
+      task
+      |> advance({:running, :planning},
+        actor: :human,
+        summary: "run cancelled — back to Planning (worktree kept)"
+      )
+      |> drop_prepared()
+
+    # The worktree stays for inspection; the container is cattle and
+    # goes. Restarting the task re-ensures it.
+    with {:ok, cancelled} <- result, do: StageEffects.release_context(cancelled)
+    result
   end
 
   @doc """
