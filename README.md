@@ -6,6 +6,8 @@ Where an AI coding assistant helps a *developer write code*, CodeLead helps a yo
 
 You direct a virtual team of specialist agents from a Kanban board. They plan and execute. You decide what starts, what ships, and what goes back for another round.
 
+> **Already paying for Claude Pro or Max?** CodeLead runs on your existing **Claude subscription** — no separate API billing required. **Claude Code is bundled** in the image; connect it with an OAuth token during setup and go. (An Anthropic API key, OpenAI, and local Ollama models work too.)
+
 ![The CodeLead board](docs/images/board.png)
 
 ---
