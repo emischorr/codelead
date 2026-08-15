@@ -40,6 +40,11 @@ defmodule CodeLeadWeb.CoreComponents do
   attr :flash, :map, default: %{}, doc: "the map of flash messages to display"
   attr :title, :string, default: nil
   attr :kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup"
+
+  attr :auto_dismiss, :boolean,
+    default: true,
+    doc: "vanish after 5s — turn off for connection-status flashes driven by phx-connected/phx-disconnected"
+
   attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
 
   slot :inner_block, doc: "the optional inner block that renders the flash message"
@@ -52,6 +57,7 @@ defmodule CodeLeadWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook={@auto_dismiss && ".AutoDismissFlash"}
       role="alert"
       class="fixed top-4 right-4 z-50"
       {@rest}
@@ -73,6 +79,17 @@ defmodule CodeLeadWeb.CoreComponents do
         </button>
       </div>
     </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoDismissFlash">
+      export default {
+        mounted() { this.schedule() },
+        updated() { this.schedule() },
+        destroyed() { clearTimeout(this.timer) },
+        schedule() {
+          clearTimeout(this.timer)
+          this.timer = setTimeout(() => this.el.click(), 5000)
+        }
+      }
+    </script>
     """
   end
 
