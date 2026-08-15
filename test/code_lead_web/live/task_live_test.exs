@@ -193,6 +193,35 @@ defmodule CodeLeadWeb.TaskLiveTest do
       refute has_element?(view, "#target-form")
     end
 
+    test "the target form changes the execution environment", %{conn: conn} do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      task =
+        task_fixture(project.id, %{
+          work_type: :code,
+          target: :repo,
+          repository_id: repository.id
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view
+      |> element("#target-form")
+      |> render_change(%{"target" => "repo", "execution_env" => "container"})
+
+      assert Tasks.get_task!(task.id).execution_env == :container
+    end
+
+    test "the execution select is absent for folder targets", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content, target: :folder})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      refute has_element?(view, "#target-form select[name=execution_env]")
+    end
+
     test "selecting an executor persists it", %{conn: conn} do
       project = project_fixture()
       executor = agent_fixture(%{roles: [:execute], work_type: :code})

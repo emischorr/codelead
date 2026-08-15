@@ -209,6 +209,25 @@ defmodule CodeLead.AgentsTest do
       assert %{harness: _} = errors_on(changeset)
     end
 
+    test "tool_features defaults to empty and casts a list" do
+      provider = provider_fixture()
+
+      assert {:ok, agent} =
+               Agents.create_agent(%{
+                 name: "Security reviewer",
+                 scope: :org,
+                 roles: [:review],
+                 work_type: :code,
+                 driver: :llm_api,
+                 provider_id: provider.id
+               })
+
+      assert agent.tool_features == []
+
+      assert {:ok, agent} = Agents.update_agent(agent, %{tool_features: ["semgrep", "trivy"]})
+      assert agent.tool_features == ["semgrep", "trivy"]
+    end
+
     test "project scope requires project_id, org scope forbids it" do
       provider = provider_fixture()
       project = project_fixture()

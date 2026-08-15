@@ -140,7 +140,7 @@ Full recipes, proxy configuration snippets, upgrades, and backups are in [`docs/
 | `URL_PORT` | no | `443` for https, `80` for http | The port in generated links. Set it only when the app is reached directly on a non-standard port |
 | `WORKSPACE_ROOT` | no | `/data/workspace` | Where clones and worktrees live |
 | `MAX_CONCURRENT_RUNS` | no | `3` | How many agents may run at once |
-| `LICENSE_KEY` | no | — | Signed license key. No instance needs one — absent means the community tier, which today grants everything |
+| `LICENSE_KEY` | no | — | Signed license key. Absent means the community tier, which grants everything except container execution |
 | `POOL_SIZE` | no | `10` | Database connection pool size |
 | `ECTO_IPV6` | no | — | `true` to reach the database over IPv6 |
 | `DNS_CLUSTER_QUERY` | no | — | DNS query for clustering (unused in a single-node deployment) |
@@ -213,8 +213,7 @@ Architecture and internals live in [`docs/INDEX.md`](docs/INDEX.md). The target 
 
 [Elastic License 2.0](LICENSE.txt). Free to use, modify, and self-host, including commercially. Two limitations: you may not offer CodeLead to third parties as a hosted or managed service, and you may not circumvent the license key functionality.
 
-No feature is currently declared paid, so every instance runs as the community tier with everything enabled.
-`LICENSE_KEY` is optional and no instance needs one. See [`docs/licensing.md`](docs/licensing.md).
+One feature is declared paid: running a task inside a container (`Execution: Container`). Everything else — the board, the runtime, the agents, reviews, the whole web UI — is free, so an instance with no `LICENSE_KEY` runs as the community tier and is fully usable. See [`docs/licensing.md`](docs/licensing.md).
 
 
 Copyright (c) 2026 Enrico Mischorr

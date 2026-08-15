@@ -244,6 +244,20 @@ defmodule CodeLead.License.Source.SignedKeyTest do
       assert {:ok, %Entitlements{tier: :pro, features: [:sso]}} =
                SignedKey.resolve(token, public_key)
     end
+
+    test "an owner key picks up the whole gated set from its baseline", %{
+      public_key: public_key,
+      private_key: private_key
+    } do
+      # Nothing in the payload names a feature — the baseline supplies
+      # them all, which is what keeps an owner key valid across releases.
+      token = SignedKey.mint(%{"tier" => "owner", "org" => "Vendor"}, private_key)
+
+      assert {:ok, %Entitlements{tier: :owner, features: features}} =
+               SignedKey.resolve(token, public_key)
+
+      assert :container_execution_env in features
+    end
   end
 
   describe "resolve/1" do

@@ -111,6 +111,60 @@ defmodule CodeLead.Runtime.TaskRunner do
     end
   end
 
+  def dispatch_error({:provision, {:missing_execution_env, repo_name}}) do
+    "this task is set to run in a container, but repository #{inspect(repo_name)} " <>
+      "declares no container image — declare one in Settings → Project → Repositories, " <>
+      "or switch the task's execution back to Local"
+  end
+
+  def dispatch_error({:provision, {:image_pull_failed, image_ref, output}}) do
+    "could not pull the container image #{inspect(image_ref)}: #{Git.redact(output)}"
+  end
+
+  def dispatch_error({:provision, {:container_create_failed, output}}) do
+    "could not create the task container: #{Git.redact(output)}"
+  end
+
+  def dispatch_error({:provision, {:container_start_failed, output}}) do
+    "could not start the task container: #{Git.redact(output)} — the declared image " <>
+      "must provide a `sleep` binary (any regular Linux base image does)"
+  end
+
+  def dispatch_error({:provision, {:docker_unreachable, output}}) do
+    dispatch_error({:docker_unreachable, output})
+  end
+
+  def dispatch_error({:docker_unreachable, _output}) do
+    "the Docker daemon is unreachable — is `/var/run/docker.sock` mounted into the " <>
+      "CodeLead container and the docker CLI installed?"
+  end
+
+  def dispatch_error(:docker_cli_not_found) do
+    "the docker CLI is not installed where CodeLead runs — container execution needs it"
+  end
+
+  def dispatch_error({:harness_not_staged, detail}) do
+    "the container harness is not staged (#{detail}) — HARNESS_VERSION resolves at " <>
+      "boot (default pinned in runtime.exs); set it, or HARNESS_SOURCE, and restart"
+  end
+
+  def dispatch_error({:libc_probe_failed, output}) do
+    "could not detect the task image's libc: #{Git.redact(output)} — the declared " <>
+      "container image must provide `sh`"
+  end
+
+  def dispatch_error({:harness_build_failed, output}) do
+    "could not build the container harness: #{Git.redact(output)} — the build container " <>
+      "needs network access to the npm registry through docker; check connectivity and " <>
+      "retry, or set HARNESS_SOURCE to a pre-built binary as a manual override"
+  end
+
+  def dispatch_error({:container_command_unsupported, command}) do
+    "#{inspect(command)} cannot run in a container yet — container execution currently " <>
+      "supports the Claude Code harness only; switch the task to Local or pick a " <>
+      "Claude Code agent"
+  end
+
   def dispatch_error({:provision, reason}) do
     "could not prepare the workspace: #{inspect(reason)}"
   end
@@ -135,7 +189,7 @@ defmodule CodeLead.Runtime.TaskRunner do
     # Preflight before provisioning: a missing harness binary should not
     # cost a full repository clone first.
     with {:ok, task} <- Tasks.begin_dispatch(task),
-         :ok <- driver.preflight(agent),
+         :ok <- driver.preflight(agent, Executor.for_task(task)),
          {:ok, context} <- provision(task),
          task = Tasks.get_task!(task.id),
          {:ok, handle} <- driver.start_run(task, agent, context, build_prompt(task)),
@@ -607,14 +661,14 @@ defmodule CodeLead.Runtime.TaskRunner do
   defp live_usage(_state), do: nil
 
   defp provision(task) do
-    case Executor.impl().provision(task) do
+    case Executor.for_task(task).provision(task) do
       {:ok, context} -> {:ok, context}
       {:error, reason} -> {:error, {:provision, reason}}
     end
   end
 
   defp fail(task, state, raw_detail, opts \\ []) do
-    detail = Git.redact(raw_detail)
+    detail = maybe_diagnose(task, state, Git.redact(raw_detail))
 
     case Tasks.fail_run(task, detail) do
       {:ok, task} ->
@@ -647,6 +701,24 @@ defmodule CodeLead.Runtime.TaskRunner do
         :ok
     end
   end
+
+  # A started container run that dies can have a container-shaped cause
+  # (removed externally, exited); the executor can tell, the exit status
+  # cannot. Dispatch failures pass `state = nil` and are not enriched —
+  # a provision error would only produce "no container" noise.
+  defp maybe_diagnose(%Task{execution_env: :container} = task, state, detail)
+       when not is_nil(state) do
+    executor = Executor.for_task(task)
+
+    with true <- function_exported?(executor, :diagnose, 1),
+         {:ok, extra} <- executor.diagnose(task.id) do
+      detail <> " — " <> extra
+    else
+      _running_or_unsupported -> detail
+    end
+  end
+
+  defp maybe_diagnose(_task, _state, detail), do: detail
 
   defp kick_queue_async do
     Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, &CodeLead.Runtime.kick_queue/0)

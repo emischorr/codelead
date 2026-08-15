@@ -39,7 +39,7 @@ mix test test/path/file_test.exs:42     # single test by line
 
 mix precommit                 # compile --warnings-as-errors + deps.unlock --unused + format + test
 mix credo                     # not part of precommit — run separately
-mix ecto.reset                # drop + wipe per-task workspace state + create + migrate + seed
+mix ecto.reset                # wipe per-task workspace state + drop + create + migrate + seed; refuses while runs are live (mix code_lead.workspace.clean --force to override)
 ```
 
 `mix precommit` runs in `MIX_ENV=test` (set via `preferred_envs`). Run it when you're done with a change and fix anything it reports.
@@ -61,7 +61,7 @@ That table is **data, not code**: the machine dispatches on a stage's `stage_typ
 **Extension points are behaviours, each with exactly one MVP implementation:**
 
 - `CodeLead.AgentDriver` — `Acp` (drives a coding harness like Claude Code/Codex over the Agent Client Protocol: JSON-RPC 2.0 over stdio, bridged via Erlang Ports) and `LlmApi` (a single completion call, used for reviews and short content). Later: nothing new; the driver is independent of the executor.
-- `CodeLead.Executor` — `LocalSubprocess` (MVP) and `DockerContainer` (later). Provisions the worktree or task folder, spawns processes, tears down.
+- `CodeLead.Executor` — `LocalSubprocess` (default) and `DockerContainer` (per-task opt-in: repo-target tasks with `execution_env: :container` run in a sibling container from the repository's declared `image_ref`; no fallback image, ADR-0004). Provisions the worktree or task folder, spawns processes, tears down. `spawn/3` runs the agent *inside* the provisioned context (Model A, ADR-0003).
 - `CodeLead.Scheduler` — `PassThrough` (MVP: admit unless over budget, dispatch immediately) and `Windowed` (later: hold for subscription token-window resets). Bound to the task's *provider connection*, not global.
 
 Reviewers are deliberately **not** a separate abstraction — they are ordinary `agents` rows with `:review` in `roles`, run through the same `AgentDriver` in a read-only posture, fanned out concurrently on Review entry. Their verdicts are advisory and gate nothing.
@@ -72,7 +72,7 @@ Reviewers are deliberately **not** a separate abstraction — they are ordinary 
 
 **Background jobs:** Oban is installed and supervised — queues `rollups` (nightly cost rollups) and `dispatch` (scheduled-run wake-ups). Cloak.Ecto has landed — `CodeLead.Vault` encrypts provider credentials and the project env store, keyed by an instance `ENCRYPTION_KEY`. The project env store is also where git/forge access tokens live (`GITHUB_TOKEN`/`GITLAB_TOKEN`); see `docs/configuration.md`.
 
-**Licensing.** The project is Elastic License 2.0, and `CodeLead.License` is the entitlement seam ELv2's key clause refers to. **It gates nothing** — `@gated_features` is empty, so `feature_enabled?/1` is always true and every instance runs as `:community`. That is deliberate, not unfinished. Entitlements come from an offline Ed25519-signed `LICENSE_KEY` resolved once at boot, are instance-scoped like the singleton `organization`, and fail *open* to community on any problem. Making a feature paid means adding its atom to `@gated_features` and checking `feature_enabled?/1` at the call site **and** in the authoritative server-side action — never a UI-only check. Read `docs/licensing.md` before touching any of it; note that unlike `Executor`/`Scheduler` the source is deliberately **not** config-swappable.
+**Licensing.** The project is Elastic License 2.0, and `CodeLead.License` is the entitlement seam ELv2's key clause refers to. **Almost everything is free**: `@gated_features` holds exactly one atom, `:container_execution_env`, so a community instance runs everything except container-executed tasks. Entitlements come from an offline Ed25519-signed `LICENSE_KEY` resolved once at boot, are instance-scoped like the singleton `organization`, and fail *open* to community on any problem. Making a feature paid means adding its atom to `@gated_features` and checking `feature_enabled?/1` at the call site **and** in the authoritative server-side action — never a UI-only check; `:container_execution_env` is the worked example, gated in `Tasks.check_execution_env/1` (start guard), the Planning changesets (persistence), and the task page's Execution select (cosmetic). `tier_baseline(:owner)` is the maintainer's tier and grants the whole gated set automatically, so new gates need no key reissued. Read `docs/licensing.md` before touching any of it; note that unlike `Executor`/`Scheduler` the source is deliberately **not** config-swappable — which is also why the test suite grants itself an owner license in `test/test_helper.exs` rather than flipping a config.
 
 `:req` is the HTTP client — do not add HTTPoison, Tesla, or `:httpc`.
 

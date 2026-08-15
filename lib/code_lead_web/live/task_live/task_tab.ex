@@ -32,6 +32,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :show_feedback?, :boolean, default: false
   attr :finalize_mode, :atom, default: :pull_request
   attr :project_finalize_mode, :atom, default: :pull_request
+  attr :container_licensed?, :boolean, default: false
 
   def task_tab(assigns) do
     ~H"""
@@ -129,6 +130,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           repositories={@repositories}
           finalize_mode={@finalize_mode}
           project_finalize_mode={@project_finalize_mode}
+          container_licensed?={@container_licensed?}
         />
         <.cost_card runs={@runs} task_stat={@task_stat} />
       </div>
@@ -434,6 +436,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :repositories, :list, default: []
   attr :finalize_mode, :atom, default: :pull_request
   attr :project_finalize_mode, :atom, default: nil
+  attr :container_licensed?, :boolean, default: false
 
   defp target_card(assigns) do
     ~H"""
@@ -472,6 +475,28 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
             {repository.name}
           </option>
         </select>
+        <%!-- The Container option is disabled rather than dropped when the
+              instance is unlicensed: a task already set to :container would
+              otherwise render with Local selected and misreport itself. --%>
+        <label :if={@task.target == :repo} class="flex flex-col gap-1">
+          <span class="text-[12px] text-text3">Execution</span>
+          <select
+            name="execution_env"
+            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+          >
+            <option
+              :for={{label, value} <- FormOptions.execution_envs()}
+              value={value}
+              disabled={value == "container" and not @container_licensed?}
+              selected={to_string(@task.execution_env) == value}
+            >
+              {label}
+            </option>
+          </select>
+          <span :if={not @container_licensed?} class="text-[12px] text-text3">
+            Container execution requires a commercial license.
+          </span>
+        </label>
       </form>
 
       <div :if={@task.state != :planning} class="flex flex-col gap-2 text-[13px]">
@@ -482,6 +507,10 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         <div :if={@repository} class="flex items-center justify-between gap-2">
           <span class="shrink-0 text-text3">Repository</span>
           <span class="min-w-0 truncate font-mono text-[12px] text-text">{@repository.name}</span>
+        </div>
+        <div :if={@task.target == :repo} class="flex items-center justify-between gap-2">
+          <span class="text-text3">Execution</span>
+          <span class="font-mono text-[12px] text-text">{@task.execution_env}</span>
         </div>
       </div>
 

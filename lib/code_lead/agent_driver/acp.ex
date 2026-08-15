@@ -16,11 +16,17 @@ defmodule CodeLead.AgentDriver.Acp do
 
   ## Permission policy
 
-  Inside the sandbox (all tool-call locations under the context path,
-  or no location info) requests are auto-granted — the human gate is at
-  the workflow level. Requests touching paths outside the sandbox are
-  surfaced as `{:permission_request, %{id:, detail:}}` events and stay
-  pending until `answer_permission/3`.
+  Inside the sandbox requests are auto-granted — the human gate is at
+  the workflow level. A request whose tool-call locations all sit under
+  the context path auto-grants regardless of kind; a location-less
+  request auto-grants only for known-inert kinds plus `execute` (shell
+  is bounded by the sandbox cwd and the scrubbed env). Everything else
+  — a path outside the sandbox, a destructive kind (`delete`/`move`)
+  without locations, an unrecognized or missing kind, or a malformed
+  location — is surfaced as `{:permission_request, %{id:, detail:}}`
+  and stays pending until `answer_permission/3`. Terminal commands are
+  confined the same way: a `terminal/create` whose cwd falls outside
+  the sandbox is refused with a JSON-RPC error.
 
   ## Asking the human
 
@@ -54,15 +60,23 @@ defmodule CodeLead.AgentDriver.Acp do
   alias CodeLead.Acp.Elicitation
   alias CodeLead.AgentDriver
   alias CodeLead.Agents
-  alias CodeLead.Executor
   alias CodeLead.Executor.Context
+  alias CodeLead.Executor.EnvScrub
+
+  # Kinds a location-less permission request may auto-grant: AgentFeed's
+  # provably-inert set plus execute — shell is bounded by the sandbox cwd
+  # and EnvScrub, and Bash requests carry no locations, so escalating
+  # execute would nag on every command (spec: no per-tool-call nagging).
+  # The ACP kind vocabulary is open: anything unrecognized or missing
+  # fails closed and escalates; delete/move are deliberately absent.
+  @location_free_auto_grant_kinds ~w(read search think fetch switch_mode execute)
 
   ## AgentDriver callbacks
 
   @impl CodeLead.AgentDriver
-  def preflight(agent) do
+  def preflight(agent, executor) do
     with {:ok, command} <- harness_command(agent) do
-      Executor.impl().available?(command)
+      executor.available?(command)
     end
   end
 
@@ -93,9 +107,12 @@ defmodule CodeLead.AgentDriver.Acp do
   @doc """
   Resolves a surfaced permission escalation.
   """
-  @spec answer_permission(pid(), term(), boolean()) :: :ok | {:error, :unknown_request}
+  @spec answer_permission(pid(), term(), boolean()) ::
+          :ok | {:error, :unknown_request | :not_running}
   def answer_permission(handle, request_id, granted?) do
     GenServer.call(handle, {:answer_permission, request_id, granted?})
+  catch
+    :exit, _reason -> {:error, :not_running}
   end
 
   @doc """
@@ -470,28 +487,34 @@ defmodule CodeLead.AgentDriver.Acp do
   end
 
   defp handle_agent_request("terminal/create", id, params, state) do
-    terminal_id = "term-#{System.unique_integer([:positive])}"
-    command = params["command"]
-    args = params["args"] || []
     cwd = params["cwd"] || state.context.path
-    env = state.context.env ++ decode_env(params["env"] || [])
 
-    task =
-      Task.Supervisor.async_nolink(CodeLead.TaskSupervisor, fn ->
-        run_terminal_command(command, args, cwd, env)
-      end)
+    if check_sandbox_dir(cwd, state.context.path) == :ok do
+      terminal_id = "term-#{System.unique_integer([:positive])}"
+      command = params["command"]
+      args = params["args"] || []
+      env = state.context.env ++ decode_env(params["env"] || [])
 
-    Connection.respond(state.conn, id, %{terminalId: terminal_id})
+      task =
+        Task.Supervisor.async_nolink(CodeLead.TaskSupervisor, fn ->
+          run_terminal_command(command, args, cwd, env)
+        end)
 
-    terminals =
-      Map.put(state.terminals, terminal_id, %{
-        task_ref: task.ref,
-        task_pid: task.pid,
-        result: nil,
-        exit_waiters: []
-      })
+      Connection.respond(state.conn, id, %{terminalId: terminal_id})
 
-    {:noreply, %{state | terminals: terminals}}
+      terminals =
+        Map.put(state.terminals, terminal_id, %{
+          task_ref: task.ref,
+          task_pid: task.pid,
+          result: nil,
+          exit_waiters: []
+        })
+
+      {:noreply, %{state | terminals: terminals}}
+    else
+      Connection.respond_error(state.conn, id, -32_000, "terminal denied: cwd outside sandbox")
+      {:noreply, state}
+    end
   end
 
   defp handle_agent_request("terminal/output", id, params, state) do
@@ -577,7 +600,7 @@ defmodule CodeLead.AgentDriver.Acp do
         {output, exit_status} =
           System.cmd(resolved, args,
             cd: cwd,
-            env: env,
+            env: EnvScrub.cmd_env(env),
             stderr_to_stdout: true
           )
 
@@ -613,7 +636,7 @@ defmodule CodeLead.AgentDriver.Acp do
 
     Connection.start_link(
       owner: self(),
-      port_opener: fn -> Executor.impl().spawn(context, command) end
+      port_opener: fn -> context.executor.spawn(context, command) end
     )
   end
 
@@ -641,16 +664,28 @@ defmodule CodeLead.AgentDriver.Acp do
   defp put_elicitation(capabilities, true), do: Map.put(capabilities, :elicitation, %{form: %{}})
   defp put_elicitation(capabilities, false), do: capabilities
 
+  # The grant/deny fallbacks are deliberately asymmetric. On grant, a
+  # mislabeled option set fails safe either way, and picking the first
+  # option honors the human's Allow rather than aborting the call. On
+  # deny, that same fallback could select an allow option — a human's
+  # Deny turning into a grant — so cancelling the tool call is the only
+  # response that cannot be read as one.
   defp permission_outcome(options, granted?) do
     wanted =
       if granted?, do: ["allow_once", "allow_always"], else: ["reject_once", "reject_always"]
 
-    option =
-      Enum.find(options, fn option -> option["kind"] in wanted end) || List.first(options)
+    case {Enum.find(options, fn option -> option["kind"] in wanted end), granted?} do
+      {%{"optionId" => option_id}, _granted?} ->
+        %{outcome: %{outcome: "selected", optionId: option_id}}
 
-    case option do
-      nil -> %{outcome: %{outcome: "cancelled"}}
-      %{"optionId" => option_id} -> %{outcome: %{outcome: "selected", optionId: option_id}}
+      {nil, true} ->
+        case List.first(options) do
+          %{"optionId" => option_id} -> %{outcome: %{outcome: "selected", optionId: option_id}}
+          nil -> %{outcome: %{outcome: "cancelled"}}
+        end
+
+      {nil, false} ->
+        %{outcome: %{outcome: "cancelled"}}
     end
   end
 
@@ -666,10 +701,25 @@ defmodule CodeLead.AgentDriver.Acp do
   defp question_outcome(_content, :cancel), do: %{action: "cancel"}
 
   defp escalation?(tool_call, sandbox_path) do
-    (tool_call["locations"] || [])
-    |> Enum.map(& &1["path"])
-    |> Enum.reject(&is_nil/1)
-    |> Enum.any?(fn path -> check_sandbox(path, sandbox_path) != :ok end)
+    case tool_call["locations"] do
+      locations when is_list(locations) and locations != [] ->
+        Enum.any?(locations, fn
+          %{"path" => path} when is_binary(path) ->
+            check_sandbox(path, sandbox_path) != :ok
+
+          # A location we cannot read (nil path, wrong shape) must not
+          # silently vanish into an auto-grant — fail closed.
+          _malformed ->
+            true
+        end)
+
+      empty when empty in [nil, []] ->
+        tool_call["kind"] not in @location_free_auto_grant_kinds
+
+      # locations present but not a list: malformed frame, fail closed.
+      _malformed ->
+        true
+    end
   end
 
   defp check_sandbox(nil, _sandbox_path), do: {:error, :outside_sandbox}
@@ -678,6 +728,19 @@ defmodule CodeLead.AgentDriver.Acp do
     expanded = Path.expand(path)
 
     if String.starts_with?(expanded, Path.expand(sandbox_path) <> "/") do
+      :ok
+    else
+      {:error, :outside_sandbox}
+    end
+  end
+
+  # Like check_sandbox/2 but for a working directory: the sandbox root
+  # itself is valid (it is the default cwd), where a file path never is.
+  defp check_sandbox_dir(path, sandbox_path) do
+    expanded = Path.expand(path)
+    root = Path.expand(sandbox_path)
+
+    if expanded == root or String.starts_with?(expanded, root <> "/") do
       :ok
     else
       {:error, :outside_sandbox}
@@ -767,6 +830,13 @@ defmodule CodeLead.AgentDriver.Acp do
     # about leaving no wedged subprocess if that path ever regresses.
     Enum.each(state.pending_questions, fn {_ref, {id, _fields}} ->
       Connection.respond(state.conn, id, %{action: "cancel"})
+    end)
+
+    # A literal cancelled outcome, not permission_outcome(options, false):
+    # the turn ended — a reject selection would misreport a human decision
+    # that never happened.
+    Enum.each(state.pending_permissions, fn {_ref, {id, _options}} ->
+      Connection.respond(state.conn, id, %{outcome: %{outcome: "cancelled"}})
     end)
 
     Connection.close(state.conn)

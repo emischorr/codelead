@@ -45,6 +45,7 @@ defmodule CodeLead.Tasks do
   alias CodeLead.Agents
   alias CodeLead.Agents.Agent
   alias CodeLead.Finalizer
+  alias CodeLead.License
   alias CodeLead.Projects
   alias CodeLead.Repo
   alias CodeLead.Tasks.Attention
@@ -59,6 +60,8 @@ defmodule CodeLead.Tasks do
           | {:error, :no_executor}
           | {:error, :executor_ineligible}
           | {:error, :missing_repository}
+          | {:error, :missing_execution_env}
+          | {:error, :unlicensed_execution_env}
 
   @type summary :: %{atom() => non_neg_integer()}
 
@@ -123,7 +126,10 @@ defmodule CodeLead.Tasks do
   """
   @spec create_task(pos_integer(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def create_task(project_id, attrs) do
-    changeset = Task.create_changeset(%Task{project_id: project_id}, attrs)
+    changeset =
+      %Task{project_id: project_id}
+      |> Task.create_changeset(attrs)
+      |> validate_licensed_execution_env()
 
     with {:ok, task} <- Repo.insert(changeset) do
       task
@@ -145,7 +151,12 @@ defmodule CodeLead.Tasks do
   """
   @spec update_task(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update_task(%Task{state: :planning} = task, attrs) do
-    with {:ok, updated} <- task |> Task.planning_changeset(attrs) |> Repo.update() do
+    changeset =
+      task
+      |> Task.planning_changeset(attrs)
+      |> validate_licensed_execution_env()
+
+    with {:ok, updated} <- Repo.update(changeset) do
       updated
       |> maybe_default_repository()
       |> realign_agents(task.work_type)
@@ -250,9 +261,18 @@ defmodule CodeLead.Tasks do
   reporting the failure after the fact.
   """
   @spec startable(Task.t(), Agent.t() | nil) ::
-          :ok | {:error, :no_executor | :executor_ineligible | :missing_repository}
+          :ok
+          | {:error,
+             :no_executor
+             | :executor_ineligible
+             | :missing_repository
+             | :missing_execution_env
+             | :unlicensed_execution_env}
   def startable(%Task{} = task, executor) do
-    with :ok <- check_eligible_executor(task, executor), do: check_repository(task)
+    with :ok <- check_eligible_executor(task, executor),
+         :ok <- check_repository(task) do
+      check_execution_env(task)
+    end
   end
 
   @spec startable?(Task.t(), Agent.t() | nil) :: boolean()
@@ -947,7 +967,10 @@ defmodule CodeLead.Tasks do
   # for it to land in. Keyed on the stage type, so any future execute
   # stage inherits it.
   defp check_stage_entry(%Task{} = task, :execute) do
-    with :ok <- check_executor(task), do: check_repository(task)
+    with :ok <- check_executor(task),
+         :ok <- check_repository(task) do
+      check_execution_env(task)
+    end
   end
 
   defp check_stage_entry(%Task{}, _stage_type), do: :ok
@@ -1033,6 +1056,52 @@ defmodule CodeLead.Tasks do
     do: {:error, :missing_repository}
 
   defp check_repository(%Task{}), do: :ok
+
+  # The persistence half of the container-execution gate. Guards the
+  # console path (`Tasks.update_task(task, %{execution_env: :container})`)
+  # as much as the form, so an unlicensed instance cannot store the
+  # choice at all.
+  #
+  # Keyed on `get_change/2`, not `get_field/2`: a task already stored as
+  # `:container` — minted before the gate, or on an instance whose key has
+  # lapsed — must stay editable. Renaming it is not the licensed act;
+  # running it is, and `check_execution_env/1` blocks that.
+  defp validate_licensed_execution_env(changeset) do
+    if Ecto.Changeset.get_change(changeset, :execution_env) == :container and
+         not License.feature_enabled?(:container_execution_env) do
+      Ecto.Changeset.add_error(changeset, :execution_env, "requires a commercial license")
+    else
+      changeset
+    end
+  end
+
+  # Container execution is licensed (ADR-0004, docs/licensing.md), so the
+  # entitlement is checked before the repository is even loaded — a
+  # community instance gets the same answer whatever its repos declare.
+  #
+  # Beyond that it queries only for container tasks, so the board's
+  # per-card `startable?/2` stays query-free for the common case. There is
+  # no fallback image by design — an undeclared environment blocks the
+  # start instead of running somewhere nobody chose.
+  defp check_execution_env(
+         %Task{target: :repo, execution_env: :container, repository_id: repository_id} = _task
+       )
+       when not is_nil(repository_id) do
+    if License.feature_enabled?(:container_execution_env) do
+      check_declared_image(repository_id)
+    else
+      {:error, :unlicensed_execution_env}
+    end
+  end
+
+  defp check_execution_env(%Task{}), do: :ok
+
+  defp check_declared_image(repository_id) do
+    case Projects.get_repository!(repository_id) do
+      %{env_kind: :image, image_ref: ref} when is_binary(ref) and ref != "" -> :ok
+      _undeclared -> {:error, :missing_execution_env}
+    end
+  end
 
   defp maybe_default_repository(%Task{target: :repo, repository_id: nil} = task) do
     case CodeLead.Projects.default_repository(task.project_id) do

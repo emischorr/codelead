@@ -176,6 +176,9 @@ defmodule CodeLead.Planning do
   defp survey_result(%Task{} = task, %Agent{} = agent, repository) do
     case provision_survey(task, repository) do
       {:ok, base_clone_path, worktree_path} ->
+        # The struct default keeps the survey on the local executor even
+        # for a `:container` task: its disposable detached worktree has
+        # no container, and never should.
         context = %Context{
           type: :worktree,
           path: worktree_path,

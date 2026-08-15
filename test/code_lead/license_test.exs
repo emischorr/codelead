@@ -6,24 +6,29 @@ defmodule CodeLead.LicenseTest do
 
   alias CodeLead.License
   alias CodeLead.License.Entitlements
+  alias CodeLead.LicenseHelpers
 
+  # The suite as a whole runs as `:owner` (test/test_helper.exs); these
+  # tests install their own grant and must hand that back.
   setup do
-    on_exit(fn -> License.put_entitlements(Entitlements.community()) end)
+    on_exit(&LicenseHelpers.grant_owner!/0)
     :ok
   end
 
   describe "the shipped policy" do
-    test "gates nothing" do
-      # The whole point of the seam as shipped: present, enforcing nothing.
+    setup do
+      LicenseHelpers.grant_community!()
+      :ok
+    end
+
+    test "leaves everything not named in the seam alone" do
       assert License.feature_enabled?(:cost_dashboard)
       assert License.feature_enabled?(:sso)
       assert License.feature_enabled?(:anything_at_all)
     end
 
-    test "stays open even for an instance holding no license" do
-      License.put_entitlements(Entitlements.community())
-
-      assert License.feature_enabled?(:agent_marketplace)
+    test "withholds container execution from an instance holding no license" do
+      refute License.feature_enabled?(:container_execution_env)
     end
 
     test "limit/2 hands back the caller's own default" do
@@ -32,9 +37,29 @@ defmodule CodeLead.LicenseTest do
     end
 
     test "an instance with no key is community" do
-      License.put_entitlements(Entitlements.community())
-
       assert License.tier() == :community
+    end
+  end
+
+  describe "an owner instance" do
+    setup do
+      LicenseHelpers.grant_owner!()
+      :ok
+    end
+
+    test "may use container execution" do
+      assert License.feature_enabled?(:container_execution_env)
+    end
+
+    # Written against the live gated set rather than a literal list, so
+    # gating the *next* feature does not need this test edited — which is
+    # the whole promise of the :owner baseline.
+    test "may use every gated feature there is" do
+      %{features: granted} = License.tier_baseline(:owner)
+
+      for feature <- granted do
+        assert License.feature_enabled?(feature)
+      end
     end
   end
 
@@ -74,6 +99,16 @@ defmodule CodeLead.LicenseTest do
 
     test "a tier this build has no clause for grants nothing rather than raising" do
       assert License.tier_baseline(:platinum) == %{features: [], limits: %{}}
+    end
+
+    test "owner grants container execution" do
+      assert %{features: features} = License.tier_baseline(:owner)
+
+      assert :container_execution_env in features
+    end
+
+    test "owner grants no limits — a raised cap still needs an explicit one" do
+      assert License.tier_baseline(:owner).limits == %{}
     end
   end
 

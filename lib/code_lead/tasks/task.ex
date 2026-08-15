@@ -30,6 +30,10 @@ defmodule CodeLead.Tasks.Task do
   move in Planning, a mode left over from the other target is possible.
   `CodeLead.Finalizer.resolve_mode/3` ignores such a value rather than
   failing on it.
+
+  `execution_env` selects where the run executes — a `:local`
+  subprocess today, a `:container` later. It is a schema seam, unused
+  in MVP logic: always `:local` (ADR-0003).
   """
 
   use Ecto.Schema
@@ -48,6 +52,7 @@ defmodule CodeLead.Tasks.Task do
   @work_types [:code, :design, :content, :file]
   @url_kinds [:pull_request, :merge_request, :compare, :commit]
   @finalize_modes [:pull_request, :merge, :squash, :artifact, :commit_to_path]
+  @execution_envs [:local, :container]
   @states [:planning, :running, :review, :done, :cancelled]
   @run_states [:idle, :queued, :dispatched, :executing, :failed]
   @priorities [:low, :normal, :high, :urgent]
@@ -70,6 +75,7 @@ defmodule CodeLead.Tasks.Task do
     field :pr_url, :string
     field :pr_url_kind, Ecto.Enum, values: @url_kinds
     field :finalize_mode, Ecto.Enum, values: @finalize_modes
+    field :execution_env, Ecto.Enum, values: @execution_envs, default: :local
     field :acp_session_id, :string
     field :next_prompt, :string
     field :scheduled_at, :utc_datetime
@@ -141,7 +147,8 @@ defmodule CodeLead.Tasks.Task do
       :ready_flag,
       :agent_id,
       :repository_id,
-      :assignee_id
+      :assignee_id,
+      :execution_env
     ])
     |> validate_required([:title, :work_type])
     |> put_default_target()
@@ -167,7 +174,8 @@ defmodule CodeLead.Tasks.Task do
       :ready_flag,
       :agent_id,
       :repository_id,
-      :assignee_id
+      :assignee_id,
+      :execution_env
     ])
     |> validate_required([:title, :work_type, :target])
     |> foreign_key_constraint(:agent_id)
@@ -177,7 +185,8 @@ defmodule CodeLead.Tasks.Task do
 
   @doc """
   Changeset for edits after Planning: descriptive fields only — the
-  execution shape (work type, target, repo, executor) is locked.
+  execution shape (work type, target, repo, agent, execution env) is
+  locked.
   """
   @spec details_changeset(t(), map()) :: Ecto.Changeset.t()
   def details_changeset(task, attrs) do

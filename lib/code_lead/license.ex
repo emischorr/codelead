@@ -3,14 +3,18 @@ defmodule CodeLead.License do
   License entitlement seam — the one place that decides what this
   instance may do.
 
-  **It is inert.** `@gated_features` ships empty, so `feature_enabled?/1`
-  answers `true` for everything and `limit/2` hands back the caller's own
-  default. An instance with no `LICENSE_KEY` runs as `:community` with
-  nothing withheld. That is the intended steady state, not an unfinished
-  one.
+  Almost everything is free. `@gated_features` lists the exceptions, and
+  `feature_enabled?/1` answers `true` for every name absent from it, so
+  an instance with no `LICENSE_KEY` runs as `:community` with only those
+  few things withheld.
 
-  The seam exists so that monetizing a feature later is a *data* change
-  rather than a hunt through the app for places to add a check:
+  Gated today:
+
+    * `:container_execution_env` — running a task in a sibling container
+      (`tasks.execution_env == :container`); see ADR-0004.
+
+  Monetizing a feature is a *data* change rather than a hunt through the
+  app for places to add a check:
 
     1. add the feature's atom to `@gated_features`
     2. call `feature_enabled?/1` at the call site **and** in the
@@ -28,6 +32,13 @@ defmodule CodeLead.License do
   every key already issued against it — no reissue — while a single
   bespoke deal is expressible as explicit `features`/`limits` on one key.
 
+  `:owner` is the maintainer's own tier: its baseline is `@gated_features`
+  itself, so it picks up each new gated feature without anyone reissuing
+  the key. It grants **features only** — `limit/2` still hands an owner
+  instance the caller's default, because there is no generic way to say
+  "every cap raised". A raised cap needs `--limits` on the key like any
+  other.
+
   ## Failure is always downward
 
   Missing key, bad signature, expired, malformed, unknown tier: every one
@@ -41,11 +52,9 @@ defmodule CodeLead.License do
   name things this build has never heard of without raising or growing the
   atom table — the unknowns are simply dropped.
 
-  The surprising corollary while `@gated_features` is empty: no feature
-  atom exists in the compiled application, so *every* feature named in a
-  key is dropped. That is consistent rather than broken — a feature only
-  means anything once it is listed above, and listing it is exactly what
-  brings its atom into existence.
+  Which is why listing a feature in `@gated_features` is what brings its
+  atom into existence: a name no build has compiled cannot be granted,
+  and a feature nobody gates does not need granting.
 
   See `docs/licensing.md`.
   """
@@ -58,13 +67,17 @@ defmodule CodeLead.License do
   @cache_key {__MODULE__, :entitlements}
 
   # ── THE SEAM ─────────────────────────────────────────────────────────
-  # Empty ⇒ nothing is gated ⇒ feature_enabled?/1 is always true.
-  # Adding an atom here is what turns a feature into a paid one.
+  # Anything absent here is free. Adding an atom is what turns a feature
+  # into a paid one — and what brings its name into the atom table, so a
+  # key can name it at all.
   @gated_features MapSet.new([
-                    # :cost_dashboard,
-                    # :sso,
-                    # :agent_marketplace
+                    :container_execution_env
                   ])
+
+  # The whole gated set, resolved at compile time for `tier_baseline(:owner)`.
+  # Gating a new feature therefore grants it to owner instances on the next
+  # boot, with no key reissued.
+  @owner_features MapSet.to_list(@gated_features)
 
   @typedoc "What a tier grants before a key's own extras are merged in."
   @type grant :: %{features: [atom()], limits: %{optional(atom()) => term()}}
@@ -78,14 +91,19 @@ defmodule CodeLead.License do
   @spec tier_baseline(atom()) :: grant()
   def tier_baseline(:community), do: %{features: [], limits: %{}}
 
+  # The maintainer's own tier: everything gated, always, including
+  # features added after the key was minted. Limits are deliberately
+  # empty — see the moduledoc.
+  def tier_baseline(:owner), do: %{features: @owner_features, limits: %{}}
+
   # Paid tiers go here. Shape, for when there is something to sell:
   #
   #   def tier_baseline(:pro),
-  #     do: %{features: [:cost_dashboard], limits: %{max_concurrent_runs: 5}}
+  #     do: %{features: [:container_execution_env], limits: %{max_concurrent_runs: 5}}
   #
   #   def tier_baseline(:business),
   #     do: %{
-  #       features: [:cost_dashboard, :sso, :agent_marketplace],
+  #       features: [:container_execution_env, :sso],
   #       limits: %{max_concurrent_runs: 20}
   #     }
 
@@ -106,8 +124,8 @@ defmodule CodeLead.License do
   @doc """
   May this instance use `feature`?
 
-  True for anything not listed in `@gated_features` — which today is
-  everything.
+  True for anything not listed in `@gated_features`, whether or not the
+  instance holds a key.
   """
   @spec feature_enabled?(atom()) :: boolean()
   def feature_enabled?(feature) do

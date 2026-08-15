@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-14)
+# Architecture overview (last updated: 2026-08-15)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -24,7 +24,7 @@ note is the "how it works today" map.
 | Behaviour | MVP impl | Later |
 |---|---|---|
 | `CodeLead.AgentDriver` | `Acp` (harness over ACP, ADR-0001), `LlmApi` (one completion) | — (driver-independent of executor) |
-| `CodeLead.Executor` | `LocalSubprocess` (worktree/folder + Ports) | `DockerContainer` |
+| `CodeLead.Executor` | `LocalSubprocess` (default) and `DockerContainer` (per-task opt-in, `Executor.for_task/1` on `tasks.execution_env`); `spawn/3` runs the agent *inside* the provisioned context ([ADR-0003](adr/0003-container-execution-model.md), [ADR-0004](adr/0004-container-executor-iteration-two.md)) | `:devcontainer`/`:dockerfile` env kinds |
 | `CodeLead.Scheduler` | `PassThrough` — an ordered `CodeLead.Scheduler.Gate` list (schedule → budget → capacity) | a `WindowGate` in the same list |
 
 ## Runtime (processes)
@@ -49,6 +49,10 @@ note is the "how it works today" map.
   its state rather than in SQL. Board notifications (`project:<id>` →
   `:board_changed`) come from `CodeLead.Tasks` on every task write.
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
+- `CodeLead.Executor.DockerContainer.Bootstrap` — one-shot boot task:
+  stages the compiled harness binary onto the workspace volume and
+  reaps labeled orphan task containers; no-ops (with a log) when docker
+  or the staging source is absent.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.
 - `CodeLead.Finalizer` — the system executor behind Approve → Done,

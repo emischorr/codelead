@@ -20,6 +20,17 @@ defmodule CodeLeadWeb.FlashMessages do
   def transition_error(:missing_repository),
     do: "Link a repository before starting a repo-targeted task."
 
+  def transition_error(:missing_execution_env),
+    do:
+      "This task is set to run in a container, but its repository doesn't declare " <>
+        "a container image. Set one under Settings → Project → Repositories, or " <>
+        "switch the task's execution back to Local."
+
+  def transition_error(:unlicensed_execution_env),
+    do:
+      "Container execution requires a commercial license. Switch this task's " <>
+        "execution back to Local, or set a LICENSE_KEY that grants it."
+
   def transition_error(other), do: "Action failed: #{inspect(other)}"
 
   @doc """

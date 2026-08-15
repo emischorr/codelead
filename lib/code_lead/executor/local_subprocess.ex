@@ -7,6 +7,7 @@ defmodule CodeLead.Executor.LocalSubprocess do
   @behaviour CodeLead.Executor
 
   alias CodeLead.Executor.Context
+  alias CodeLead.Executor.EnvScrub
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Tasks
@@ -35,7 +36,8 @@ defmodule CodeLead.Executor.LocalSubprocess do
          base_clone_path: base_path,
          branch_name: branch,
          base_branch: repository.default_branch,
-         env: Projects.env_vars(task.project_id)
+         env: Projects.env_vars(task.project_id),
+         executor: __MODULE__
        }}
     end
   end
@@ -49,7 +51,8 @@ defmodule CodeLead.Executor.LocalSubprocess do
        type: :folder,
        path: path,
        task_id: task.id,
-       env: Projects.env_vars(task.project_id)
+       env: Projects.env_vars(task.project_id),
+       executor: __MODULE__
      }}
   end
 
@@ -80,7 +83,7 @@ defmodule CodeLead.Executor.LocalSubprocess do
               :hide,
               args: args,
               cd: path,
-              env: charlist_env(env)
+              env: EnvScrub.port_env(env)
             ] ++ port_opts
           )
 
@@ -201,9 +204,5 @@ defmodule CodeLead.Executor.LocalSubprocess do
 
   defp persist_base_clone_path(repository, path) do
     with {:ok, _} <- Projects.update_repository(repository, %{base_clone_path: path}), do: :ok
-  end
-
-  defp charlist_env(env) do
-    Enum.map(env, fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
   end
 end

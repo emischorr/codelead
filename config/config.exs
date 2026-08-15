@@ -57,6 +57,10 @@ config :code_lead, :harnesses, %{
   codex: ["codex", "acp"]
 }
 
+# Docker CLI argv prefix for the container executor. Tests swap it for a
+# fake, mirroring the :harnesses pattern above.
+config :code_lead, :docker_cli, ["docker"]
+
 # Best-effort pricing (cents per million tokens) for cost_cents on
 # agent_runs. Token counts stay exact; unknown models cost 0.
 config :code_lead, :model_prices, %{
