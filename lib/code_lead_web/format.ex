@@ -200,6 +200,30 @@ defmodule CodeLeadWeb.Format do
   def time(at), do: Calendar.strftime(at, "%H:%M:%S")
 
   @doc """
+  Time until a future reset, e.g. `\"2h 31m\"` when it lands within a day,
+  `\"Tue 22:10\"` once it's far enough out that a bare countdown would run
+  to absurd lengths.
+  """
+  @spec reset_in(DateTime.t() | nil) :: String.t()
+  def reset_in(nil), do: "—"
+
+  def reset_in(%DateTime{} = at) do
+    seconds = DateTime.diff(at, DateTime.utc_now())
+
+    cond do
+      seconds <= 0 -> "now"
+      seconds < 3_600 -> "#{div(seconds, 60)}m"
+      seconds < 86_400 -> countdown(seconds)
+      true -> Calendar.strftime(at, "%a %H:%M")
+    end
+  end
+
+  defp countdown(seconds) do
+    minutes = div(seconds, 60)
+    "#{div(minutes, 60)}h #{pad(rem(minutes, 60))}m"
+  end
+
+  @doc """
   Path rewritten relative to `root`, or nil when it falls outside `root` —
   the caller decides whether that means "keep the absolute form" or
   "ignore". The missing leading slash is what marks a path as belonging
