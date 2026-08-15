@@ -388,11 +388,14 @@ defmodule CodeLeadWeb.BoardLive do
   attr :card_id, :string, required: true
 
   defp card_footer(%{column: :planning} = assigns) do
+    agent = assigns.ctx.agents[assigns.task.agent_id]
+    assigns = assign(assigns, startable?: Tasks.startable?(assigns.task, agent))
+
     ~H"""
     <div class="flex items-center gap-1.5 text-[11px] text-text3">
       <span class="font-mono">{@task.work_type} · {@task.target}</span>
       <span :if={@task.ready_flag} class="font-semibold text-ok">✓ Ready</span>
-      <div class="ml-auto flex items-center">
+      <div :if={@startable?} class="ml-auto flex items-center">
         <button
           type="button"
           phx-click="start_task"

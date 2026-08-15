@@ -446,6 +446,7 @@ defmodule CodeLeadWeb.TaskLive do
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
     finalize = finalize_context(task, repository)
     agents = Map.new(Agents.list_agents(project.id), &{&1.id, &1})
+    executor = task.agent_id && agents[task.agent_id]
     steps = Tasks.steps(task.id)
     runs = Costs.task_runs(task.id)
 
@@ -457,7 +458,8 @@ defmodule CodeLeadWeb.TaskLive do
       finalize_mode: finalize.mode,
       project_finalize_mode: finalize.project_mode,
       forge_known?: finalize.forge_known?,
-      executor: task.agent_id && agents[task.agent_id],
+      executor: executor,
+      startable_reason: Tasks.startable(task, executor),
       agents: agents,
       steps: steps,
       run_started_at: last_run_started_at(steps),
@@ -924,6 +926,7 @@ defmodule CodeLeadWeb.TaskLive do
               finalize_mode={@finalize_mode}
               forge_known?={@forge_known?}
               base_branch={@repository && @repository.default_branch}
+              startable_reason={@startable_reason}
             />
           </div>
         </div>
@@ -992,6 +995,7 @@ defmodule CodeLeadWeb.TaskLive do
           finalize_mode={@finalize_mode}
           forge_known?={@forge_known?}
           base_branch={@repository && @repository.default_branch}
+          startable_reason={@startable_reason}
           mobile
         />
       </div>
@@ -1029,13 +1033,17 @@ defmodule CodeLeadWeb.TaskLive do
   attr :finalize_mode, :atom, default: :pull_request
   attr :forge_known?, :boolean, default: false
   attr :base_branch, :string, default: nil
+  attr :startable_reason, :any, default: :ok
 
   defp header_actions(%{task: %{state: :planning}} = assigns) do
+    assigns = assign(assigns, start_hint: start_hint(assigns.startable_reason))
+
     ~H"""
     <.button
       phx-click="open_schedule"
       id={action_id("schedule-run", @mobile)}
-      title="Schedule this run"
+      disabled={@start_hint != nil}
+      title={@start_hint || "Schedule this run"}
     >
       <.icon name="hero-clock" class="size-3.5" />
       <span class={@mobile && "hidden!"}>Schedule</span>
@@ -1045,6 +1053,8 @@ defmodule CodeLeadWeb.TaskLive do
       phx-click="start_run"
       class={@mobile && "flex-1"}
       id={action_id("start-run", @mobile)}
+      disabled={@start_hint != nil}
+      title={@start_hint}
     >
       Start run
     </.button>
@@ -1148,6 +1158,9 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   defp action_id(name, mobile), do: if(mobile, do: "m-action-#{name}", else: "action-#{name}")
+
+  defp start_hint(:ok), do: nil
+  defp start_hint({:error, reason}), do: FlashMessages.transition_error(reason)
 
   defp feedback_modal(assigns) do
     ~H"""

@@ -264,7 +264,10 @@ from `tasks.pr_url_kind` — the URL comes off the task, not from
 (`<card_id>-artifact-link`) instead; a card never has both, which is
 what the single `ml-auto` in the footer assumes. The planning footer's Start is a split control: the
 clock button opens the shared `schedule_modal` and starts the run at a
-chosen UTC time instead of now. A queued task with a future
+chosen UTC time instead of now. Both are hidden — not just disabled —
+when `Tasks.startable?/2` is false: no eligible executor, or a `:repo`
+target with no repository, the same guard `move_to_running/1` would
+otherwise reject the transition on. A queued task with a future
 `scheduled_at` shows `⏱ starts …` in place of the `⏸ queued · #N`
 badge, derived from the task rather than from a persisted hold reason.
 On desktop **each column scrolls on its own**: the pane is
@@ -290,8 +293,12 @@ to flashes.
 
 Header actions are chosen by `{state, run_state}` plus a precomputed
 `scheduled?` flag: planning offers **Schedule** (`#action-schedule-run`,
-opening the shared `schedule_modal`) alongside **Start run**, and a
-queued task whose start time has not arrived offers **Run now**
+opening the shared `schedule_modal`) alongside **Start run**, both
+`disabled` with the reason as their `title` when `Tasks.startable/2`
+(precomputed as `@startable_reason` in `load_task/1`) returns an
+error instead of `:ok` — unlike the board card, the task page keeps
+them visible so the tooltip can explain why. A queued task whose start
+time has not arrived offers **Run now**
 (`#action-run-now`, `Runtime.run_now/1`) beside Cancel run. A
 `#scheduled-hint` badge next to the state badge shows the start time. A
 done task carrying a forge link renders **Open PR / MR / Commit /

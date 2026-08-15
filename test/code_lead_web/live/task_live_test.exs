@@ -70,6 +70,41 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "start/schedule guard" do
+    test "a task without an executor keeps Start/Schedule visible but disabled", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{agent_id: nil})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#action-start-run[disabled]")
+      assert has_element?(view, "#action-schedule-run[disabled]")
+      assert render(element(view, "#action-start-run")) =~ "Select an executor agent"
+    end
+
+    test "a repo-target task without a repository keeps Start/Schedule disabled", %{conn: conn} do
+      project = project_fixture()
+      executor = agent_fixture(%{roles: [:execute], work_type: :code})
+
+      task =
+        task_fixture(project.id, %{target: :repo, repository_id: nil, agent_id: executor.id})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#action-start-run[disabled]")
+      assert render(element(view, "#action-start-run")) =~ "Link a repository"
+    end
+
+    test "a runnable task offers Start/Schedule enabled", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      refute has_element?(view, "#action-start-run[disabled]")
+      refute has_element?(view, "#action-schedule-run[disabled]")
+    end
+  end
+
   describe "planning edits" do
     test "saving the edit form updates description and spec", %{conn: conn} do
       project = project_fixture()

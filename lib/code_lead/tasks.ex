@@ -241,6 +241,24 @@ defmodule CodeLead.Tasks do
   ## Human transitions
 
   @doc """
+  Whether `move_to_running/1` would succeed right now: an eligible
+  executor and, for `:repo` targets, a repository. Takes the executor
+  agent directly (or `nil`) rather than fetching it by id, so a caller
+  that already loaded the project's agents — the board, the task page —
+  checks every task without a query each. Exposed so those surfaces can
+  hide or disable the Start/Schedule affordances instead of only
+  reporting the failure after the fact.
+  """
+  @spec startable(Task.t(), Agent.t() | nil) ::
+          :ok | {:error, :no_executor | :executor_ineligible | :missing_repository}
+  def startable(%Task{} = task, executor) do
+    with :ok <- check_eligible_executor(task, executor), do: check_repository(task)
+  end
+
+  @spec startable?(Task.t(), Agent.t() | nil) :: boolean()
+  def startable?(%Task{} = task, executor), do: startable(task, executor) == :ok
+
+  @doc """
   Planning → Running. Guarded: the task needs an eligible executor
   and, for `:repo` targets, a repository. Enqueues (`run_state:
   :queued`); the scheduler picks it up from there.
@@ -998,9 +1016,13 @@ defmodule CodeLead.Tasks do
   defp check_executor(%Task{agent_id: nil}), do: {:error, :no_executor}
 
   defp check_executor(%Task{agent_id: agent_id} = task) do
-    agent = Agents.get_agent!(agent_id)
+    check_eligible_executor(task, Agents.get_agent!(agent_id))
+  end
 
-    if Agents.eligible?(agent, task.work_type, task.project_id, :execute) do
+  defp check_eligible_executor(%Task{}, nil), do: {:error, :no_executor}
+
+  defp check_eligible_executor(%Task{work_type: work_type, project_id: project_id}, executor) do
+    if Agents.eligible?(executor, work_type, project_id, :execute) do
       :ok
     else
       {:error, :executor_ineligible}
