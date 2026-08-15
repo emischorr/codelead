@@ -43,7 +43,8 @@ defmodule CodeLeadWeb.CoreComponents do
 
   attr :auto_dismiss, :boolean,
     default: true,
-    doc: "vanish after 5s — turn off for connection-status flashes driven by phx-connected/phx-disconnected"
+    doc:
+      "vanish after 5s — turn off for connection-status flashes driven by phx-connected/phx-disconnected"
 
   attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
 

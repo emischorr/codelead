@@ -75,7 +75,7 @@ defmodule CodeLeadWeb.UserLive.Settings do
           <.section_card label="Appearance">
             <div class="flex items-center justify-between">
               <p class="text-[13px] text-text2">Theme</p>
-              <.theme_toggle />
+              <Layouts.theme_toggle />
             </div>
           </.section_card>
         </div>
@@ -104,7 +104,8 @@ defmodule CodeLeadWeb.UserLive.Settings do
       timezone = Ecto.Changeset.get_field(changeset, :timezone)
       settings = Map.put(user.settings, "timezone", timezone)
 
-      {:ok, updated_user} = Accounts.update_user(user, %{"locale" => locale, "settings" => settings})
+      {:ok, updated_user} =
+        Accounts.update_user(user, %{"locale" => locale, "settings" => settings})
 
       {:noreply,
        socket
