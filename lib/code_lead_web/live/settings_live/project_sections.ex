@@ -128,9 +128,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
         />
 
         <p class="mb-4 text-[12px] leading-relaxed text-text3" phx-no-curly-interpolation>
-          Used as the PR/MR description when Approve opens a pull request. Placeholders:
-          <code class="font-mono">{{title}}</code>, <code class="font-mono">{{description}}</code>,
-          <code class="font-mono">{{task_id}}</code>, and <code class="font-mono">{{branch}}</code>.
+          Used as the PR/MR description when Approve opens a pull request. Placeholders: <code class="font-mono">{{title}}</code>, <code class="font-mono">{{description}}</code>, <code class="font-mono">{{task_id}}</code>, and <code class="font-mono">{{branch}}</code>.
           Leave blank to fall back to the built-in default.
         </p>
 

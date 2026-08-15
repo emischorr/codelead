@@ -7,6 +7,10 @@ defmodule CodeLead.Agents.SubscriptionUsageCache do
   publishes no API for this — so a provider whose last poll failed simply
   keeps no entry here; `current/1` then reports nothing for it rather than
   a stale or broken number.
+
+  Only `:refresh` touches the database: the polled provider list is resolved
+  during a refresh and kept in state, so `current/1` — called on every page
+  navigation app-wide — answers purely from memory.
   """
 
   use GenServer
@@ -51,7 +55,7 @@ defmodule CodeLead.Agents.SubscriptionUsageCache do
   @impl true
   def init([]) do
     if auto_refresh?(), do: send(self(), :refresh)
-    {:ok, %{}}
+    {:ok, %{primary: nil, entries: %{}}}
   end
 
   @impl true
@@ -71,22 +75,28 @@ defmodule CodeLead.Agents.SubscriptionUsageCache do
 
   defp auto_refresh?, do: Application.get_env(:code_lead, __MODULE__, [])[:auto_refresh] != false
 
-  defp do_refresh(state) do
-    Agents.list_providers()
-    |> Enum.filter(&(&1.kind == :anthropic_subscription))
-    |> Enum.reduce(state, fn provider, acc ->
-      case SubscriptionUsage.fetch(provider.config["oauth_token"]) do
-        {:ok, usage} -> Map.put(acc, provider.id, %{name: provider.name, usage: usage})
-        :error -> acc
-      end
-    end)
+  defp do_refresh(%{entries: entries}) do
+    providers =
+      Agents.list_providers() |> Enum.filter(&(&1.kind == :anthropic_subscription))
+
+    entries =
+      Enum.reduce(providers, entries, fn provider, acc ->
+        case SubscriptionUsage.fetch(provider.config["oauth_token"]) do
+          {:ok, usage} -> Map.put(acc, provider.id, %{name: provider.name, usage: usage})
+          :error -> acc
+        end
+      end)
+
+    %{primary: primary_id(providers), entries: entries}
   end
 
-  defp snapshot(state) do
-    case Enum.find(Agents.list_providers(), &(&1.kind == :anthropic_subscription)) do
-      nil -> nil
-      provider -> state |> Map.get(provider.id) |> to_snapshot()
-    end
+  defp primary_id([%{id: id} | _]), do: id
+  defp primary_id([]), do: nil
+
+  defp snapshot(%{primary: nil}), do: nil
+
+  defp snapshot(%{primary: id, entries: entries}) do
+    entries |> Map.get(id) |> to_snapshot()
   end
 
   defp to_snapshot(nil), do: nil

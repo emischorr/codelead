@@ -22,7 +22,7 @@ defmodule CodeLeadWeb.SettingsLive do
   def mount(_params, _session, socket) do
     users = Accounts.list_users()
     providers = Agents.list_providers()
-    agents = Agents.list_org_agents()
+    agents = Agents.list_all_agents()
     projects = Projects.list_projects()
 
     {:ok,
@@ -79,7 +79,7 @@ defmodule CodeLeadWeb.SettingsLive do
               id="settings-tile-agents"
               icon="hero-sparkles"
               label="Agents"
-              stat={count(length(@agents), "org agent")}
+              stat={count(length(@agents), "agent")}
               detail={agents_detail(@agents)}
               navigate={~p"/settings/agents"}
             />

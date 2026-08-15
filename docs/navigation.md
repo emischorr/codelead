@@ -87,7 +87,10 @@ from — LiveViews never assemble navigation themselves:
   failed or missing reading is indistinguishable from "no subscription
   provider configured": `rate_limit` is `nil` and the tile does not
   render. See `CodeLead.Agents.SubscriptionUsage` and
-  `CodeLead.Agents.SubscriptionUsageCache`. Each window's row also shows
+  `CodeLead.Agents.SubscriptionUsageCache`. `current/1` answers purely
+  from the cache's state — the provider list is resolved during a poll,
+  never on the `on_mount` path — so a page mount costs no query and the
+  app-wide cache process never touches the repo from a caller's context. Each window's row also shows
   when it resets, via `CodeLeadWeb.Format.reset_in/1` against
   `window.resets_at`: a countdown (`"2h 31m"`) inside 24h, a weekday and
   clock time (`"Tue 22:10"`) beyond that — computed at render time from
