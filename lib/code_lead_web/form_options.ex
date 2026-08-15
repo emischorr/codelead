@@ -137,4 +137,15 @@ defmodule CodeLeadWeb.FormOptions do
           {String.t(), pos_integer()}
         ]
   def provider_options(providers), do: Enum.map(providers, &{&1.name, &1.id})
+
+  @doc """
+  The agent form's project select: "All projects" (org scope, blank
+  value) followed by every project (project scope, bound to its id).
+  """
+  @spec project_options([%{name: String.t(), id: pos_integer()}]) :: [
+          {String.t(), String.t() | pos_integer()}
+        ]
+  def project_options(projects) do
+    [{"All projects", ""} | Enum.map(projects, &{&1.name, &1.id})]
+  end
 end

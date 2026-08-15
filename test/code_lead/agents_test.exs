@@ -118,15 +118,28 @@ defmodule CodeLead.AgentsTest do
     end
   end
 
-  describe "agent deletion" do
-    test "list_org_agents/0 excludes project-scoped agents" do
+  describe "agent listing" do
+    test "list_all_agents/0 includes both org- and project-scoped agents" do
       project = project_fixture()
       org_agent = agent_fixture()
-      _project_agent = agent_fixture(%{scope: :project, project_id: project.id})
+      project_agent = agent_fixture(%{scope: :project, project_id: project.id})
 
-      assert Enum.map(Agents.list_org_agents(), & &1.id) == [org_agent.id]
+      assert Enum.map(Agents.list_all_agents(), & &1.id) |> Enum.sort() ==
+               Enum.sort([org_agent.id, project_agent.id])
     end
 
+    test "list_project_agents/1 returns only that project's own agents" do
+      project = project_fixture()
+      other_project = project_fixture()
+      _org_agent = agent_fixture()
+      project_agent = agent_fixture(%{scope: :project, project_id: project.id})
+      _foreign_agent = agent_fixture(%{scope: :project, project_id: other_project.id})
+
+      assert Enum.map(Agents.list_project_agents(project.id), & &1.id) == [project_agent.id]
+    end
+  end
+
+  describe "agent deletion" do
     test "an unreferenced agent deletes" do
       agent = agent_fixture()
 

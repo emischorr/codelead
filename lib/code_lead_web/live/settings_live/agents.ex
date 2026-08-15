@@ -1,11 +1,9 @@
 defmodule CodeLeadWeb.SettingsLive.Agents do
   @moduledoc """
-  The shared pool of org-scoped agent personas.
-
-  Scope is fixed to `:org` here. `Agent.changeset/2` does not cast
-  `project_id`, so an existing agent cannot be moved between scopes through a
-  form — project-scoped agents are a deferred surface, noted in
-  `docs/web-ui.md`.
+  The pool of agent personas, org- and project-scoped alike. The form's
+  project select drives `scope`: left on "All projects" the agent stays
+  org-wide (selectable everywhere), picking a project binds it there only
+  — see `CodeLead.Agents.eligible?/4`.
   """
 
   use CodeLeadWeb, :live_view
@@ -14,6 +12,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   alias CodeLead.Agents
   alias CodeLead.Agents.Agent
+  alias CodeLead.Projects
   alias CodeLeadWeb.FlashMessages
   alias CodeLeadWeb.FormOptions
 
@@ -21,7 +20,11 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
   def mount(_params, _session, socket) do
     {:ok,
      socket
-     |> assign(page_title: "Agents", providers: Agents.list_providers())
+     |> assign(
+       page_title: "Agents",
+       providers: Agents.list_providers(),
+       projects: Projects.list_projects()
+     )
      |> load_agents()}
   end
 
@@ -34,7 +37,8 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
        "work_type" => "code",
        "driver" => "acp",
        "harness" => "claude_code",
-       "roles" => "execute,review"
+       "roles" => "execute,review",
+       "project_id" => ""
      })}
   end
 
@@ -52,7 +56,8 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
        "roles" => FormOptions.role_value(agent.roles),
        "provider_id" => agent.provider_id,
        "model_variant" => agent.model_variant,
-       "system_prompt" => agent.system_prompt
+       "system_prompt" => agent.system_prompt,
+       "project_id" => if(agent.project_id, do: to_string(agent.project_id), else: "")
      })}
   end
 
@@ -110,7 +115,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
       <div class="min-h-0 flex-1 overflow-y-auto">
         <div class="mx-auto w-full max-w-4xl p-4 sm:p-6">
-          <.section_card label="Org agents — selectable in every project">
+          <.section_card label="Agents">
             <div :if={@providers == []}>
               <.empty_state icon="hero-cloud" title="Connect a provider first">
                 An agent needs a model backend.
@@ -138,6 +143,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
                   <.badge variant={:accent}>{agent.work_type}</.badge>
                   <.badge :for={role <- agent.roles} variant={:neutral}>{role}</.badge>
                   <.badge variant={:run}>{driver_label(agent)}</.badge>
+                  <.badge variant={:neutral}>{scope_label(agent, @projects)}</.badge>
                 </:badges>
                 <:actions>
                   <.button patch={~p"/settings/agents/#{agent.id}/edit"}>Edit</.button>
@@ -167,6 +173,12 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
             placeholder="Judy"
             required
             phx-mounted={JS.focus()}
+          />
+          <.input
+            field={@form[:project_id]}
+            type="select"
+            label="Project"
+            options={FormOptions.project_options(@projects)}
           />
           <.input
             field={@form[:work_type]}
@@ -223,7 +235,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   defp load_agents(socket) do
     agents =
-      Enum.map(Agents.list_org_agents(), fn agent ->
+      Enum.map(Agents.list_all_agents(), fn agent ->
         Map.put(agent, :usage, Agents.agent_usage(agent.id))
       end)
 
@@ -242,14 +254,21 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
   # `roles` must become a list (an `{:array, Ecto.Enum}` cannot cast the
   # select's comma string) and `harness` must be nilled for `llm_api`, or a
   # stale value from a previous driver selection trips `validate_harness`.
+  # `project_id` blank means org scope; a picked project derives `scope`
+  # from it rather than the form carrying a separate scope input.
   defp agent_attrs(params) do
     driver = Map.get(params, "driver", "acp")
+    project_id = params |> Map.get("project_id", "") |> blank_to_nil()
 
     params
     |> Map.put("roles", FormOptions.parse_roles(Map.get(params, "roles", "execute,review")))
     |> Map.put("harness", if(driver == "acp", do: Map.get(params, "harness")))
-    |> Map.put("scope", "org")
+    |> Map.put("project_id", project_id)
+    |> Map.put("scope", if(project_id, do: "project", else: "org"))
   end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp saved(socket, agent) do
     {:noreply,
@@ -263,6 +282,12 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   defp driver_label(%{driver: :acp, harness: harness}), do: "acp · #{harness}"
   defp driver_label(%{driver: driver}), do: to_string(driver)
+
+  defp scope_label(%{scope: :org}, _projects), do: "All projects"
+
+  defp scope_label(%{scope: :project, project_id: project_id}, projects) do
+    Enum.find_value(projects, "Unknown project", &(&1.id == project_id && &1.name))
+  end
 
   defp model_line(%{provider_id: provider_id, model_variant: variant}, providers) do
     name =

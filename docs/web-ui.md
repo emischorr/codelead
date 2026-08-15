@@ -15,9 +15,9 @@ what exists today.
 | `/settings` | `CodeLeadWeb.SettingsLive` (`:index`) | overview tiles with live counts |
 | `/settings/users` | `CodeLeadWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
-| `/settings/agents` | `CodeLeadWeb.SettingsLive.Agents` | org agents; `/new` and `/:id/edit` |
+| `/settings/agents` | `CodeLeadWeb.SettingsLive.Agents` | org- and project-scoped agents; `/new` and `/:id/edit` |
 | `/settings/projects` | `CodeLeadWeb.SettingsLive.Projects` | list; `/new` |
-| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, default reviewers |
+| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, this project's own agents, default reviewers |
 | `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
 | `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings |
@@ -88,10 +88,17 @@ callback never runs — `env_vars/1` would hand back every plaintext value.
 Both surfaces are write-only: a stored value can be replaced, never read
 back.
 
-Deferred here: project-scoped agents are not creatable or listed —
-`Agent.changeset/2` does not cast `project_id`, so scope cannot be
-changed through a form; moving an agent between scopes would need a
-dedicated `move_agent/2`. The Organization tile is a placeholder because
+The agent form's **Project** select drives `scope`: left on "All
+projects" the agent stays org-wide (`Agents.list_all_agents/0` and the
+row's scope badge both read this), picking a project sets `scope:
+:project` and casts `project_id` — `Agent.changeset/2` casts it directly,
+so moving an agent between scopes is a normal edit, not a dedicated
+function. The project detail page's **Agents** tile
+(`Agents.list_project_agents/1`) surfaces only that project's own
+agents — org-wide ones stay selectable there without cluttering the
+list — and links back to `/settings/agents` to manage or add one.
+
+Deferred here: the Organization tile is a placeholder because
 `Accounts.update_organization/1` replaces `settings` wholesale and would
 clobber `setup_done`; editing budgets there needs a merging setter first.
 

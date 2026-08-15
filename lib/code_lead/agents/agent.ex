@@ -40,8 +40,9 @@ defmodule CodeLead.Agents.Agent do
   end
 
   @doc """
-  Changeset for creating or updating an agent. `project_id` is set
-  programmatically by the context for project-scoped agents.
+  Changeset for creating or updating an agent. `project_id` binds it to
+  one project; leaving it blank (with `scope: :org`) keeps it selectable
+  everywhere — see `validate_scope/1`.
   """
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(agent, attrs) do
@@ -49,6 +50,7 @@ defmodule CodeLead.Agents.Agent do
     |> cast(attrs, [
       :name,
       :scope,
+      :project_id,
       :roles,
       :work_type,
       :driver,
