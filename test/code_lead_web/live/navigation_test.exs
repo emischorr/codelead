@@ -73,11 +73,11 @@ defmodule CodeLeadWeb.NavigationTest do
       refute card =~ "$10.39"
     end
 
-    test "the theme switch sits in the account row, not the page header",
+    test "the theme switch does not appear anywhere in the sidebar",
          %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
 
-      assert has_element?(view, "#account-card button[data-phx-theme]")
+      refute has_element?(view, "#account-card button[data-phx-theme]")
       refute has_element?(view, "header button[data-phx-theme]")
     end
   end

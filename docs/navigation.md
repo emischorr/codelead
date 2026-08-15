@@ -5,22 +5,24 @@ every authenticated page. This note records the contract it renders from,
 the rules for what is enabled where, and why the project selection is
 remembered the way it is.
 
-(last updated: 2026-08-14)
+(last updated: 2026-08-15)
 
 ## Two principles
 
-**1. The sidebar owns identity and app-wide preferences; the page header
-owns page context and page actions.**
+**1. The sidebar owns identity; the page header owns page context and page
+actions.**
 
 Each page's 58px header is an action bar for the thing you are looking at —
-its name, its live readouts, its buttons. Who you are signed in as and which
-theme you prefer are true everywhere, so they live at the foot of the
-sidebar, in `account_card/1`: avatar · theme switch · account · log out.
-Nothing about the signed-in user appears in a page header.
+its name, its live readouts, its buttons. Who you are signed in as is true
+everywhere, so it lives at the foot of the sidebar, in `account_card/1`:
+avatar · email · account · log out. Nothing about the signed-in user
+appears in a page header.
 
-`Layouts.auth/1` is the one exception, and only because it has no sidebar:
-the setup wizard and the log-in pages keep a theme switch in their own
-header.
+Theme is the one app-wide preference with its own switch, and the sidebar
+never owned it — it lives in `Layouts.auth/1`'s header for the pre-login
+setup wizard and log-in pages (no sidebar to hang it on yet), and on the
+profile page (`/users/settings`) once signed in, next to language and
+timezone.
 
 **2. Navigation never disappears; project-derived readouts do.**
 
@@ -119,11 +121,11 @@ short window scrolls the links and leaves the chrome intact. The aside
 itself must stay `overflow: visible` — the project selector's flyout
 escapes the column, and clipping it is the failure mode to watch for.
 
-The account row's middle slot holds the theme switch. On the no-projects
-welcome page — which renders `account_card/1` inside `Layouts.auth`, whose
-header already has one — pass `theme_toggle={false}` and the slot spells the
-email out instead. In the sidebar the email lives on the avatar's `title`,
-because the row has no width to spare.
+The account row is identity plus a way out: avatar (links to
+`/users/settings`) · email · settings gear (same link) · log out. It has no
+theme switch of its own — that lives on the profile page it links to. In
+the sidebar the email lives on the avatar's `title`, because the row has no
+width to spare.
 
 | Item | Inside a project | On a general page | No project exists |
 | --- | --- | --- | --- |
@@ -134,7 +136,7 @@ because the row has no width to spare.
 | Settings | link | link, highlighted on `/settings/*` | link |
 | Attention pill | shown when count > 0 | hidden | hidden |
 | Budget tile | shown | hidden | hidden |
-| Account row (avatar · theme · account · log out) | shown | shown | shown |
+| Account row (avatar · email · account · log out) | shown | shown | shown |
 
 Switching projects is only offered from a project page: the selector is a
 navigation control whose only destination is a board, and picking one from
@@ -151,10 +153,8 @@ places, all from the same markup, so an item added once appears everywhere:
 - **Desktop, collapsed** — 64px glyphs. Same items in the same order, labels
   hidden. Deliberate omissions: the **budget tile** and the **rate-limit
   tile**, neither of which can carry a label plus two meters in a 48px inner
-  column, and the **theme switch**, because a three-segment control does not
-  survive 48px and theme is a set-and-forget preference reachable from every
-  expanded page. Log-out stays — being unable to sign out on the task page
-  was a bug, not a design.
+  column. Log-out stays — being unable to sign out on the task page was a
+  bug, not a design.
 - **Mobile drawer** — always rendered, `lg:hidden`, opened by
   `Layouts.sidebar_toggle` from each page's own header. It renders a second
   copy, so its DOM ids are prefixed `m-` via `nav_id/2`. The drawer is

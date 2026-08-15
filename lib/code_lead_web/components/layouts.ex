@@ -398,20 +398,15 @@ defmodule CodeLeadWeb.Layouts do
   end
 
   @doc """
-  Signed-in identity, the theme switch, and the account actions. Rendered in
-  the sidebar and on the welcome page — every authenticated surface needs a
-  way out. Pass `theme_toggle={false}` where the surrounding shell already
-  offers one; the row then spells the email out instead.
+  Signed-in identity and the account actions. Rendered in the sidebar and on
+  the welcome page — every authenticated surface needs a way out.
 
-  Collapsed it becomes the avatar over the log-out button. The theme switch is
-  dropped: a three-segment control does not survive 48px, and theme is a
-  set-and-forget preference reachable from every expanded page. The `collapsed:`
+  Collapsed it becomes the avatar over the log-out button. The `collapsed:`
   classes are inert under `Layouts.auth`, which has no sidebar for the variant
   to match against.
   """
   attr :id, :string, default: "account-card"
   attr :user, :map, required: true
-  attr :theme_toggle, :boolean, default: true
 
   def account_card(assigns) do
     ~H"""
@@ -428,11 +423,7 @@ defmodule CodeLeadWeb.Layouts do
       >
         {String.first(@user.email)}
       </.link>
-      <.theme_toggle :if={@theme_toggle} class="mr-auto collapsed:hidden" />
-      <span
-        :if={!@theme_toggle}
-        class="min-w-0 flex-1 truncate text-[12.5px] text-text2 collapsed:hidden"
-      >
+      <span class="min-w-0 flex-1 truncate text-[12.5px] text-text2 collapsed:hidden">
         {@user.email}
       </span>
       <.link
@@ -609,6 +600,17 @@ defmodule CodeLeadWeb.Layouts do
   defp show_drawer(js \\ %JS{}), do: JS.remove_class(js, "hidden", to: "#mobile-drawer")
 
   defp hide_drawer(js \\ %JS{}), do: JS.add_class(js, "hidden", to: "#mobile-drawer")
+
+  # The signed-in user's timezone preference, baked into `root.html.heex` as
+  # a `data-timezone` attribute so the `.LocalTime` hook can read it without
+  # a round-trip. `""` means "follow the browser" — same as an anonymous
+  # request, where there is no user to read a preference from at all.
+  defp user_timezone(assigns) do
+    case assigns[:current_scope] do
+      %{user: %{settings: %{} = settings}} -> Map.get(settings, "timezone", "")
+      _no_signed_in_user -> ""
+    end
+  end
 
   @doc """
   Shows the flash group with standard titles and content.

@@ -136,6 +136,66 @@ defmodule CodeLeadWeb.FormOptions do
   @spec locales() :: [{String.t(), String.t()}]
   def locales, do: [{"English", "en"}]
 
+  @spec locale_values() :: [String.t()]
+  def locale_values, do: Enum.map(locales(), fn {_label, value} -> value end)
+
+  @doc """
+  Timezone options for the profile page. The first entry (`""`) means
+  "follow the browser" — actual conversion happens client-side via `Intl`,
+  which accepts any IANA zone name natively, so this list is just the
+  curated set offered in the select, not a completeness claim.
+  """
+  @spec timezones() :: [{String.t(), String.t()}]
+  def timezones do
+    [
+      {"Automatic (browser default)", ""},
+      {"UTC", "Etc/UTC"},
+      {"London", "Europe/London"},
+      {"Dublin", "Europe/Dublin"},
+      {"Lisbon", "Europe/Lisbon"},
+      {"Berlin, Paris, Madrid, Rome", "Europe/Berlin"},
+      {"Amsterdam, Brussels", "Europe/Amsterdam"},
+      {"Warsaw, Prague, Budapest", "Europe/Warsaw"},
+      {"Athens, Helsinki, Bucharest", "Europe/Athens"},
+      {"Moscow", "Europe/Moscow"},
+      {"Istanbul", "Europe/Istanbul"},
+      {"Cairo", "Africa/Cairo"},
+      {"Johannesburg", "Africa/Johannesburg"},
+      {"Lagos", "Africa/Lagos"},
+      {"Nairobi", "Africa/Nairobi"},
+      {"Dubai", "Asia/Dubai"},
+      {"Tehran", "Asia/Tehran"},
+      {"Karachi", "Asia/Karachi"},
+      {"Mumbai, New Delhi", "Asia/Kolkata"},
+      {"Dhaka", "Asia/Dhaka"},
+      {"Bangkok, Jakarta", "Asia/Bangkok"},
+      {"Singapore, Kuala Lumpur", "Asia/Singapore"},
+      {"Hong Kong", "Asia/Hong_Kong"},
+      {"Shanghai, Beijing", "Asia/Shanghai"},
+      {"Taipei", "Asia/Taipei"},
+      {"Tokyo, Seoul", "Asia/Tokyo"},
+      {"Manila", "Asia/Manila"},
+      {"Perth", "Australia/Perth"},
+      {"Adelaide", "Australia/Adelaide"},
+      {"Sydney, Melbourne, Brisbane", "Australia/Sydney"},
+      {"Auckland", "Pacific/Auckland"},
+      {"Honolulu", "Pacific/Honolulu"},
+      {"Anchorage", "America/Anchorage"},
+      {"Los Angeles, Vancouver (Pacific)", "America/Los_Angeles"},
+      {"Denver, Phoenix (Mountain)", "America/Denver"},
+      {"Chicago, Mexico City (Central)", "America/Chicago"},
+      {"New York, Toronto (Eastern)", "America/New_York"},
+      {"Halifax", "America/Halifax"},
+      {"São Paulo", "America/Sao_Paulo"},
+      {"Buenos Aires", "America/Argentina/Buenos_Aires"},
+      {"Santiago", "America/Santiago"},
+      {"Bogotá, Lima", "America/Bogota"}
+    ]
+  end
+
+  @spec timezone_values() :: [String.t()]
+  def timezone_values, do: Enum.map(timezones(), fn {_label, value} -> value end)
+
   @spec provider_options([%{name: String.t(), id: pos_integer()}]) :: [
           {String.t(), pos_integer()}
         ]
