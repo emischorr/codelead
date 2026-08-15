@@ -2,7 +2,7 @@
 # - docker buildx create --name multiarch --driver docker-container --use
 # - docker login ghcr.io
 # build & push it:
-# docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/code_lead:0.1.0 -t ghcr.io/emischorr/code_lead:latest --push .
+# docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/codelead:0.1.0 -t ghcr.io/emischorr/codelead:latest --push .
 
 ARG RELEASE_NAME=code_lead
 

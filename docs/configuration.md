@@ -220,8 +220,8 @@ bring-your-own there. See *Docker image* below.
 
 ## Docker image
 
-Published as `ghcr.io/emischorr/code_lead:latest` (multi-arch, amd64 and
-arm64). `docker build -t code_lead .` produces the same release image
+Published as `ghcr.io/emischorr/codelead:latest` (multi-arch, amd64 and
+arm64). `docker build -t codelead .` produces the same release image
 locally; it needs no manual harness install. The buildx invocation used to
 publish is in the `Dockerfile` header comment, and repeated with the rest of
 the deployment story in [`deployment.md`](deployment.md).
@@ -266,7 +266,7 @@ Extend the image with whatever the projects you point CodeLead at need to
 build and test themselves:
 
 ```dockerfile
-FROM ghcr.io/emischorr/code_lead:latest
+FROM ghcr.io/emischorr/codelead:latest
 USER root
 RUN apk add --no-cache elixir     # or nodejs npm / python3 / go / cargo …
 USER elixir

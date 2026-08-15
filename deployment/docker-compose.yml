@@ -15,7 +15,7 @@ services:
       retries: 5
 
   migrate:
-    image: ghcr.io/emischorr/code_lead:latest
+    image: ghcr.io/emischorr/codelead:latest
     command: ["/app/bin/migrate"]
     restart: "no"
     environment:
@@ -27,7 +27,7 @@ services:
         condition: service_healthy
 
   app:
-    image: ghcr.io/emischorr/code_lead:latest
+    image: ghcr.io/emischorr/codelead:latest
     command: ["/app/bin/server"]
     environment:
       DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
