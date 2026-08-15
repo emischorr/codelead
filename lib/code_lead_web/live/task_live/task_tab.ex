@@ -145,14 +145,25 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
     ~H"""
     <.section_card label="Description" id="description-card">
       <:actions :if={@editable? && !@editing?}>
-        <button
-          type="button"
-          phx-click="toggle_edit"
-          class="cursor-pointer text-xs font-semibold text-accent hover:underline"
-          id="toggle-edit"
-        >
-          Edit
-        </button>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            phx-click="toggle_edit"
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+            id="toggle-edit"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            phx-click="delete_task"
+            data-confirm="Delete this task? This can't be undone."
+            class="cursor-pointer text-xs font-semibold text-del-text hover:underline"
+            id="delete-task"
+          >
+            Delete
+          </button>
+        </div>
       </:actions>
 
       <div :if={!@editing?} id="task-description-view" class="flex flex-col gap-2.5">
