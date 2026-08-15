@@ -231,10 +231,13 @@ to read is not context the next run would inherit.
 
 Board notifications are owned by `CodeLead.Tasks` itself: every task
 write (transitions, `update_task`, archive/unarchive, attention
-changes) broadcasts `{:board_changed, project_id, task_id}` on
-`"project:<id>"`, so human and system changes alike sync open boards.
-Subscribe with `Tasks.subscribe_board(project_id)` /
+changes, `delete_task`) broadcasts `{:board_changed, project_id,
+task_id}` on `"project:<id>"`, so human and system changes alike sync
+open boards. Subscribe with `Tasks.subscribe_board(project_id)` /
 `Tasks.subscribe_task(task_id)` — those helpers own the topic names.
+A deleted task's own `TaskLive`, if still mounted (e.g. a second tab),
+finds the id already gone on the next `:board_changed` and redirects
+to the board rather than reloading it.
 
 A `permission_request` additionally stores the JSON-RPC request id in
 `task.attention.ref` (stringified; the `Acp` driver keys its pending

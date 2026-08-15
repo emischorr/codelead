@@ -325,7 +325,13 @@ above the bar instead of underneath it.
   `planning_changeset`; edit mode is the `editing?` assign toggled by
   `toggle_edit`, not a `JS.toggle` — a save or a background re-render
   would otherwise leave the form open over stale values, and
-  `load_task/1` conversely leaves an open form's contents alone),
+  `load_task/1` conversely leaves an open form's contents alone).
+  The same planning-only actions row carries `#delete-task`, a
+  `data-confirm`-guarded hard delete (`Tasks.delete_task/1`) that
+  redirects to the board on success and flashes
+  `FlashMessages.delete_error/1` on refusal — the guard is the context
+  function's `state in [:planning, :cancelled]` match, the UI only
+  shows the link in Planning,
   the planning surface (`#planner-form` selects
   a `:plan` agent from `Agents.eligible_planners/2`; an `:llm_api` pick
   shows `#chat-form` — `Planning.send_message/3` is synchronous →

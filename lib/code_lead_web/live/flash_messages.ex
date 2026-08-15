@@ -105,6 +105,9 @@ defmodule CodeLeadWeb.FlashMessages do
   def delete_error({:has_tasks, count}),
     do: "#{count} tasks still reference this. Delete or archive them first."
 
+  def delete_error(:not_deletable),
+    do: "This task can no longer be deleted — it has left Planning."
+
   def delete_error(other), do: "Delete failed: #{inspect(other)}"
 
   defp usage_summary(usage) do

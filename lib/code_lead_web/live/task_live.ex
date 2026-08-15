@@ -274,6 +274,19 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
+  def handle_event("delete_task", _params, socket) do
+    case Tasks.delete_task(socket.assigns.task) do
+      {:ok, _task} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Task deleted.")
+         |> push_navigate(to: ~p"/projects/#{socket.assigns.project.id}/board")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.delete_error(reason))}
+    end
+  end
+
   # The target form is a bare `phx-change` form, so `repository_id` is
   # simply absent while the target is `:folder`.
   def handle_event("set_target", params, socket) do
@@ -426,11 +439,19 @@ defmodule CodeLeadWeb.TaskLive do
     {:noreply, socket |> assign(diff_refresh_timer: nil) |> refresh_diff()}
   end
 
-  def handle_info({:board_changed, _project_id, task_id}, socket) do
-    if task_id == socket.assigns.task.id do
-      {:noreply, load_task(socket)}
-    else
-      {:noreply, socket}
+  def handle_info({:board_changed, project_id, task_id}, socket) do
+    cond do
+      task_id != socket.assigns.task.id ->
+        {:noreply, socket}
+
+      is_nil(Tasks.get_task(task_id)) ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "This task was deleted.")
+         |> push_navigate(to: ~p"/projects/#{project_id}/board")}
+
+      true ->
+        {:noreply, load_task(socket)}
     end
   end
 
