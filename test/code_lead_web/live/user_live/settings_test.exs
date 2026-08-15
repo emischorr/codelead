@@ -61,10 +61,13 @@ defmodule CodeLeadWeb.UserLive.SettingsTest do
 
       {:ok, view, _html} = conn |> log_in_user(user) |> live(~p"/users/settings")
 
+      # Submitted as a raw event rather than through `form/3`: the select can
+      # never offer this value, so LiveViewTest refuses to build the form with
+      # it. The server-side guard still has to hold for a crafted request.
       html =
-        view
-        |> form("#preferences-form", preferences: %{locale: "en", timezone: "Mars/Olympus_Mons"})
-        |> render_submit()
+        render_submit(view, "save_preferences", %{
+          "preferences" => %{"locale" => "en", "timezone" => "Mars/Olympus_Mons"}
+        })
 
       assert html =~ "is invalid"
       assert Accounts.get_user!(user.id).settings["timezone"] in [nil, ""]
