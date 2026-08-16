@@ -27,6 +27,17 @@ defmodule CodeLeadWeb.Router do
     plug :redirect_if_setup_done
   end
 
+  # The preview proxy carries arbitrary proxied traffic, so it skips the
+  # `:browser` conveniences that would mangle it — `:accepts` (asset
+  # requests would 406), CSRF (proxied POSTs would be rejected), and the
+  # secure browser headers (they'd stamp CodeLead's CSP onto proxied
+  # responses) — while keeping the same session auth as the app routes.
+  pipeline :preview do
+    plug :fetch_session
+    plug :fetch_current_scope_for_user
+    plug CodeLeadWeb.Plugs.RequirePreviewAccess
+  end
+
   ## First-run wizard
   #
   # Its own `live_session` so that finishing the wizard forces a full page
@@ -121,6 +132,17 @@ defmodule CodeLeadWeb.Router do
     # A download is a controller response, not a LiveView render, so it
     # sits outside the `live_session` — same pipeline, same gates.
     get "/projects/:project_id/tasks/:id/artifact", TaskArtifactController, :download
+  end
+
+  ## Preview proxy
+  #
+  # All verbs, any subpath — the previewed app's own links, forms,
+  # assets, and websocket upgrades all land here.
+
+  scope "/preview", CodeLeadWeb do
+    pipe_through :preview
+
+    match :*, "/:task_id/*path", PreviewProxyController, :proxy
   end
 
   # Other scopes may use custom stacks.

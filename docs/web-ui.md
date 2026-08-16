@@ -11,7 +11,8 @@ what exists today.
 | `/` | `CodeLeadWeb.DashboardLive` (`:index`) | org-wide dashboard; the onboarding card when no projects exist |
 | `/projects/:project_id/board` | `CodeLeadWeb.BoardLive` (`:index`) | the Kanban board |
 | `/projects/:project_id/board/new` | `CodeLeadWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
-| `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|diff\|terminal` |
+| `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
+| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers |
 | `/settings` | `CodeLeadWeb.SettingsLive` (`:index`) | overview tiles with live counts |
 | `/settings/users` | `CodeLeadWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
@@ -293,8 +294,9 @@ against `Agents.eligible_executors/2`.
 ## TaskLive
 
 Tab from `?tab=`, defaulting by state (planning→task, running→agent,
-review→diff, done→task). Tab bodies are plain `Phoenix.Component`
-modules under `task_live/` (`TaskTab`, `AgentTab`, `DiffTab`,
+review→review, done→task; the legacy `?tab=diff` param maps to
+`:review`). Tab bodies are plain `Phoenix.Component` modules under
+`task_live/` (`TaskTab`, `AgentTab`, `ReviewTab` + `PreviewPane`,
 `TerminalTab`). All actions go through `CodeLead.Runtime`; errors map
 to flashes.
 
@@ -468,7 +470,30 @@ above the bar instead of underneath it.
   was open would otherwise be lost. `feed_blocks` in assigns is the
   server-side copy that makes the re-stream (and collapse state)
   possible.
-- **Diff tab** — for repo targets with a worktree: `Git.diff/2` parsed
+- **Review tab** — two views behind a segmented toggle when the task's
+  repository declares a `preview_port` (nullable integer on
+  `repositories`): a **live preview** iframe on `/preview/:task_id/`
+  and the diff. `review_mode` defaults by work type on first entry —
+  `:design`/`:content` open on the preview, everything else on the
+  diff — and the user's toggle choice sticks for the LiveView's life.
+  Without a declared port the tab is exactly the old Diff tab plus a
+  one-line enablement hint (`#preview-hint`) linking to the project
+  settings. Diff loading stays lazy: nothing runs `git diff` while the
+  preview is primary and the diff view was never opened.
+
+  The preview pane (`PreviewPane`, hook `.PreviewFrame`) is a slim
+  toolbar over a same-origin iframe: back/forward/refresh drive
+  `contentWindow` directly, a read-only path readout strips the
+  `/preview/<id>` prefix, and open-in-new-tab is the devtools escape
+  hatch. Reviewer findings render in both modes (a collapsible strip
+  above the frame in preview mode). Known accepted quirks: iframe
+  navigation shares the parent's browser history (our toolbar buttons
+  are the mitigation), and the previewed app's cookies land on the
+  CodeLead origin (the proxy strips CodeLead's own session cookie from
+  the *forwarded* direction; `SubdomainProxy` is the real fix —
+  ADR-0008).
+
+  **Diff view** — for repo targets with a worktree: `Git.diff/2` parsed
   by `CodeLead.Git.Diff` in `start_async`; collapsible reviewer
   findings (latest cycle) above the diff. Folder targets show the task
   folder listing + `output.md` preview.
@@ -492,8 +517,9 @@ above the bar instead of underneath it.
   The diff refreshes live: an `{:agent_feed, _, row}` for which
   `AgentFeed.file_changing?/2` holds sets `diff_stale?` and arms a
   single 1.5s `Process.send_after` (`@diff_refresh_ms`). The timer is
-  only armed while the Diff tab is active — off-tab, staleness just
-  accumulates and `handle_params/3` picks it up on entry. `diff_stale?`
+  only armed while the Review tab is active *in diff mode* — off-tab
+  (or in preview mode), staleness just accumulates and
+  `handle_params/3` / the mode toggle picks it up on entry. `diff_stale?`
   clears when the load *starts*, so events arriving mid-diff re-arm on
   completion; a failed refresh keeps the diff already on screen and
   only logs. `#diff-refresh` forces one on demand.
@@ -514,8 +540,23 @@ above the bar instead of underneath it.
   guard. A capture-phase `scroll` listener is the backstop for scrollbar
   drags — that one is guarded by a 1s window so our own smooth scroll
   doesn't self-cancel. A `released` latch keeps one gesture to one push.
-- **Terminal tab** — static placeholder (worktree path + dark pane);
-  a real PTY is future work.
+- **Terminal tab** — a real shell into the task's execution context
+  once a worktree exists (placeholder copy otherwise). xterm.js
+  (vendored in `assets/vendor/xterm/`, imported by the colocated
+  `.Terminal` hook via esbuild's `@` alias) talks to
+  `CodeLead.Terminal` over the LiveView socket: the hook pushes
+  `terminal_ready` (initial cols/rows) and receives the scrollback in
+  the reply, keystrokes go up as base64 `terminal_input`, output comes
+  down as `terminal:data` push_events (dropped while the tab is
+  hidden — scrollback repaints on reattach). The per-task
+  `Terminal.Session` owns the shell Port, so a page refresh reattaches
+  to the same shell; leaving the tab detaches the viewer and the
+  session idles out after 15 minutes viewer-less. PTY via `script(1)`
+  in the target (host or container image), plain-pipe `sh -i` fallback
+  flagged in the status line; container sessions are license-gated and
+  self-heal the container (`ensure_for_task/1`). Sessions export
+  `TERM`/`COLUMNS`/`LINES`, the project env, and
+  `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN` (see ADR-0008).
 
 ## Demo data
 

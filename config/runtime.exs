@@ -96,6 +96,18 @@ config :code_lead,
   harness_version: System.get_env("HARNESS_VERSION", "0.66.0"),
   harness_source: System.get_env("HARNESS_SOURCE")
 
+# Live preview of container tasks. A task container with a declared
+# `preview_port` publishes it on PREVIEW_PUBLISH_IP with an ephemeral
+# host port; the in-app proxy dials PREVIEW_UPSTREAM_HOST on that port.
+# Loopback works when the BEAM runs on the docker host (dev). In the
+# deployed stack — app in a container, task containers as siblings on
+# the default bridge — set both to the docker bridge gateway (usually
+# 172.17.0.1) so the port stays off public interfaces but reachable
+# from the app container.
+config :code_lead,
+  preview_publish_ip: System.get_env("PREVIEW_PUBLISH_IP", "127.0.0.1"),
+  preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST", "127.0.0.1")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

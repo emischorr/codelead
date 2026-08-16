@@ -26,6 +26,7 @@ note is the "how it works today" map.
 | `CodeLead.AgentDriver` | `Acp` (harness over ACP, ADR-0001), `LlmApi` (one completion) | — (driver-independent of executor) |
 | `CodeLead.Executor` | `LocalSubprocess` (default) and `DockerContainer` (per-task opt-in, `Executor.for_task/1` on `tasks.execution_env`); `spawn/3` runs the agent *inside* the provisioned context ([ADR-0003](adr/0003-container-execution-model.md), [ADR-0004](adr/0004-container-executor-iteration-two.md)) | `:devcontainer`/`:dockerfile` env kinds |
 | `CodeLead.Scheduler` | `PassThrough` — an ordered `CodeLead.Scheduler.Gate` list (schedule → budget → capacity) | a `WindowGate` in the same list |
+| `CodeLead.PreviewGateway` | `PathProxy` — the Review tab frames `/preview/:task_id/` and `CodeLeadWeb.PreviewProxyController` reverse-proxies it (HTTP + websockets) to the task's dev server, resolved per execution env ([ADR-0008](adr/0008-preview-and-terminal.md)) | `SubdomainProxy` (per-task subdomains) |
 
 ## Runtime (processes)
 
@@ -55,6 +56,11 @@ note is the "how it works today" map.
   or the staging source is absent.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.
+- `CodeLead.Terminal.Session` — one GenServer per task with an open
+  Developer-terminal shell (DynamicSupervisor + Registry under
+  `CodeLead.Terminal`): owns the shell Port so the session survives
+  page refreshes, keeps a bounded scrollback, broadcasts on
+  `terminal:<id>`, idles out viewer-less (ADR-0008).
 - `CodeLead.Finalizer` — the system executor behind Approve → Done,
   dispatched on the task's target and its resolved finalize mode (PR,
   merge, squash, artifact, commit-to-path).

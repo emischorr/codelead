@@ -421,6 +421,77 @@ defmodule CodeLead.Executor.DockerContainerTest do
     end
   end
 
+  describe "preview port publishing" do
+    test "a declared preview port is published on loopback with an ephemeral host port", %{
+      log: log
+    } do
+      use_docker("absent")
+      %{task: task} = container_task_setup(%{preview_port: 5173})
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+
+      create = Enum.find(log_lines(log), &String.starts_with?(&1, "create "))
+      assert create =~ "-p 127.0.0.1:0:5173"
+    end
+
+    test "no declared port publishes nothing", %{log: log} do
+      use_docker("absent")
+      %{task: task} = container_task_setup()
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+
+      create = Enum.find(log_lines(log), &String.starts_with?(&1, "create "))
+      refute create =~ "-p "
+    end
+
+    test "a running container missing the declared binding is recreated", %{log: log} do
+      use_docker("running")
+      %{task: task} = container_task_setup(%{preview_port: 5173})
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+
+      lines = log_lines(log)
+      assert Enum.any?(lines, &String.starts_with?(&1, "rm -f codelead-task-#{task.id}"))
+      assert Enum.find(lines, &String.starts_with?(&1, "create ")) =~ "-p 127.0.0.1:0:5173"
+    end
+
+    test "a running container with the binding is reused", %{log: log} do
+      use_docker("running_published")
+      System.put_env("FAKE_DOCKER_PREVIEW_PORT", "5173")
+      on_exit(fn -> System.delete_env("FAKE_DOCKER_PREVIEW_PORT") end)
+
+      %{task: task} = container_task_setup(%{preview_port: 5173})
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+      refute Enum.any?(log_lines(log), &String.starts_with?(&1, "create "))
+    end
+
+    test "a live runner blocks the recreate — the agent's exec must survive", %{log: log} do
+      use_docker("running")
+      %{task: task} = container_task_setup(%{preview_port: 5173})
+
+      {:ok, _owner} = Registry.register(CodeLead.Runtime.Registry, task.id, nil)
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+
+      lines = log_lines(log)
+      refute Enum.any?(lines, &String.starts_with?(&1, "rm -f"))
+      refute Enum.any?(lines, &String.starts_with?(&1, "create "))
+    end
+  end
+
+  describe "ensure_for_task/1" do
+    test "recreates an externally removed container from the task id alone", %{log: log} do
+      use_docker("absent")
+      %{task: task} = container_task_setup()
+
+      assert {:ok, name} = DockerContainer.ensure_for_task(task.id)
+
+      assert name == "codelead-task-#{task.id}"
+      assert Enum.any?(log_lines(log), &String.starts_with?(&1, "create "))
+    end
+  end
+
   describe "diagnose/1" do
     test "reports external removal when the container is absent" do
       use_docker("absent")

@@ -14,6 +14,8 @@ defmodule CodeLead.Executor.DockerContainer.Bootstrap do
   alias CodeLead.Executor.DockerCli
   alias CodeLead.Executor.HarnessStaging
   alias CodeLead.Runtime.RunSupervisor
+  alias CodeLead.Tasks
+  alias CodeLead.Tasks.Task
 
   @spec run() :: :ok
   def run do
@@ -86,11 +88,26 @@ defmodule CodeLead.Executor.DockerContainer.Bootstrap do
   defp reap_line(line) do
     with [id, task_id] <- String.split(line, " ", parts: 2),
          {task_id_int, ""} <- Integer.parse(task_id),
-         false <- task_id_int in RunSupervisor.active_task_ids() do
+         false <- keep_container?(task_id_int) do
       _ = DockerCli.run(["rm", "-f", id])
       Logger.info("reaped orphan task container #{id} (task #{task_id_int})")
     else
-      _active_or_unparsable -> :ok
+      _kept_or_unparsable -> :ok
     end
+  end
+
+  # A task in Review has no runner but is still being judged — its
+  # container hosts reviewer execs, the Developer terminal, and the live
+  # preview, so a restart must not take it down (execs self-heal the
+  # container, but a dev server running inside it would not come back).
+  defp keep_container?(task_id) do
+    task_id in RunSupervisor.active_task_ids() or review_container?(task_id)
+  end
+
+  defp review_container?(task_id) do
+    match?(
+      %Task{state: :review, execution_env: :container},
+      Tasks.get_task(task_id)
+    )
   end
 end

@@ -26,6 +26,7 @@ defmodule CodeLead.Executor.DockerContainer do
   alias CodeLead.Executor.LocalSubprocess
   alias CodeLead.Executor.WorkspaceMount
   alias CodeLead.Projects
+  alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLead.Workspace
@@ -38,7 +39,14 @@ defmodule CodeLead.Executor.DockerContainer do
     with {:ok, image_ref} <- declared_image(repository),
          {:ok, context} <- LocalSubprocess.provision(task),
          :ok <- ensure_agent_home(task.id),
-         {:ok, name} <- ensure_container(task.id, task.project_id, image_ref, context.path) do
+         {:ok, name} <-
+           ensure_container(
+             task.id,
+             task.project_id,
+             image_ref,
+             context.path,
+             repository.preview_port
+           ) do
       {:ok, %{context | exec_ref: name, executor: __MODULE__}}
     end
   end
@@ -103,7 +111,7 @@ defmodule CodeLead.Executor.DockerContainer do
   def diagnose(task_id) do
     case container_state(container_name(task_id)) do
       :absent -> {:ok, "task container was removed externally — retry recreates it"}
-      {:stopped, _image} -> {:ok, "task container exited unexpectedly"}
+      {:stopped, _image, _bindings} -> {:ok, "task container exited unexpectedly"}
       _running_or_error -> :none
     end
   end
@@ -114,6 +122,32 @@ defmodule CodeLead.Executor.DockerContainer do
   """
   @spec container_name(pos_integer()) :: String.t()
   def container_name(task_id), do: "codelead-task-#{task_id}"
+
+  @doc """
+  Re-ensures the task's container from the task id alone — the entry
+  point for execs that arrive outside a run (Developer terminal,
+  preview), which must self-heal after external removal or a reaped
+  Review-state container.
+  """
+  @spec ensure_for_task(pos_integer()) :: {:ok, String.t()} | {:error, term()}
+  def ensure_for_task(task_id), do: ensure_container_for_spawn(task_id)
+
+  @doc """
+  The `-e` exec flags for a command in the task's container: the given
+  env plus the per-task base (HOME, git safe.directory) that must win
+  over same-named project-env keys.
+  """
+  @spec exec_env_flags(pos_integer(), [{String.t(), String.t()}]) :: [String.t()]
+  def exec_env_flags(task_id, env) do
+    base = [
+      {"HOME", Workspace.agent_home(task_id)},
+      {"GIT_CONFIG_COUNT", "1"},
+      {"GIT_CONFIG_KEY_0", "safe.directory"},
+      {"GIT_CONFIG_VALUE_0", "*"}
+    ]
+
+    Enum.flat_map(env ++ base, fn {key, value} -> ["-e", "#{key}=#{value}"] end)
+  end
 
   defp declared_image(%{env_kind: :image, image_ref: ref}) when is_binary(ref) and ref != "" do
     {:ok, ref}
@@ -167,42 +201,68 @@ defmodule CodeLead.Executor.DockerContainer do
     with {:ok, image_ref} <- declared_image(repository),
          :ok <- ensure_agent_home(task_id) do
       workdir = task.worktree_path || Workspace.worktree_path(task_id)
-      ensure_container(task_id, task.project_id, image_ref, workdir)
+      ensure_container(task_id, task.project_id, image_ref, workdir, repository.preview_port)
     end
   end
 
-  defp ensure_container(task_id, project_id, image_ref, workdir) do
+  defp ensure_container(task_id, project_id, image_ref, workdir, preview_port) do
     name = container_name(task_id)
 
-    case container_state(name) do
-      {:running, ^image_ref} ->
-        {:ok, name}
+    recreate = fn ->
+      create_container(name, task_id, project_id, image_ref, workdir, preview_port)
+    end
 
-      {:stopped, ^image_ref} ->
-        start_container(name)
+    case container_state(name) do
+      {:running, ^image_ref, bindings} ->
+        if stale_preview_binding?(bindings, preview_port, task_id) do
+          remove_container(task_id)
+          recreate.()
+        else
+          {:ok, name}
+        end
+
+      {:stopped, ^image_ref, bindings} ->
+        if stale_preview_binding?(bindings, preview_port, task_id) do
+          remove_container(task_id)
+          recreate.()
+        else
+          start_container(name)
+        end
 
       :absent ->
-        create_container(name, task_id, project_id, image_ref, workdir)
+        recreate.()
 
       {:error, reason} ->
         {:error, reason}
 
-      {_state, _other_image} ->
+      {_state, _other_image, _bindings} ->
         # The repository's image_ref changed since the container was
         # created — cattle: recreate from the declared image.
         remove_container(task_id)
-        create_container(name, task_id, project_id, image_ref, workdir)
+        recreate.()
     end
   end
 
+  # A declared preview port with no published binding means the port was
+  # declared (or changed) after the container was created. Recreating is
+  # only safe with no live runner — killing the agent's exec to gain a
+  # port binding is the wrong trade; until the next run, the preview's
+  # error page explains itself.
+  defp stale_preview_binding?(_bindings, nil, _task_id), do: false
+
+  defp stale_preview_binding?(bindings, preview_port, task_id) do
+    not Map.has_key?(bindings, "#{preview_port}/tcp") and
+      task_id not in RunSupervisor.active_task_ids()
+  end
+
   defp container_state(name) do
-    format = "{{.State.Running}}|{{.Config.Image}}"
+    format = "{{.State.Running}}|{{.Config.Image}}|{{json .HostConfig.PortBindings}}"
 
     case DockerCli.run(["container", "inspect", "--format", format, name]) do
       {:ok, output} ->
-        case output |> String.trim() |> String.split("|", parts: 2) do
-          ["true", image] -> {:running, image}
-          [_not_running, image] -> {:stopped, image}
+        case output |> String.trim() |> String.split("|", parts: 3) do
+          ["true", image, bindings] -> {:running, image, parse_bindings(bindings)}
+          [_not_running, image, bindings] -> {:stopped, image, parse_bindings(bindings)}
         end
 
       {:error, {:docker, _status, output}} ->
@@ -217,7 +277,14 @@ defmodule CodeLead.Executor.DockerContainer do
     end
   end
 
-  defp create_container(name, task_id, project_id, image_ref, workdir) do
+  defp parse_bindings(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = bindings} -> bindings
+      _null_or_invalid -> %{}
+    end
+  end
+
+  defp create_container(name, task_id, project_id, image_ref, workdir, preview_port) do
     # 2147483647s (~68y) instead of `sleep infinity`, which BusyBox
     # does not support.
     args =
@@ -234,12 +301,25 @@ defmodule CodeLead.Executor.DockerContainer do
         WorkspaceMount.flags() ++
         user_flags() ++
         cap_flags() ++
+        publish_flags(preview_port) ++
         [image_ref, "2147483647"]
 
     with :ok <- ensure_image(image_ref),
          {:ok, _output} <- create(args) do
       start_container(name)
     end
+  end
+
+  # An ephemeral host port (`:0`) on a non-public interface: loopback in
+  # dev, the docker bridge gateway in a deployed stack. Two tasks of the
+  # same repo never collide, and nothing is exposed beyond the host —
+  # browsers reach the preview only through the authenticated proxy,
+  # which resolves the bound port via `docker port`.
+  defp publish_flags(nil), do: []
+
+  defp publish_flags(preview_port) do
+    publish_ip = Application.get_env(:code_lead, :preview_publish_ip, "127.0.0.1")
+    ["-p", "#{publish_ip}:0:#{preview_port}"]
   end
 
   defp ensure_image(image_ref) do
@@ -323,18 +403,8 @@ defmodule CodeLead.Executor.DockerContainer do
 
   # The merged env (project env + provider creds, assembled by the
   # driver) as exec flags — fresh every spawn, nothing baked into the
-  # container's config. HOME and the git safe.directory override come
-  # last so they win over any project-env key of the same name.
-  defp env_flags(%Context{task_id: task_id, env: env}) do
-    base = [
-      {"HOME", Workspace.agent_home(task_id)},
-      {"GIT_CONFIG_COUNT", "1"},
-      {"GIT_CONFIG_KEY_0", "safe.directory"},
-      {"GIT_CONFIG_VALUE_0", "*"}
-    ]
-
-    Enum.flat_map(env ++ base, fn {key, value} -> ["-e", "#{key}=#{value}"] end)
-  end
+  # container's config.
+  defp env_flags(%Context{task_id: task_id, env: env}), do: exec_env_flags(task_id, env)
 
   # The CLI's wording for "no daemon at the other end" has changed across
   # versions and differs per transport, so match every form we have seen

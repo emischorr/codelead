@@ -10,6 +10,9 @@
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";
 
+/* Vendored xterm.js styles for the task page's Terminal tab. */
+@import "../vendor/xterm/xterm.css";
+
 /* Self-hosted variable fonts (app is local-only; external font CDNs are not used) */
 @font-face {
   font-family: "DM Sans";
