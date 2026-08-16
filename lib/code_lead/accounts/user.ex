@@ -11,6 +11,7 @@ defmodule CodeLead.Accounts.User do
   @type t :: %__MODULE__{}
 
   schema "users" do
+    field :username, :string
     field :email, :string
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
@@ -26,17 +27,61 @@ defmodule CodeLead.Accounts.User do
   @doc """
   Changeset for the profile fields. `role` is set programmatically and is
   never cast here.
+
+  `username` is the login identifier and is always required. `email` is
+  optional — it only matters for the magic-link/invite flow, which an
+  instance may not use at all.
+
+  ## Options
+
+    * `:validate_unique` - Set to false to skip the uniqueness queries,
+      useful for cheap live validation. Defaults to `true`.
   """
-  @spec changeset(t(), map()) :: Ecto.Changeset.t()
-  def changeset(user, attrs) do
+  @spec changeset(t(), map(), keyword()) :: Ecto.Changeset.t()
+  def changeset(user, attrs, opts \\ []) do
     user
-    |> cast(attrs, [:email, :locale, :settings])
-    |> validate_required([:email])
-    |> validate_format(:email, ~r/^[^@,;\s]+@[^@,;\s]+$/,
-      message: "must have the @ sign and no spaces"
-    )
-    |> validate_length(:email, max: 160)
-    |> unique_constraint(:email)
+    |> cast(attrs, [:username, :email, :locale, :settings])
+    |> validate_username(opts)
+    |> validate_optional_email(opts)
+  end
+
+  defp validate_username(changeset, opts) do
+    changeset =
+      changeset
+      |> validate_required([:username])
+      |> validate_format(:username, ~r/^[a-zA-Z0-9_.-]+$/,
+        message: "may only contain letters, numbers, underscores, dots and hyphens"
+      )
+      |> validate_length(:username, min: 3, max: 39)
+
+    if Keyword.get(opts, :validate_unique, true) do
+      changeset
+      |> unsafe_validate_unique(:username, CodeLead.Repo)
+      |> unique_constraint(:username)
+    else
+      changeset
+    end
+  end
+
+  defp validate_optional_email(changeset, opts) do
+    changeset =
+      changeset
+      |> update_change(:email, fn
+        "" -> nil
+        email -> email
+      end)
+      |> validate_format(:email, ~r/^[^@,;\s]+@[^@,;\s]+$/,
+        message: "must have the @ sign and no spaces"
+      )
+      |> validate_length(:email, max: 160)
+
+    if Keyword.get(opts, :validate_unique, true) do
+      changeset
+      |> unsafe_validate_unique(:email, CodeLead.Repo)
+      |> unique_constraint(:email)
+    else
+      changeset
+    end
   end
 
   @doc """

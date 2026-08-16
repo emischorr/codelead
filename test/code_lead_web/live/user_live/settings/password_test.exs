@@ -50,7 +50,7 @@ defmodule CodeLeadWeb.UserLive.Settings.PasswordTest do
       form =
         form(lv, "#password-form", %{
           "user" => %{
-            "email" => user.email,
+            "username" => user.username,
             "password" => new_password,
             "password_confirmation" => new_password
           }
@@ -67,7 +67,7 @@ defmodule CodeLeadWeb.UserLive.Settings.PasswordTest do
       assert Phoenix.Flash.get(new_password_conn.assigns.flash, :info) =~
                "Password updated successfully"
 
-      assert Accounts.get_user_by_email_and_password(user.email, new_password)
+      assert Accounts.get_user_by_username_and_password(user.username, new_password)
     end
 
     test "renders errors with invalid data (phx-change)", %{conn: conn} do

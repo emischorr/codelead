@@ -418,13 +418,13 @@ defmodule CodeLeadWeb.Layouts do
         id={"#{@id}-avatar"}
         navigate={~p"/users/settings"}
         class="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-surface2 font-mono text-[11px] font-semibold uppercase text-text2"
-        title={@user.email}
-        aria-label={"Your account (#{@user.email})"}
+        title={@user.username}
+        aria-label={"Your account (#{@user.username})"}
       >
-        {String.first(@user.email)}
+        {String.first(@user.username)}
       </.link>
       <span class="min-w-0 flex-1 truncate text-[12.5px] text-text2 collapsed:hidden">
-        {@user.email}
+        {@user.username}
       </span>
       <.link
         id={"#{@id}-settings"}

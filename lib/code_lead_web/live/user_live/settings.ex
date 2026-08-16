@@ -34,11 +34,15 @@ defmodule CodeLeadWeb.UserLive.Settings do
             Manage your email, password, and personal preferences.
           </p>
 
+          <.section_card label="Username">
+            <p class="text-[13px] text-text2">{@current_username}</p>
+          </.section_card>
+
           <.section_card label="Email">
             <:actions>
               <.button navigate={~p"/users/settings/email"}>Change email</.button>
             </:actions>
-            <p class="text-[13px] text-text2">{@current_email}</p>
+            <p class="text-[13px] text-text2">{@current_email || "Not set"}</p>
           </.section_card>
 
           <.section_card label="Password">
@@ -90,6 +94,7 @@ defmodule CodeLeadWeb.UserLive.Settings do
 
     {:ok,
      socket
+     |> assign(:current_username, user.username)
      |> assign(:current_email, user.email)
      |> assign(:preferences_form, to_form(preferences_changeset(user, %{}), as: "preferences"))}
   end
