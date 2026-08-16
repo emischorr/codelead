@@ -83,13 +83,16 @@ defmodule CodeLead.Projects do
   end
 
   @doc """
-  Links a git repository to a project.
+  Links a git repository to a project. The first repository linked to a
+  project becomes its default automatically; later ones are not, until
+  `set_default_repository/1` moves it.
   """
   @spec link_repository(pos_integer(), map()) ::
           {:ok, Repository.t()} | {:error, Ecto.Changeset.t()}
   def link_repository(project_id, attrs) do
     %Repository{project_id: project_id}
     |> Repository.changeset(attrs)
+    |> Ecto.Changeset.put_change(:is_default, first_repository?(project_id))
     |> Repo.insert()
   end
 
@@ -155,17 +158,40 @@ defmodule CodeLead.Projects do
   end
 
   @doc """
-  Returns the first linked repository of a project — the default for new
-  `:repo`-target tasks — or nil.
+  The project's default repository — what a new `:repo`-target task
+  prefills — or nil when none is linked. Falls back to the first linked
+  repository by insertion order if, somehow, none is marked default, so
+  callers never see `nil` while repositories exist.
   """
   @spec default_repository(pos_integer()) :: Repository.t() | nil
   def default_repository(project_id) do
     Repo.one(
       from r in Repository,
         where: r.project_id == ^project_id,
-        order_by: [asc: r.id],
+        order_by: [desc: r.is_default, asc: r.id],
         limit: 1
     )
+  end
+
+  @doc """
+  Marks a repository as its project's default, atomically clearing the
+  flag off every other repository in the project — exactly one
+  repository can be default, enforced by a partial unique index.
+  """
+  @spec set_default_repository(Repository.t()) ::
+          {:ok, Repository.t()} | {:error, Ecto.Changeset.t()}
+  def set_default_repository(%Repository{id: id, project_id: project_id}) do
+    Repo.transact(fn ->
+      Repo.update_all(
+        from(r in Repository, where: r.project_id == ^project_id and r.id != ^id),
+        set: [is_default: false]
+      )
+
+      Repository
+      |> Repo.get!(id)
+      |> Ecto.Changeset.change(is_default: true)
+      |> Repo.update()
+    end)
   end
 
   @doc """
@@ -363,4 +389,8 @@ defmodule CodeLead.Projects do
 
   defp tag_error({:error, changeset}, tag), do: {:error, {tag, changeset}}
   defp tag_error(result, _tag), do: result
+
+  defp first_repository?(project_id) do
+    not Repo.exists?(from r in Repository, where: r.project_id == ^project_id)
+  end
 end

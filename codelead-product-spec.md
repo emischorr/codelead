@@ -135,7 +135,7 @@ A Done task can be **archived** to clear it from the board without deleting it (
 
 ## 7. Tasks in depth
 
-- **One target per task.** A `repo`-target task works in exactly **one** repository (defaults to the project's first linked repo). Work that spans repos should be **split** into one task per repo (see below); multi-repo tasks are out of scope for MVP.
+- **One target per task.** A `repo`-target task works in exactly **one** repository (defaults to the project's default repo — the first one linked, or whichever a project with several has marked default). Work that spans repos should be **split** into one task per repo (see below); multi-repo tasks are out of scope for MVP.
 - **Splitting (manual in MVP):** the user creates one task per repo/piece. The original umbrella task can't run (it spans repos), so it is either kept in Planning as a reference note or **deleted**. Parent/epic + sub-tasks is a later feature.
 - **Delete:** a task with **no pushed artifacts** (in Planning, or Cancelled) can be deleted outright. This is distinct from **archive**, which retains a finished (Done) task.
 - **Multi-run:** a `repo`-target task keeps one persistent worktree + feature branch that accumulates commits across review iterations — except the send-back-to-Planning reset. Each run is recorded as an audit step.
@@ -246,6 +246,6 @@ In Planning only the Task tab is populated; the Agent / Review / Developer tabs 
 
 - **Settings** (instance / admin): users, providers + credentials, organization budget limits, instance config (e.g. max concurrent runs).
 - **Profile** (per user): language, theme (light/dark), UI preferences.
-- **Projects**: create/edit projects, link repositories, project env store, project budget limits, project **default reviewers** per work type, and an editable **PR template** for the description used when Approve opens a pull request (defaults to a built-in template).
+- **Projects**: create/edit projects, link repositories (mark one the project's **default repository** for `:repo`-target tasks), project env store, project budget limits, project **default reviewers** per work type, and an editable **PR template** for the description used when Approve opens a pull request (defaults to a built-in template).
 - **Agents**: create/edit agents — roles, work type, driver, harness, provider + model, system prompt, memory (seam) — with a scope selector for org vs project.
 

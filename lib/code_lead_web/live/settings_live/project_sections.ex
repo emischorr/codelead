@@ -152,6 +152,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   """
   attr :repositories, :list, required: true
   attr :project_id, :integer, required: true
+  attr :default_repository_name, :string, default: nil
 
   def repositories(assigns) do
     ~H"""
@@ -184,6 +185,20 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
               container: {repository.image_ref}
             </.badge>
           </:badges>
+          <:meta>
+            <span :if={repository.is_default}>This repo is the default</span>
+            <span :if={!repository.is_default}>
+              {@default_repository_name} is the default repo.
+              <button
+                type="button"
+                phx-click="set_default_repository"
+                phx-value-id={repository.id}
+                class="font-medium text-text2 underline decoration-border underline-offset-2 hover:text-text"
+              >
+                Make this the default
+              </button>
+            </span>
+          </:meta>
           <:actions>
             <.button patch={~p"/settings/projects/#{@project_id}/repositories/#{repository.id}/edit"}>
               Edit
