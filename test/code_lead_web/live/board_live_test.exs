@@ -122,7 +122,33 @@ defmodule CodeLeadWeb.BoardLiveTest do
                ~s(#new-task-form select[name="task[repository_id]"] option[value="#{default.id}"][selected])
              )
 
-      refute has_element?(view, ~s(#new-task-form select[name="task[repository_id]"] option[value=""]))
+      refute has_element?(
+               view,
+               ~s(#new-task-form select[name="task[repository_id]"] option[value=""])
+             )
+    end
+
+    test "closing an empty form needs no confirmation", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board/new")
+
+      refute has_element?(view, "[data-confirm]")
+    end
+
+    test "closing a form with unsaved text asks for confirmation first", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board/new")
+
+      view
+      |> form("#new-task-form", task: %{title: "Draft task"})
+      |> render_change()
+
+      assert has_element?(
+               view,
+               "a[data-confirm='Discard this task? Your changes will be lost.']"
+             )
     end
   end
 
