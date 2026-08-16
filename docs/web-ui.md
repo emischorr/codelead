@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-15)
+# Web UI (last updated: 2026-08-16)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -21,7 +21,7 @@ what exists today.
 | `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, this project's own agents, default reviewers |
 | `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
-| `/users/*` | `CodeLeadWeb.UserLive.*` | log in, magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
+| `/users/*` | `CodeLeadWeb.UserLive.*` | log in (username/password by default, email magic-link opt-in), magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
 
 The project detail page also carries four patch-based sub-routes:
 `/repositories/new`, `/repositories/:repository_id/edit`, `/env/new`

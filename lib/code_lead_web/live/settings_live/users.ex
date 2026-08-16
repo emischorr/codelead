@@ -1,9 +1,11 @@
 defmodule CodeLeadWeb.SettingsLive.Users do
   @moduledoc """
   User management. With `/users/register` closed, this is the only way to add
-  a person to the instance: either with an initial password, or with a
-  magic-link invite. The invite lands on the same `/users/log-in/:token` screen
-  the login page uses, but carries its own longer-lived token context.
+  a person to the instance: either with an initial password (the default —
+  works with no email at all), or with a magic-link invite for instances
+  that have a working mail adapter. The invite lands on the same
+  `/users/log-in/:token` screen the login page uses, but carries its own
+  longer-lived token context.
 
   `role` is shown but not editable — the field is stored and nothing in the
   app authorizes on it, so offering a select would advertise enforcement that
@@ -50,7 +52,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   def handle_event("save", %{"user" => params}, %{assigns: %{live_action: :new}} = socket) do
     access = Map.get(params, "access", "password")
 
-    case Accounts.create_user(user_attrs(params, access)) do
+    case create_user_for_access(access, user_attrs(params, access)) do
       {:ok, user} ->
         {:noreply,
          socket
@@ -91,7 +93,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
     else
       case id |> Accounts.get_user!() |> Accounts.delete_user() do
         {:ok, user} ->
-          {:noreply, socket |> put_flash(:info, "#{user.email} deleted.") |> load_users()}
+          {:noreply, socket |> put_flash(:info, "#{user.username} deleted.") |> load_users()}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, FlashMessages.delete_error(reason))}
@@ -120,8 +122,8 @@ defmodule CodeLeadWeb.SettingsLive.Users do
               <.list_row
                 :for={user <- @users}
                 id={"user-row-#{user.id}"}
-                title={user.email}
-                subtitle={access_summary(user)}
+                title={user.username}
+                subtitle={row_subtitle(user)}
               >
                 <:badges>
                   <.badge variant={if user.role == :admin, do: :accent, else: :neutral}>
@@ -146,7 +148,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
                     id={"delete-user-#{user.id}"}
                     value={user.id}
                     reason={delete_reason(user, @current_scope.user, @users)}
-                    confirm={"Delete #{user.email}? They lose access immediately."}
+                    confirm={"Delete #{user.username}? They lose access immediately."}
                   />
                 </:actions>
               </.list_row>
@@ -163,13 +165,20 @@ defmodule CodeLeadWeb.SettingsLive.Users do
       >
         <.form for={@form} id="user-form" phx-change="validate" phx-submit="save">
           <.input
-            field={@form[:email]}
-            type="email"
-            label="Email"
+            field={@form[:username]}
+            type="text"
+            label="Username"
             autocomplete="off"
             spellcheck="false"
             required
             phx-mounted={JS.focus()}
+          />
+          <.input
+            field={@form[:email]}
+            type="email"
+            label="Email (optional)"
+            autocomplete="off"
+            spellcheck="false"
           />
           <div :if={@live_action == :new}>
             <.input
@@ -202,8 +211,8 @@ defmodule CodeLeadWeb.SettingsLive.Users do
             </div>
 
             <p :if={@access == "invite"} class="mb-4 text-[12px] leading-relaxed text-text3">
-              They get an email with a one-time login link that expires in 72 hours. Use
-              <span class="font-semibold">Resend invite</span>
+              Needs the email above. They get a one-time login link that expires in 72 hours.
+              Use <span class="font-semibold">Resend invite</span>
               from the list if it lapses.{dev_mailbox_hint()}
             </p>
           </div>
@@ -245,6 +254,21 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   defp user_attrs(params, _invite),
     do: Map.drop(params, ["access", "password", "password_confirmation"])
 
+  # A magic-link invite needs somewhere to send the link, which the schema
+  # itself no longer requires — that's a rule of this specific UI action, not
+  # of a user in general, so it's enforced here rather than in the changeset.
+  defp create_user_for_access("invite", %{"email" => email} = attrs) when email in [nil, ""] do
+    changeset =
+      %User{}
+      |> Accounts.change_user(attrs)
+      |> Ecto.Changeset.add_error(:email, "is required to send an invite")
+      |> Map.put(:action, :validate)
+
+    {:error, changeset}
+  end
+
+  defp create_user_for_access(_access, attrs), do: Accounts.create_user(attrs)
+
   defp maybe_invite(socket, user, "invite") do
     deliver_invite(user)
     socket
@@ -256,10 +280,15 @@ defmodule CodeLeadWeb.SettingsLive.Users do
     Accounts.deliver_invite_instructions(user, &url(~p"/users/log-in/#{&1}"))
   end
 
-  defp created_message(%{email: email}, "invite"), do: "#{email} invited — login link sent."
-  defp created_message(%{email: email}, _password), do: "#{email} added."
+  defp created_message(%{username: username}, "invite"),
+    do: "#{username} invited — login link sent."
+
+  defp created_message(%{username: username}, _password), do: "#{username} added."
 
   ## Row copy
+
+  defp row_subtitle(%{email: nil} = user), do: access_summary(user)
+  defp row_subtitle(%{email: email} = user), do: "#{access_summary(user)} · #{email}"
 
   defp access_summary(%{hashed_password: hash}) when is_binary(hash), do: "Password set"
   defp access_summary(_user), do: "Magic link only"

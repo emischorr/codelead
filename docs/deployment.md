@@ -399,7 +399,10 @@ Known gaps that change how you'd deploy this:
 - **Outbound email does not work.** Production has no mail adapter
   configured (`config/config.exs` sets Swoosh's local adapter, whose preview
   route is dev-only), so magic-link invites and email-change confirmations go
-  nowhere. Create users with a password from Settings → Users.
+  nowhere. This is not a blocker: username + password (set from
+  `/setup` and `/settings/users`) is the default way to create and log in
+  to accounts and needs no email at all. Email only matters if you
+  configure a real mail adapter and want the magic-link/invite path too.
 - **There is no health-check endpoint.** No `/health` route exists, and the
   compose file has no healthcheck on `app` — an orchestrator has nothing to
   probe but the TCP port.

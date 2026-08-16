@@ -95,7 +95,7 @@ defmodule CodeLeadWeb.SetupLive do
         <Steps.agent :if={@step == :agent} form={@agent_form} providers={@providers} />
         <Steps.finish
           :if={@step == :finish}
-          admin_email={@admin_email}
+          admin_username={@admin_username}
           providers={@providers}
           projects={@projects}
           agents?={@agents?}
@@ -234,13 +234,13 @@ defmodule CodeLeadWeb.SetupLive do
       providers: providers,
       projects: projects,
       agents?: agents?,
-      admin_email: admin_email()
+      admin_username: admin_username()
     )
   end
 
-  defp admin_email do
+  defp admin_username do
     case Accounts.list_users() do
-      [user | _rest] -> user.email
+      [user | _rest] -> user.username
       [] -> nil
     end
   end

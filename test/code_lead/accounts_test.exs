@@ -64,23 +64,31 @@ defmodule CodeLead.AccountsTest do
   end
 
   describe "register_admin/1" do
-    test "creates a confirmed admin with a password" do
+    test "creates a confirmed admin with a password and no email" do
       assert {:ok, user} =
                Accounts.register_admin(%{
-                 email: "admin@example.com",
+                 username: "admin",
                  password: "a-very-long-password"
                })
 
       assert user.role == :admin
       assert %DateTime{} = user.confirmed_at
-      assert Accounts.get_user_by_email_and_password("admin@example.com", "a-very-long-password")
+      refute user.email
+      assert Accounts.get_user_by_username_and_password("admin", "a-very-long-password")
     end
 
     test "rejects a short password" do
       assert {:error, changeset} =
-               Accounts.register_admin(%{email: "admin@example.com", password: "short"})
+               Accounts.register_admin(%{username: "admin", password: "short"})
 
       assert %{password: _} = errors_on(changeset)
+    end
+
+    test "rejects a missing username" do
+      assert {:error, changeset} =
+               Accounts.register_admin(%{password: "a-very-long-password"})
+
+      assert %{username: _} = errors_on(changeset)
     end
 
     test "refuses once any user exists" do
@@ -88,26 +96,50 @@ defmodule CodeLead.AccountsTest do
 
       assert {:error, :already_registered} =
                Accounts.register_admin(%{
-                 email: "admin@example.com",
+                 username: "admin",
                  password: "a-very-long-password"
                })
     end
   end
 
   describe "users" do
-    test "create_user/1 with valid email" do
-      assert {:ok, %User{role: :member}} = Accounts.create_user(%{email: "a@b.de"})
+    test "create_user/1 with just a username" do
+      assert {:ok, %User{role: :member} = user} = Accounts.create_user(%{username: "abe"})
+      refute user.email
+    end
+
+    test "create_user/1 requires a username" do
+      assert {:error, changeset} = Accounts.create_user(%{email: "a@b.de"})
+      assert %{username: _} = errors_on(changeset)
     end
 
     test "create_user/1 rejects malformed email" do
-      assert {:error, changeset} = Accounts.create_user(%{email: "not an email"})
+      assert {:error, changeset} =
+               Accounts.create_user(%{username: "abe", email: "not an email"})
+
       assert %{email: _} = errors_on(changeset)
     end
 
-    test "emails are unique" do
+    test "create_user/1 accepts a blank email as no email at all" do
+      assert {:ok, user} = Accounts.create_user(%{username: "abe", email: ""})
+      assert is_nil(user.email)
+    end
+
+    test "usernames are unique" do
       user = user_fixture()
-      assert {:error, changeset} = Accounts.create_user(%{email: user.email})
+      assert {:error, changeset} = Accounts.create_user(%{username: user.username})
+      assert %{username: _} = errors_on(changeset)
+    end
+
+    test "emails are unique when present" do
+      user = user_fixture()
+      assert {:error, changeset} = Accounts.create_user(%{username: "another", email: user.email})
       assert %{email: _} = errors_on(changeset)
+    end
+
+    test "two users can both have no email" do
+      assert {:ok, _} = Accounts.create_user(%{username: "abe"})
+      assert {:ok, _} = Accounts.create_user(%{username: "bea"})
     end
 
     test "get_user_by_email/1 finds the user" do
@@ -116,9 +148,15 @@ defmodule CodeLead.AccountsTest do
       assert Accounts.get_user_by_email("missing@example.com") == nil
     end
 
+    test "get_user_by_username/1 finds the user" do
+      user = user_fixture()
+      assert Accounts.get_user_by_username(user.username).id == user.id
+      assert Accounts.get_user_by_username("missing") == nil
+    end
+
     test "create_user/1 with a password sets the hash and confirms the account" do
       assert {:ok, user} =
-               Accounts.create_user(%{email: "pw@b.de", password: "hello world!123"})
+               Accounts.create_user(%{username: "abe", password: "hello world!123"})
 
       assert user.confirmed_at
       assert User.valid_password?(user, "hello world!123")
@@ -127,7 +165,8 @@ defmodule CodeLead.AccountsTest do
     # `login_user_by_magic_link/1` raises for an unconfirmed user that has a
     # password, so the confirm on the password path is load-bearing.
     test "create_user/1 with a password still allows a later magic-link login" do
-      {:ok, user} = Accounts.create_user(%{email: "pw@b.de", password: "hello world!123"})
+      {:ok, user} =
+        Accounts.create_user(%{username: "abe", email: "pw@b.de", password: "hello world!123"})
 
       token =
         extract_user_token(fn url ->
@@ -139,14 +178,16 @@ defmodule CodeLead.AccountsTest do
     end
 
     test "create_user/1 without a password leaves the invite path open" do
-      assert {:ok, user} = Accounts.create_user(%{email: "invite@b.de"})
+      assert {:ok, user} = Accounts.create_user(%{username: "abe", email: "invite@b.de"})
 
       refute user.hashed_password
       refute user.confirmed_at
     end
 
     test "create_user/1 rejects a password under 12 characters" do
-      assert {:error, changeset} = Accounts.create_user(%{email: "pw@b.de", password: "short"})
+      assert {:error, changeset} =
+               Accounts.create_user(%{username: "abe", password: "short"})
+
       assert %{password: _} = errors_on(changeset)
     end
 
@@ -187,21 +228,21 @@ defmodule CodeLead.AccountsTest do
     end
   end
 
-  describe "get_user_by_email_and_password/2" do
-    test "does not return the user if the email does not exist" do
-      refute Accounts.get_user_by_email_and_password("unknown@example.com", "hello world!")
+  describe "get_user_by_username_and_password/2" do
+    test "does not return the user if the username does not exist" do
+      refute Accounts.get_user_by_username_and_password("unknown", "hello world!")
     end
 
     test "does not return the user if the password is not valid" do
       user = user_fixture() |> set_password()
-      refute Accounts.get_user_by_email_and_password(user.email, "invalid")
+      refute Accounts.get_user_by_username_and_password(user.username, "invalid")
     end
 
-    test "returns the user if the email and password are valid" do
+    test "returns the user if the username and password are valid" do
       %{id: id} = user = user_fixture() |> set_password()
 
       assert %User{id: ^id} =
-               Accounts.get_user_by_email_and_password(user.email, valid_user_password())
+               Accounts.get_user_by_username_and_password(user.username, valid_user_password())
     end
   end
 
@@ -219,32 +260,49 @@ defmodule CodeLead.AccountsTest do
   end
 
   describe "register_user/1" do
-    test "requires email to be set" do
+    test "requires username to be set" do
       {:error, changeset} = Accounts.register_user(%{})
 
-      assert %{email: ["can't be blank"]} = errors_on(changeset)
+      assert %{username: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "does not require an email" do
+      {:ok, user} = Accounts.register_user(%{username: unique_username()})
+      refute user.email
     end
 
     test "validates email when given" do
-      {:error, changeset} = Accounts.register_user(%{email: "not valid"})
+      {:error, changeset} =
+        Accounts.register_user(%{username: unique_username(), email: "not valid"})
 
       assert %{email: ["must have the @ sign and no spaces"]} = errors_on(changeset)
     end
 
     test "validates maximum values for email for security" do
       too_long = String.duplicate("db", 100)
-      {:error, changeset} = Accounts.register_user(%{email: too_long})
+
+      {:error, changeset} =
+        Accounts.register_user(%{username: unique_username(), email: too_long})
+
       assert "should be at most 160 character(s)" in errors_on(changeset).email
     end
 
     test "validates email uniqueness" do
       %{email: email} = user_fixture()
-      {:error, changeset} = Accounts.register_user(%{email: email})
+      {:error, changeset} = Accounts.register_user(%{username: unique_username(), email: email})
       assert "has already been taken" in errors_on(changeset).email
 
       # Now try with the uppercased email too, to check that email case is ignored.
-      {:error, changeset} = Accounts.register_user(%{email: String.upcase(email)})
+      {:error, changeset} =
+        Accounts.register_user(%{username: unique_username(), email: String.upcase(email)})
+
       assert "has already been taken" in errors_on(changeset).email
+    end
+
+    test "validates username uniqueness" do
+      %{username: username} = user_fixture()
+      {:error, changeset} = Accounts.register_user(%{username: username})
+      assert "has already been taken" in errors_on(changeset).username
     end
 
     test "registers users without password" do
@@ -407,7 +465,7 @@ defmodule CodeLead.AccountsTest do
 
       assert expired_tokens == []
       assert is_nil(user.password)
-      assert Accounts.get_user_by_email_and_password(user.email, "new valid password")
+      assert Accounts.get_user_by_username_and_password(user.username, "new valid password")
     end
 
     test "deletes all tokens for the given user", %{user: user} do

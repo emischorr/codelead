@@ -15,7 +15,7 @@ actions.**
 Each page's 58px header is an action bar for the thing you are looking at —
 its name, its live readouts, its buttons. Who you are signed in as is true
 everywhere, so it lives at the foot of the sidebar, in `account_card/1`:
-avatar · email · account · log out. Nothing about the signed-in user
+avatar · username · account · log out. Nothing about the signed-in user
 appears in a page header.
 
 Theme is the one app-wide preference with its own switch, and the sidebar
@@ -137,10 +137,10 @@ itself must stay `overflow: visible` — the project selector's flyout
 escapes the column, and clipping it is the failure mode to watch for.
 
 The account row is identity plus a way out: avatar (links to
-`/users/settings`) · email · settings gear (same link) · log out. It has no
-theme switch of its own — that lives on the profile page it links to. In
-the sidebar the email lives on the avatar's `title`, because the row has no
-width to spare.
+`/users/settings`) · username · settings gear (same link) · log out. It has
+no theme switch of its own — that lives on the profile page it links to. In
+the sidebar the username lives on the avatar's `title`, because the row has
+no width to spare.
 
 | Item | Inside a project | On a general page | No project exists |
 | --- | --- | --- | --- |
@@ -151,7 +151,7 @@ width to spare.
 | Settings | link | link, highlighted on `/settings/*` | link |
 | Attention pill | shown when count > 0 | hidden | hidden |
 | Budget tile | shown | hidden | hidden |
-| Account row (avatar · email · account · log out) | shown | shown | shown |
+| Account row (avatar · username · account · log out) | shown | shown | shown |
 
 Switching projects is only offered from a project page: the selector is a
 navigation control whose only destination is a board, and picking one from

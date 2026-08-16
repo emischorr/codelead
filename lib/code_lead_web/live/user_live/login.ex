@@ -13,7 +13,7 @@ defmodule CodeLeadWeb.UserLive.Login do
           <%= if @current_scope && @current_scope.user do %>
             Re-authenticate to perform sensitive actions on your account.
           <% else %>
-            Welcome back. Use your password, or have a login link mailed to you.
+            Welcome back. Log in with your username and password.
           <% end %>
         </p>
         <p :if={!(@current_scope && @current_scope.user)} class="mt-1 text-[13px] text-text3">
@@ -31,9 +31,9 @@ defmodule CodeLeadWeb.UserLive.Login do
         >
           <.input
             readonly={!!(@current_scope && @current_scope.user)}
-            field={f[:email]}
-            type="email"
-            label="Email"
+            field={f[:username]}
+            type="text"
+            label="Username"
             autocomplete="username"
             spellcheck="false"
             required
@@ -71,12 +71,15 @@ defmodule CodeLeadWeb.UserLive.Login do
             field={f[:email]}
             type="email"
             label="Email"
-            autocomplete="username"
+            autocomplete="email"
             spellcheck="false"
             required
           />
           <.button full>Email me a login link</.button>
         </.form>
+        <p class="mt-2 text-[12px] text-text3">
+          Only works if you have an email on file.
+        </p>
 
         <p :if={local_mail_adapter?()} class="mt-4 text-[12px] text-text3">
           Local mail adapter — sent emails land in <.link
@@ -93,11 +96,13 @@ defmodule CodeLeadWeb.UserLive.Login do
 
   @impl true
   def mount(_params, _session, socket) do
-    email =
-      Phoenix.Flash.get(socket.assigns.flash, :email) ||
-        get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:email)])
+    username =
+      Phoenix.Flash.get(socket.assigns.flash, :username) ||
+        get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:username)])
 
-    form = to_form(%{"email" => email}, as: "user")
+    email = get_in(socket.assigns, [:current_scope, Access.key(:user), Access.key(:email)])
+
+    form = to_form(%{"username" => username, "email" => email}, as: "user")
 
     {:ok, assign(socket, form: form, trigger_submit: false)}
   end

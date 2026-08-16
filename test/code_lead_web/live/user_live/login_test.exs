@@ -56,7 +56,7 @@ defmodule CodeLeadWeb.UserLive.LoginTest do
 
       form =
         form(lv, "#login-form-password",
-          user: %{email: user.email, password: valid_user_password(), remember_me: true}
+          user: %{username: user.username, password: valid_user_password(), remember_me: true}
         )
 
       conn = submit_form(form, conn)
@@ -70,12 +70,12 @@ defmodule CodeLeadWeb.UserLive.LoginTest do
       {:ok, lv, _html} = live(conn, ~p"/users/log-in")
 
       form =
-        form(lv, "#login-form-password", user: %{email: "test@email.com", password: "123456"})
+        form(lv, "#login-form-password", user: %{username: "nobody", password: "123456"})
 
       render_submit(form, %{user: %{remember_me: true}})
 
       conn = follow_trigger_action(form, conn)
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Invalid email or password"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Invalid username or password"
       assert redirected_to(conn) == ~p"/users/log-in"
     end
   end

@@ -34,13 +34,20 @@ defmodule CodeLeadWeb.SetupLive.Steps do
         required
       />
       <.input
-        field={@form[:email]}
-        type="email"
-        label="Your email"
+        field={@form[:username]}
+        type="text"
+        label="Your username"
         autocomplete="username"
         spellcheck="false"
         required
         phx-mounted={JS.focus()}
+      />
+      <.input
+        field={@form[:email]}
+        type="email"
+        label="Your email (optional)"
+        autocomplete="email"
+        spellcheck="false"
       />
       <.input
         field={@form[:password]}
@@ -198,7 +205,7 @@ defmodule CodeLeadWeb.SetupLive.Steps do
   @doc """
   Recap of what the wizard created, and the button that flips `setup_done`.
   """
-  attr :admin_email, :string, default: nil
+  attr :admin_username, :string, default: nil
   attr :providers, :list, required: true
   attr :projects, :list, required: true
   attr :agents?, :boolean, required: true
@@ -206,7 +213,7 @@ defmodule CodeLeadWeb.SetupLive.Steps do
   def finish(assigns) do
     ~H"""
     <ul class="mb-6 flex flex-col gap-2.5">
-      <.recap done label="Admin" detail={@admin_email} />
+      <.recap done label="Admin" detail={@admin_username} />
       <.recap done label="Provider" detail={Enum.map_join(@providers, ", ", & &1.name)} />
       <.recap
         done={@projects != []}

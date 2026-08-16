@@ -17,6 +17,7 @@ defmodule CodeLeadWeb.UserLive.SettingsTest do
         )
         |> live(~p"/users/settings")
 
+      assert html =~ user.username
       assert html =~ user.email
       assert html =~ "Change email"
       assert html =~ "Change password"
