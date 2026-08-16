@@ -23,7 +23,7 @@ Projects.put_env(project.id, "API_KEY", "s3cret")
   Tasks.create_task(project.id, %{
     title: "Add a pricing page",
     description: "Three tiers, monthly/yearly toggle.",
-    work_type: :code                    # target defaults to :repo, first linked repo
+    work_type: :code                    # target defaults to :repo, the project's default repo
   })
 
 # Optional AI planning chat (uses an llm_api agent, read-only repo context):
