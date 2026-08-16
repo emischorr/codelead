@@ -151,6 +151,17 @@ defmodule CodeLeadWeb.SettingsLive.Project do
     end
   end
 
+  def handle_event("set_default_repository", %{"id" => id}, socket) do
+    case id |> Projects.get_repository!() |> Projects.set_default_repository() do
+      {:ok, repository} ->
+        {:noreply,
+         socket |> put_flash(:info, "#{repository.name} is now the default.") |> load_project()}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not set that repository as default.")}
+    end
+  end
+
   ## Env store
 
   def handle_event("save_env", %{"env" => params}, socket) do
@@ -212,7 +223,11 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           <ProjectSections.details form={@details_form} />
           <ProjectSections.finalize form={@finalize_form} />
           <ProjectSections.pr_template form={@pr_template_form} />
-          <ProjectSections.repositories repositories={@repositories} project_id={@project.id} />
+          <ProjectSections.repositories
+            repositories={@repositories}
+            project_id={@project.id}
+            default_repository_name={@default_repository_name}
+          />
           <ProjectSections.environment env_keys={@env_keys} project_id={@project.id} />
           <ProjectSections.agents project_agents={@project_agents} />
           <ProjectSections.default_reviewers reviewer_sets={@reviewer_sets} />
@@ -331,6 +346,12 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         Map.put(repository, :delete_reason, repository_reason(tasks))
       end)
 
+    default_repository_name =
+      case Enum.find(repositories, & &1.is_default) do
+        nil -> nil
+        repository -> repository.name
+      end
+
     env_keys =
       Enum.map(Projects.list_env_keys(project_id), fn entry ->
         Map.put(entry, :forge_token?, entry.key in forge_vars)
@@ -347,6 +368,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
     assign(socket,
       repositories: repositories,
+      default_repository_name: default_repository_name,
       env_keys: env_keys,
       project_agents: Agents.list_project_agents(project_id),
       reviewer_sets: reviewer_sets

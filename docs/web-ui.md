@@ -103,6 +103,16 @@ Deferred here: the Organization tile is a placeholder because
 `Accounts.update_organization/1` replaces `settings` wholesale and would
 clobber `setup_done`; editing budgets there needs a merging setter first.
 
+**One repository per project is always the default** (`repositories.is_default`,
+a partial unique index enforces exactly one), which is what a new `:repo`-target
+task prefills — `Projects.link_repository/2` flips it on for the first
+repository a project links, and it moves from there only through
+`Projects.set_default_repository/1`, called from the repository list's
+**Make this the default** link on every non-default row (the default row
+instead reads "This repo is the default"). `Projects.default_repository/1`
+is the single read path both the board's new-task modal and
+`Tasks.create_task/2`'s post-insert fallback use, so the two cannot drift.
+
 ## Design language
 
 Tokens live in `assets/css/app.css`: a raw palette on `:root` /
@@ -396,7 +406,7 @@ above the bar instead of underneath it.
   A done `:folder` task shows its download here too
   (`#task-artifact-link`). Both surfaces go through
   `Tasks.update_task/2`, which re-normalizes a Planning edit: a `:repo`
-  target with no repository falls back to the project's first one, and a
+  target with no repository falls back to the project's default one, and a
   new work type drops an executor that is no longer eligible and
   re-prefills the reviewer set from the project defaults.
 - **Agent tab** — the executor transcript from `AgentFeed.list_run/2`

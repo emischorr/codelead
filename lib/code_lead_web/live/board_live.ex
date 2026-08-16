@@ -172,12 +172,28 @@ defmodule CodeLeadWeb.BoardLive do
 
   defp assign_new_task_form(socket, params) do
     work_type = parse_work_type(params["work_type"])
+    project_id = socket.assigns.project.id
+    params = maybe_prefill_repository(params, project_id)
 
     assign(socket,
       new_form: to_form(Task.create_changeset(%Task{}, params)),
-      repositories: Projects.list_repositories(socket.assigns.project.id),
-      executors: Agents.eligible_executors(work_type, socket.assigns.project.id)
+      repositories: Projects.list_repositories(project_id),
+      executors: Agents.eligible_executors(work_type, project_id)
     )
+  end
+
+  # Only prefills on the modal's first render (no "repository_id" key yet)
+  # — every later "validate" event carries the field's current value, and
+  # overwriting that on each change would fight the user's own selection.
+  defp maybe_prefill_repository(params, project_id) do
+    if Map.has_key?(params, "repository_id") do
+      params
+    else
+      case Projects.default_repository(project_id) do
+        nil -> params
+        repository -> Map.put(params, "repository_id", repository.id)
+      end
+    end
   end
 
   defp parse_work_type("design"), do: :design
@@ -609,7 +625,6 @@ defmodule CodeLeadWeb.BoardLive do
               field={@form[:repository_id]}
               type="select"
               label="Repository"
-              prompt="Default"
               options={Enum.map(@repositories, &{&1.name, &1.id})}
             />
           </div>

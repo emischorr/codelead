@@ -15,6 +15,14 @@ defmodule CodeLead.Projects.Repository do
 
   `preview_port` declares the port a dev server inside this repo's
   tasks listens on; declaring it enables the Review tab's live preview.
+
+  `is_default` marks the repository a new `:repo`-target task prefills
+  when the project links more than one. It is never cast through
+  `changeset/2` — the first repository linked to a project is flipped on
+  by `CodeLead.Projects.link_repository/2`, and it only moves after that
+  through `CodeLead.Projects.set_default_repository/1`, which also
+  clears it off every other repository in the project so exactly one
+  stays true (enforced by a partial unique index).
   """
 
   use Ecto.Schema
@@ -29,6 +37,7 @@ defmodule CodeLead.Projects.Repository do
     field :git_url, :string
     field :default_branch, :string, default: "main"
     field :base_clone_path, :string
+    field :is_default, :boolean, default: false
 
     field :env_kind, Ecto.Enum,
       values: [:devcontainer, :image, :dockerfile, :default],

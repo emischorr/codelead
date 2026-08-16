@@ -29,10 +29,24 @@ defmodule CodeLead.ProjectsTest do
       assert Projects.default_repository(project.id) == nil
 
       first = repository_fixture(project.id)
-      _second = repository_fixture(project.id)
+      second = repository_fixture(project.id)
 
+      assert first.is_default
+      refute second.is_default
       assert Projects.default_repository(project.id).id == first.id
       assert length(Projects.list_repositories(project.id)) == 2
+    end
+
+    test "set_default_repository/1 moves the default and clears the old one" do
+      project = project_fixture()
+      first = repository_fixture(project.id)
+      second = repository_fixture(project.id)
+
+      assert {:ok, updated_second} = Projects.set_default_repository(second)
+      assert updated_second.is_default
+
+      assert Projects.default_repository(project.id).id == second.id
+      refute Projects.get_repository!(first.id).is_default
     end
 
     test "env_kind is derived from the image reference" do

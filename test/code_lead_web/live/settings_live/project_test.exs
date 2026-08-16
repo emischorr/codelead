@@ -253,6 +253,36 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
       refute has_element?(view, "#repository-row-#{repository.id}")
       assert Projects.list_repositories(project.id) == []
     end
+
+    test "the first linked repository is marked default", %{conn: conn, project: project} do
+      repository = repository_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert render(element(view, "#repository-row-#{repository.id}")) =~
+               "This repo is the default"
+    end
+
+    test "a non-default repository offers to become the default", %{conn: conn, project: project} do
+      first = repository_fixture(project.id)
+      second = repository_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      row = render(element(view, "#repository-row-#{second.id}"))
+      assert row =~ "#{first.name} is the default repo."
+      assert row =~ "Make this the default"
+
+      view
+      |> element("#repository-row-#{second.id} button", "Make this the default")
+      |> render_click()
+
+      assert Projects.default_repository(project.id).id == second.id
+      assert render(element(view, "#repository-row-#{second.id}")) =~ "This repo is the default"
+
+      refute render(element(view, "#repository-row-#{first.id}")) =~
+               "This repo is the default"
+    end
   end
 
   describe "environment" do
