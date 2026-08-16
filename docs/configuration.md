@@ -31,6 +31,8 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `CONTAINER_MEMORY_MB` | — | `--memory` cap per task container, in MB. |
 | `HARNESS_VERSION` | `0.66.0`, pinned in `config/runtime.exs` in sync with the image's `CLAUDE_ACP_VERSION` build arg | Version directory the compiled harness binary is staged under (`<WORKSPACE_ROOT>/harness/<version>/`). |
 | `HARNESS_SOURCE` | — | Air-gapped escape hatch: a directory of pre-staged harness runtime dirs, one per libc flavor (`<flavor>/` with `claude-agent-acp`, `bun`, `node_modules/`), copied at boot. Normally unset — the harness runtime is staged lazily in-docker on the first container run needing the flavor (ADR-0005/0007). |
+| `PREVIEW_PUBLISH_IP` | `127.0.0.1` | Host interface a task container's declared `preview_port` is published on (`docker create -p <ip>:0:<port>`, ephemeral host port). Loopback works when the BEAM runs on the docker host (dev); in the deployed stack set the docker bridge gateway (usually `172.17.0.1`). Never a public interface — browsers only ever reach previews through the authenticated `/preview/:task_id/` proxy (ADR-0008). |
+| `PREVIEW_UPSTREAM_HOST` | `127.0.0.1` | Address the in-app preview proxy dials for container-task upstreams (the host port comes from `docker port`). Matches `PREVIEW_PUBLISH_IP` in practice. Local-task previews always dial loopback and need neither variable. |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
 `config/prod.exs` — no redirect, no HSTS — because TLS termination belongs to
@@ -77,6 +79,27 @@ template is not.
   executor makes, default `["docker"]`. Tests swap it for
   `test/support/fake_docker.sh` the same way `:harnesses` swaps in the
   fake ACP agent. The CLI honours `DOCKER_HOST` as usual.
+- `:preview_gateway` — the `CodeLead.PreviewGateway` implementation,
+  default `PathProxy`. A test seam first; `SubdomainProxy` later.
+- `:preview_publish_ip` / `:preview_upstream_host` — see the env vars
+  above.
+- `:terminal_shell` — the shell the Terminal tab spawns, default `"sh"`.
+- `:terminal_idle_ms` — how long a viewer-less terminal session keeps
+  its shell alive, default 15 minutes.
+- `:terminal_command` — test-only whole-argv override for local
+  terminal spawns (`test/support/fake_shell.sh`), mirroring
+  `:docker_cli`.
+
+### Preview base path
+
+The live preview serves the task's dev server under
+`/preview/<task_id>/`, and the proxy never rewrites response bodies —
+an app that emits absolute asset paths must be told its base path.
+Terminal sessions export `PREVIEW_BASE_PATH` (e.g. `/preview/42`) and
+`PREVIEW_ORIGIN` for exactly this: `vite --base "$PREVIEW_BASE_PATH/"`,
+Phoenix `url: [path: System.get_env("PREVIEW_BASE_PATH")]`, Next.js
+`basePath`, etc. Framework recipes are iteration-2 material
+(`PREVIEW_ROADMAP.md`); the branded 502 page reminds the user meanwhile.
 
 ## Git credentials
 

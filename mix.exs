@@ -62,6 +62,9 @@ defmodule CodeLead.MixProject do
        depth: 1},
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
+      # WS framing over the Mint already in the tree (via req → finch);
+      # the preview proxy's upstream leg for websocket relaying.
+      {:mint_web_socket, "~> 1.0"},
       {:mdex, "~> 0.13"},
       {:oban, "~> 2.19"},
       {:cloak_ecto, "~> 1.3"},

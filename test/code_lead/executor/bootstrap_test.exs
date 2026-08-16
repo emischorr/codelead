@@ -109,6 +109,29 @@ defmodule CodeLead.Executor.DockerContainer.BootstrapTest do
       assert "rm -f def456" in lines
     end
 
+    test "keeps a Review-state container task's container across restarts", %{log: log} do
+      import CodeLead.ProjectsFixtures
+      import CodeLead.TasksFixtures
+
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+
+      task =
+        project.id
+        |> task_fixture(%{target: :repo, repository_id: repository.id})
+        |> put_context!(%{state: :review, execution_env: :container})
+
+      use_docker("orphans")
+      System.put_env("FAKE_DOCKER_ORPHANS", "abc123 #{task.id}\ndef456 42")
+      on_exit(fn -> System.delete_env("FAKE_DOCKER_ORPHANS") end)
+
+      assert Bootstrap.run() == :ok
+
+      lines = log |> File.read!() |> String.split("\n", trim: true)
+      refute "rm -f abc123" in lines
+      assert "rm -f def456" in lines
+    end
+
     test "no-ops when the docker CLI is missing" do
       Application.put_env(:code_lead, :docker_cli, ["definitely-not-docker-xyz"])
       assert Bootstrap.run() == :ok

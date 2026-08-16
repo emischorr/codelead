@@ -255,6 +255,20 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             or <code class="font-mono">GITLAB_TOKEN</code>
             in the environment section below. SSH URLs use this machine's key.
           </p>
+          <.input
+            field={@repository_form[:preview_port]}
+            type="number"
+            label="Preview port"
+            placeholder="5173"
+            min="1"
+            max="65535"
+          />
+          <p class="mb-4 text-[12px] leading-relaxed text-text3">
+            The port a dev server inside this repository's tasks listens on.
+            Declaring it enables the live preview in the Review tab — start
+            the server yourself from the task's Terminal. Leave blank to
+            review by diff only.
+          </p>
 
           <div class="mt-4 flex justify-end gap-2">
             <.button patch={~p"/settings/projects/#{@project.id}"}>Cancel</.button>

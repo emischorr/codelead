@@ -43,7 +43,9 @@ defmodule CodeLeadWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
-  plug Plug.Parsers,
+  # Plug.Parsers behind a wrapper: /preview/* bodies must reach the
+  # reverse proxy unread so they can be forwarded byte-for-byte.
+  plug CodeLeadWeb.Plugs.PreviewAwareParsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()

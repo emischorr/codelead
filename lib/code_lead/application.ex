@@ -26,6 +26,7 @@ defmodule CodeLead.Application do
         CodeLead.Executor.HarnessStaging
       ] ++
         CodeLead.Runtime.RunSupervisor.child_specs() ++
+        CodeLead.Terminal.child_specs() ++
         [
           # One-shot, async: stages the container harness onto the
           # workspace volume and reaps orphaned task containers. Never

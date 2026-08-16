@@ -66,7 +66,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       view |> element("nav a", "Terminal") |> render_click()
       assert_patch(view, task_path(project, task, "terminal"))
-      assert render(view) =~ "Interactive terminal coming soon"
+      assert render(view) =~ "worktree is provisioned"
     end
   end
 
@@ -1108,6 +1108,99 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "review tab preview" do
+    setup %{conn: conn} do
+      %{conn: conn, project: project_fixture()}
+    end
+
+    defp preview_task(project, work_type, repo_attrs) do
+      repository = repository_fixture(project.id, repo_attrs)
+
+      task_fixture(project.id, %{
+        work_type: work_type,
+        target: :repo,
+        repository_id: repository.id
+      })
+    end
+
+    test "a design task with a declared port opens on the preview", ctx do
+      %{conn: conn, project: project} = ctx
+      task = preview_task(project, :design, %{preview_port: 5173})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#review-mode-toggle")
+      assert has_element?(view, ~s(#preview-pane iframe[src="/preview/#{task.id}/"]))
+    end
+
+    test "a code task with a declared port opens on the diff, preview a toggle away", ctx do
+      %{conn: conn, project: project} = ctx
+      task = preview_task(project, :code, %{preview_port: 5173})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#review-mode-toggle")
+      refute has_element?(view, "#preview-pane")
+
+      view |> element("#review-mode-preview") |> render_click()
+
+      assert has_element?(view, "#preview-pane")
+
+      view |> element("#review-mode-diff") |> render_click()
+
+      refute has_element?(view, "#preview-pane")
+    end
+
+    test "a repo task without a port gets the enablement hint and no toggle", ctx do
+      %{conn: conn, project: project} = ctx
+      task = preview_task(project, :code, %{})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      refute has_element?(view, "#review-mode-toggle")
+      assert has_element?(view, "#preview-hint")
+    end
+
+    test "the legacy ?tab=diff URL lands on the review tab", ctx do
+      %{conn: conn, project: project} = ctx
+      task = preview_task(project, :code, %{})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "diff"))
+
+      assert has_element?(view, "#preview-hint")
+    end
+  end
+
+  describe "terminal tab" do
+    setup %{conn: conn} do
+      %{conn: conn, project: project_fixture()}
+    end
+
+    test "renders the xterm hook container once a worktree exists", ctx do
+      %{conn: conn, project: project} = ctx
+      repository = repository_fixture(project.id)
+
+      task =
+        project.id
+        |> task_fixture(%{target: :repo, repository_id: repository.id})
+        |> CodeLead.TasksFixtures.put_context!(%{worktree_path: "/tmp/somewhere"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "terminal"))
+
+      assert has_element?(view, "#terminal")
+    end
+
+    test "keeps the placeholder without a worktree", ctx do
+      %{conn: conn, project: project} = ctx
+      task = task_fixture(project.id, %{})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "terminal"))
+
+      refute has_element?(view, "#terminal")
+      assert render(view) =~ "worktree is provisioned"
+    end
+  end
+
   describe "diff tab" do
     setup %{conn: conn} do
       project = project_fixture()
@@ -1189,7 +1282,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert has_element?(view, body("beta.md"))
 
       view |> element("nav a", "Task") |> render_click()
-      view |> element("nav a", "Diff") |> render_click()
+      view |> element("nav a", "Review") |> render_click()
       render_async(view, 2_000)
 
       assert has_element?(view, body("alpha.md"))

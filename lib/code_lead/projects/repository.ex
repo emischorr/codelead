@@ -12,6 +12,9 @@ defmodule CodeLead.Projects.Repository do
   that needs no toolchain keeps running locally (ADR-0003/0004).
   `:devcontainer` and `:dockerfile` remain dormant seams, unreachable
   from the UI and untouched by the derivation.
+
+  `preview_port` declares the port a dev server inside this repo's
+  tasks listens on; declaring it enables the Review tab's live preview.
   """
 
   use Ecto.Schema
@@ -34,6 +37,7 @@ defmodule CodeLead.Projects.Repository do
     field :devcontainer_path, :string
     field :image_ref, :string
     field :dockerfile, :string
+    field :preview_port, :integer
 
     timestamps(type: :utc_datetime)
   end
@@ -53,10 +57,12 @@ defmodule CodeLead.Projects.Repository do
       :env_kind,
       :devcontainer_path,
       :image_ref,
-      :dockerfile
+      :dockerfile,
+      :preview_port
     ])
     |> update_change(:image_ref, &normalize_ref/1)
     |> derive_env_kind()
+    |> validate_number(:preview_port, greater_than: 0, less_than: 65_536)
     |> validate_required([:name, :git_url, :default_branch])
     |> unique_constraint([:project_id, :name])
   end

@@ -50,6 +50,14 @@ services:
       # Signed license key. Optional — without one the instance runs the
       # community tier, which today grants everything. See docs/licensing.md.
       # LICENSE_KEY: ${LICENSE_KEY}
+      # Live preview of container tasks: sibling containers publish their
+      # repository's declared preview port on this host IP, and the app
+      # dials it at PREVIEW_UPSTREAM_HOST. On a Linux host set both to the
+      # docker bridge gateway (usually 172.17.0.1) — off public interfaces,
+      # reachable from this container. Unset, container-task previews stay
+      # disabled (local-task previews need no config). See docs/deployment.md.
+      # PREVIEW_PUBLISH_IP: 172.17.0.1
+      # PREVIEW_UPSTREAM_HOST: 172.17.0.1
     volumes:
       - codelead-data:/data
       # Container task execution creates sibling containers through the host

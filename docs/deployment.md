@@ -162,6 +162,35 @@ Container execution is also the one **licensed** feature
 or start it, whether or not the socket is mounted; everything else runs
 unrestricted on the community tier. See [`licensing.md`](licensing.md).
 
+### Container-task live previews
+
+The Review tab's live preview proxies `/preview/:task_id/` to the dev server
+the user starts in the task's Terminal ([ADR-0008](adr/0008-preview-and-terminal.md)).
+For **local** tasks nothing needs configuring — the server runs in the app's
+own process space and the proxy dials loopback. For **container** tasks the
+declared `preview_port` is published on the host at container create, and the
+app container must be able to reach it. The app container and sibling task
+containers sit on *different* docker networks, so loopback publishing (the
+default) is unreachable from the app — set both variables to the docker
+bridge gateway instead:
+
+```bash
+docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'   # usually 172.17.0.1
+```
+
+```yaml
+# on the app service
+PREVIEW_PUBLISH_IP: 172.17.0.1
+PREVIEW_UPSTREAM_HOST: 172.17.0.1
+```
+
+The port binds to that gateway address only — not a public interface — and
+browsers always go through the authenticated proxy. Existing stacks need no
+change until an operator wants container-task previews; the websocket rules
+below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
+exactly as they do to `/live/websocket`, so a *location-scoped* proxy config
+must cover this path too.
+
 ### What you must add
 
 `restart: unless-stopped` on `db` and `app`, so the instance survives a host

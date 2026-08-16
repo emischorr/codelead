@@ -13,6 +13,8 @@
 #
 #   absent+happy        no container, image present; exec bridges "happy"
 #   running             container running with $FAKE_DOCKER_IMAGE
+#   running_published   running, with $FAKE_DOCKER_PREVIEW_PORT published
+#                       to 127.0.0.1:$FAKE_DOCKER_HOST_PORT
 #   stopped             container exists, not running
 #   image_mismatch      running, but with a different image than declared
 #   no_image            no container, image missing, pull succeeds
@@ -63,12 +65,20 @@ if [ "$docker_scenario" = "socket_denied" ]; then
 fi
 
 case "$1" in
-  container) # container inspect --format '{{.State.Running}}|{{.Config.Image}}' <name>
+  container) # container inspect --format '{{.State.Running}}|{{.Config.Image}}|{{json .HostConfig.PortBindings}}' <name>
+    bindings="{\"${FAKE_DOCKER_PREVIEW_PORT:-5173}/tcp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"${FAKE_DOCKER_HOST_PORT:-55001}\"}]}"
     case "$docker_scenario" in
-      running) echo "true|${FAKE_DOCKER_IMAGE:-img}" ;;
-      stopped) echo "false|${FAKE_DOCKER_IMAGE:-img}" ;;
-      image_mismatch) echo "true|some-other-image" ;;
+      running) echo "true|${FAKE_DOCKER_IMAGE:-img}|null" ;;
+      running_published) echo "true|${FAKE_DOCKER_IMAGE:-img}|$bindings" ;;
+      stopped) echo "false|${FAKE_DOCKER_IMAGE:-img}|null" ;;
+      image_mismatch) echo "true|some-other-image|null" ;;
       *) echo "Error: No such object" && exit 1 ;;
+    esac
+    ;;
+  port) # port <name> <port>/tcp
+    case "$docker_scenario" in
+      running_published) echo "127.0.0.1:${FAKE_DOCKER_HOST_PORT:-55001}" ;;
+      *) echo "Error: No public port published" && exit 1 ;;
     esac
     ;;
   image) # image inspect <ref>
@@ -94,7 +104,15 @@ case "$1" in
     ;;
   ps)
     case "$docker_scenario" in
-      orphans) printf 'abc123 41\ndef456 42\n' ;;
+      orphans)
+        # Task ids are test-data dependent, so a test may override the
+        # listing (newlines included) via FAKE_DOCKER_ORPHANS.
+        if [ -n "$FAKE_DOCKER_ORPHANS" ]; then
+          printf '%s\n' "$FAKE_DOCKER_ORPHANS"
+        else
+          printf 'abc123 41\ndef456 42\n'
+        fi
+        ;;
       *) : ;;
     esac
     ;;

@@ -1,7 +1,9 @@
 defmodule CodeLeadWeb.TaskLive.TerminalTab do
   @moduledoc """
-  The Terminal tab. A real PTY into the worktree is planned; for now
-  this is a styled placeholder showing the execution context.
+  The Terminal tab: an xterm.js terminal into the task's execution
+  context (host worktree or task container), backed by
+  `CodeLead.Terminal`. The session outlives the page — the hook
+  reattaches by task id and repaints from scrollback.
   """
   use CodeLeadWeb, :html
 
@@ -17,19 +19,35 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
           {@task.worktree_path || "no worktree provisioned"}
         </span>
       </div>
-      <div class="min-h-0 flex-1 bg-term-bg p-4 sm:p-5">
+
+      <div
+        :if={@task.worktree_path}
+        id="terminal"
+        phx-hook=".Terminal"
+        phx-update="ignore"
+        class="flex min-h-0 flex-1 flex-col bg-term-bg"
+      >
+        <div
+          data-role="status"
+          hidden
+          class="shrink-0 items-center gap-3 border-b border-border/60 px-4 py-1.5 font-mono text-[10.5px] text-term-text/70 [&:not([hidden])]:flex"
+        >
+          <span data-role="status-text"></span>
+          <button
+            data-role="restart"
+            hidden
+            type="button"
+            class="rounded-[7px] border border-border/60 px-2 py-0.5 text-term-text hover:bg-white/5"
+          >
+            Restart shell
+          </button>
+        </div>
+        <div data-role="xterm" class="min-h-0 flex-1 px-2 py-1.5"></div>
+      </div>
+
+      <div :if={!@task.worktree_path} class="min-h-0 flex-1 bg-term-bg p-4 sm:p-5">
         <div class="font-mono text-[11.5px] leading-loose text-term-text">
-          <p :if={@task.worktree_path}>
-            <span class="text-ok">task-{@task.id}</span> <span class="text-accent">❯</span>
-            <span class="animate-pulse">▍</span>
-          </p>
-          <p class="mt-2 text-term-text/60">
-            Interactive terminal coming soon — for now, inspect the worktree from your shell:
-          </p>
-          <p :if={@task.worktree_path} class="mt-1 select-all text-term-text">
-            cd {@task.worktree_path}
-          </p>
-          <p :if={!@task.worktree_path} class="mt-1 text-term-text/60">
+          <p class="text-term-text/60">
             {if @task.state == :done,
               do: "The worktree was pruned when this task was finalized.",
               else: "A worktree is provisioned when a repo-targeted run starts."}
@@ -37,6 +55,91 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
         </div>
       </div>
     </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".Terminal">
+      import { Terminal } from "@/vendor/xterm/xterm.js"
+      import { FitAddon } from "@/vendor/xterm/addon-fit.js"
+
+      // Keystrokes and output travel base64-encoded over the LiveView
+      // socket — binary-safe through the JSON payloads.
+      const toB64 = (str) => {
+        let bin = ""
+        new TextEncoder().encode(str).forEach((b) => { bin += String.fromCharCode(b) })
+        return btoa(bin)
+      }
+      const fromB64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+
+      export default {
+        mounted() {
+          this.statusBar = this.el.querySelector("[data-role=status]")
+          this.statusText = this.el.querySelector("[data-role=status-text]")
+          this.restart = this.el.querySelector("[data-role=restart]")
+
+          this.term = new Terminal({
+            convertEol: true,
+            fontSize: 12.5,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            theme: { background: "#0d1117" }
+          })
+          this.fit = new FitAddon()
+          this.term.loadAddon(this.fit)
+          this.term.open(this.el.querySelector("[data-role=xterm]"))
+          this.fit.fit()
+
+          this.resizer = new ResizeObserver(() => this.fit.fit())
+          this.resizer.observe(this.el)
+
+          this.term.onData((data) => this.pushEvent("terminal_input", { data: toB64(data) }))
+
+          this.handleEvent("terminal:data", ({ data }) => this.term.write(fromB64(data)))
+          this.handleEvent("terminal:exit", ({ status }) => {
+            this.term.write(`\r\n\x1b[2m[shell exited with status ${status}]\x1b[0m\r\n`)
+            this.showStatus(`shell exited (${status})`, { restart: true })
+          })
+
+          this.restart.addEventListener("click", () => {
+            this.term.reset()
+            this.connect()
+          })
+
+          this.connect()
+        },
+
+        connect() {
+          this.hideStatus()
+          this.pushEvent(
+            "terminal_ready",
+            { cols: this.term.cols, rows: this.term.rows },
+            (reply) => {
+              if (reply.error) {
+                this.showStatus(reply.error, { restart: true })
+                return
+              }
+              if (reply.scrollback) { this.term.write(fromB64(reply.scrollback)) }
+              if (reply.pty === false) {
+                this.showStatus("plain-pipe mode — no prompt echo or line editing (no `script` binary found)")
+              }
+              this.term.focus()
+            }
+          )
+        },
+
+        showStatus(text, { restart } = {}) {
+          this.statusText.textContent = text
+          this.restart.hidden = !restart
+          this.statusBar.hidden = false
+        },
+
+        hideStatus() {
+          this.statusBar.hidden = true
+          this.restart.hidden = true
+        },
+
+        destroyed() {
+          this.resizer?.disconnect()
+          this.term?.dispose()
+        }
+      }
+    </script>
     """
   end
 end

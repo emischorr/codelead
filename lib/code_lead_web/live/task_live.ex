@@ -1,7 +1,7 @@
 defmodule CodeLeadWeb.TaskLive do
   @moduledoc """
-  The task page: Task / Agent / Diff / Terminal tabs, opening on the tab
-  matching the task's state. All side-effecting actions go through
+  The task page: Task / Agent / Review / Terminal tabs, opening on the
+  tab matching the task's state. All side-effecting actions go through
   `CodeLead.Runtime`; live agent output arrives over the task topic.
   """
   use CodeLeadWeb, :live_view
@@ -16,11 +16,13 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Git.DiffFile
   alias CodeLead.License
   alias CodeLead.Planning
+  alias CodeLead.PreviewGateway
   alias CodeLead.Projects
   alias CodeLead.Reviews
   alias CodeLead.Runtime
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
+  alias CodeLead.Terminal
   alias CodeLead.Workspace
   alias CodeLeadWeb.DiffComponents
   alias CodeLeadWeb.FlashMessages
@@ -29,11 +31,11 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLeadWeb.ScheduleForm
   alias CodeLeadWeb.TaskLive.AgentFeedBlocks
   alias CodeLeadWeb.TaskLive.AgentTab
-  alias CodeLeadWeb.TaskLive.DiffTab
+  alias CodeLeadWeb.TaskLive.ReviewTab
   alias CodeLeadWeb.TaskLive.TaskTab
   alias CodeLeadWeb.TaskLive.TerminalTab
 
-  @tabs [:task, :agent, :diff, :terminal]
+  @tabs [:task, :agent, :review, :terminal]
 
   # Trailing-edge debounce: a burst of tool calls collapses into one
   # `git diff`. Below ~1s it stops coalescing — ACP harnesses emit both a
@@ -74,6 +76,8 @@ defmodule CodeLeadWeb.TaskLive do
         follow_path: nil,
         follow_anchor: nil,
         folder_artifact: nil,
+        review_mode: nil,
+        terminal_subscribed?: false,
         live_usage: nil,
         tick_timer: nil,
         now: DateTime.utc_now(),
@@ -89,10 +93,17 @@ defmodule CodeLeadWeb.TaskLive do
   @impl true
   def handle_params(params, _uri, socket) do
     tab = parse_tab(params["tab"], socket.assigns.task)
-    entering_diff? = tab == :diff and Map.get(socket.assigns, :tab) != :diff
+    previous_tab = Map.get(socket.assigns, :tab)
+    entering_review? = tab == :review and previous_tab != :review
+
+    # Leaving the terminal detaches this viewer; the session (and the
+    # shell in it) stays alive for the idle window.
+    if previous_tab == :terminal and tab != :terminal do
+      Terminal.detach(socket.assigns.task.id)
+    end
 
     socket = assign(socket, tab: tab)
-    socket = if tab == :diff, do: enter_diff(socket, entering_diff?), else: socket
+    socket = if tab == :review, do: enter_review(socket, entering_review?), else: socket
 
     # LiveView prunes stream inserts after every render, whether or not
     # the container was on screen, so the feed has to be re-streamed from
@@ -249,6 +260,44 @@ defmodule CodeLeadWeb.TaskLive do
 
   def handle_event("refresh_diff", _params, socket) do
     {:noreply, start_diff_load(socket)}
+  end
+
+  ## Terminal
+
+  def handle_event("terminal_ready", %{"cols" => cols, "rows" => rows}, socket) do
+    task = socket.assigns.task
+    socket = subscribe_terminal(socket)
+    extra_env = PreviewGateway.preview_env(task, CodeLeadWeb.Endpoint.url())
+
+    with {:ok, _pid} <-
+           Terminal.ensure_session(task, cols: cols, rows: rows, extra_env: extra_env),
+         {:ok, scrollback, pty?} <- Terminal.attach(task.id) do
+      {:reply, %{scrollback: Base.encode64(scrollback), pty: pty?}, socket}
+    else
+      {:error, reason} -> {:reply, %{error: terminal_error(reason)}, socket}
+    end
+  end
+
+  def handle_event("terminal_input", %{"data" => encoded}, socket) do
+    case Base.decode64(encoded) do
+      {:ok, data} -> Terminal.send_input(socket.assigns.task.id, data)
+      :error -> :ok
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("set_review_mode", %{"mode" => mode}, socket) do
+    case mode do
+      "preview" ->
+        {:noreply, assign(socket, review_mode: :preview)}
+
+      "diff" ->
+        {:noreply, socket |> assign(review_mode: :diff) |> enter_diff(true)}
+
+      _unknown ->
+        {:noreply, socket}
+    end
   end
 
   ## Planning: edits, executor/reviewers, chat
@@ -460,6 +509,20 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
+  # Output for a hidden tab is dropped — the session's scrollback
+  # repaints the terminal when the tab (re)attaches.
+  def handle_info({:terminal_data, _task_id, chunk}, %{assigns: %{tab: :terminal}} = socket) do
+    {:noreply, push_event(socket, "terminal:data", %{data: Base.encode64(chunk)})}
+  end
+
+  def handle_info({:terminal_data, _task_id, _chunk}, socket), do: {:noreply, socket}
+
+  def handle_info({:terminal_exit, _task_id, status}, %{assigns: %{tab: :terminal}} = socket) do
+    {:noreply, push_event(socket, "terminal:exit", %{status: status})}
+  end
+
+  def handle_info({:terminal_exit, _task_id, _status}, socket), do: {:noreply, socket}
+
   def handle_info(_other, socket), do: {:noreply, socket}
 
   ## Data loading
@@ -470,6 +533,7 @@ defmodule CodeLeadWeb.TaskLive do
     planning? = task.state == :planning
 
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
+    preview_src = preview_src(task)
     finalize = finalize_context(task, repository)
     agents = Map.new(Agents.list_agents(project.id), &{&1.id, &1})
     executor = task.agent_id && agents[task.agent_id]
@@ -481,6 +545,8 @@ defmodule CodeLeadWeb.TaskLive do
       task: task,
       page_title: task.title,
       repository: repository,
+      preview_available?: preview_src != nil,
+      preview_src: preview_src,
       finalize_mode: finalize.mode,
       project_finalize_mode: finalize.project_mode,
       forge_known?: finalize.forge_known?,
@@ -624,6 +690,35 @@ defmodule CodeLeadWeb.TaskLive do
   defp cost_mode_hint(:free), do: "Locally hosted model — no per-token cost"
   defp cost_mode_hint(_mode), do: nil
 
+  defp preview_src(task) do
+    case PreviewGateway.impl().url_for(task) do
+      {:ok, url} -> url
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp subscribe_terminal(%{assigns: %{terminal_subscribed?: true}} = socket), do: socket
+
+  defp subscribe_terminal(socket) do
+    Terminal.subscribe(socket.assigns.task.id)
+    assign(socket, terminal_subscribed?: true)
+  end
+
+  defp terminal_error(:no_worktree),
+    do: "No execution context yet — the terminal opens once a run has provisioned a worktree."
+
+  defp terminal_error(:container_unlicensed),
+    do: "Container execution is not enabled by the instance license."
+
+  defp terminal_error({:shell_not_found, shell}),
+    do: "Shell `#{shell}` was not found on this server."
+
+  defp terminal_error(reason), do: "The terminal could not start: #{inspect(reason)}"
+
+  # "diff" survives as an alias — the tab carried that name before the
+  # preview landed, and bookmarked URLs keep working.
+  defp parse_tab("diff", _task), do: :review
+
   defp parse_tab(param, task) do
     case Enum.find(@tabs, &(Atom.to_string(&1) == param)) do
       nil -> default_tab(task.state)
@@ -633,8 +728,35 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp default_tab(:planning), do: :task
   defp default_tab(:running), do: :agent
-  defp default_tab(:review), do: :diff
+  defp default_tab(:review), do: :review
   defp default_tab(_state), do: :task
+
+  # First entry picks the primary view: work types with a visual result
+  # open on the live preview when one is available, everything else on
+  # the diff. The user's toggle choice sticks for the LiveView's life.
+  defp enter_review(socket, entering?) do
+    socket =
+      case socket.assigns.review_mode do
+        nil ->
+          assign(
+            socket,
+            :review_mode,
+            default_review_mode(socket.assigns.task.work_type, socket.assigns.preview_available?)
+          )
+
+        _chosen ->
+          socket
+      end
+
+    if socket.assigns.review_mode == :diff do
+      enter_diff(socket, entering?)
+    else
+      socket
+    end
+  end
+
+  defp default_review_mode(work_type, true) when work_type in [:design, :content], do: :preview
+  defp default_review_mode(_work_type, _preview_available?), do: :diff
 
   # Entering the tab always collapses back to the first file, and picks
   # up anything that went stale while another tab was on screen.
@@ -689,7 +811,14 @@ defmodule CodeLeadWeb.TaskLive do
   # Off the diff tab only the flag accumulates — `enter_diff/2` picks it
   # up — so no git runs for a page nobody is looking at.
   defp schedule_diff_refresh(
-         %{assigns: %{tab: :diff, diff_stale?: true, diff_refresh_timer: nil}} = socket
+         %{
+           assigns: %{
+             tab: :review,
+             review_mode: :diff,
+             diff_stale?: true,
+             diff_refresh_timer: nil
+           }
+         } = socket
        ) do
     assign(socket,
       diff_refresh_timer: Process.send_after(self(), :refresh_diff, @diff_refresh_ms)
@@ -698,8 +827,17 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp schedule_diff_refresh(socket), do: socket
 
-  defp refresh_diff(%{assigns: %{tab: :diff, diff_stale?: true, diff_loading?: false}} = socket),
-    do: start_diff_load(socket)
+  defp refresh_diff(
+         %{
+           assigns: %{
+             tab: :review,
+             review_mode: :diff,
+             diff_stale?: true,
+             diff_loading?: false
+           }
+         } = socket
+       ),
+       do: start_diff_load(socket)
 
   defp refresh_diff(socket), do: socket
 
@@ -1004,8 +1142,8 @@ defmodule CodeLeadWeb.TaskLive do
           all_runs?={@all_runs?}
           task_stat={@task_stat}
         />
-        <DiffTab.diff_tab
-          :if={@tab == :diff}
+        <ReviewTab.review_tab
+          :if={@tab == :review}
           task={@task}
           reviews={@reviews}
           diff_files={@diff_files}
@@ -1016,6 +1154,9 @@ defmodule CodeLeadWeb.TaskLive do
           following?={@following?}
           executing?={@task.run_state == :executing}
           folder_artifact={@folder_artifact}
+          review_mode={@review_mode || :diff}
+          preview_available?={@preview_available?}
+          preview_src={@preview_src}
         />
         <TerminalTab.terminal_tab :if={@tab == :terminal} task={@task} />
       </div>
@@ -1060,7 +1201,7 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp tab_label(:task), do: "Task"
   defp tab_label(:agent), do: "Agent"
-  defp tab_label(:diff), do: "Diff"
+  defp tab_label(:review), do: "Review"
   defp tab_label(:terminal), do: "Terminal"
 
   attr :task, :map, required: true

@@ -67,6 +67,25 @@ defmodule CodeLead.ProjectsTest do
       assert still.env_kind == :devcontainer
     end
 
+    test "preview_port accepts valid ports, blanks, and rejects out-of-range values" do
+      project = project_fixture()
+      repo = repository_fixture(project.id)
+
+      assert repo.preview_port == nil
+
+      assert {:ok, updated} = Projects.update_repository(repo, %{preview_port: 5173})
+      assert updated.preview_port == 5173
+
+      # An emptied number input arrives as "" and clears the port.
+      assert {:ok, cleared} = Projects.update_repository(updated, %{preview_port: ""})
+      assert cleared.preview_port == nil
+
+      for invalid <- [0, -1, 65_536, 70_000] do
+        assert {:error, changeset} = Projects.update_repository(cleared, %{preview_port: invalid})
+        assert %{preview_port: _} = errors_on(changeset)
+      end
+    end
+
     test "repository names are unique per project" do
       project = project_fixture()
       repo = repository_fixture(project.id)

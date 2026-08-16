@@ -1,13 +1,17 @@
-defmodule CodeLeadWeb.TaskLive.DiffTab do
+defmodule CodeLeadWeb.TaskLive.ReviewTab do
   @moduledoc """
-  The Diff tab: reviewer findings plus the worktree diff for repo
-  targets, or the artifact preview for folder targets.
+  The Review tab: reviewer findings plus the artifact to judge — a
+  live preview of the running app (when the repository declares a
+  `preview_port`), the worktree diff for repo targets, or the artifact
+  preview for folder targets. Preview and diff sit behind a toggle;
+  which one is primary is decided by the LiveView (`work_type`-keyed).
   """
   use CodeLeadWeb, :html
 
   import CodeLeadWeb.DiffComponents
 
   alias CodeLead.Git.DiffFile
+  alias CodeLeadWeb.TaskLive.PreviewPane
 
   attr :task, :map, required: true
   attr :reviews, :list, required: true
@@ -19,8 +23,109 @@ defmodule CodeLeadWeb.TaskLive.DiffTab do
   attr :following?, :boolean, default: false
   attr :executing?, :boolean, default: false
   attr :folder_artifact, :map, default: nil
+  attr :review_mode, :atom, default: :diff, values: [:preview, :diff]
+  attr :preview_available?, :boolean, default: false
+  attr :preview_src, :string, default: nil
 
-  def diff_tab(assigns) do
+  def review_tab(assigns) do
+    ~H"""
+    <div class="flex h-full min-h-0 flex-col">
+      <.mode_toggle :if={@preview_available?} review_mode={@review_mode} />
+
+      <div
+        :if={!@preview_available? && @task.target == :repo}
+        id="preview-hint"
+        class="shrink-0 border-b border-border bg-surface px-4 py-1.5 text-[11.5px] text-text3 sm:px-6"
+      >
+        Declare a preview port on the
+        <.link
+          navigate={~p"/settings/projects/#{@task.project_id}"}
+          class="font-medium text-text2 underline decoration-border underline-offset-2 hover:text-text"
+        >
+          repository
+        </.link>
+        to enable live preview.
+      </div>
+
+      <div :if={@review_mode == :preview && @preview_available?} class="flex min-h-0 flex-1 flex-col">
+        <div :if={@reviews != []} class="max-h-48 shrink-0 overflow-y-auto px-4 py-3 sm:px-6">
+          <.findings_section reviews={@reviews} />
+        </div>
+        <PreviewPane.preview_pane src={@preview_src} task_id={@task.id} />
+      </div>
+
+      <div :if={@review_mode != :preview || !@preview_available?} class="min-h-0 flex-1">
+        <.diff_view
+          task={@task}
+          reviews={@reviews}
+          diff_files={@diff_files}
+          diff_stats={@diff_stats}
+          diff_error={@diff_error}
+          diff_loading?={@diff_loading?}
+          expanded={@expanded}
+          following?={@following?}
+          executing?={@executing?}
+          folder_artifact={@folder_artifact}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :review_mode, :atom, required: true
+
+  defp mode_toggle(assigns) do
+    ~H"""
+    <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5 sm:px-6">
+      <div
+        id="review-mode-toggle"
+        class="inline-flex rounded-[9px] border border-border bg-surface2 p-0.5"
+        role="tablist"
+        aria-label="Review view"
+      >
+        <.mode_button mode={:preview} active?={@review_mode == :preview} label="Preview" />
+        <.mode_button mode={:diff} active?={@review_mode == :diff} label="Diff" />
+      </div>
+    </div>
+    """
+  end
+
+  attr :mode, :atom, required: true
+  attr :active?, :boolean, required: true
+  attr :label, :string, required: true
+
+  defp mode_button(assigns) do
+    ~H"""
+    <button
+      id={"review-mode-#{@mode}"}
+      type="button"
+      role="tab"
+      aria-selected={to_string(@active?)}
+      phx-click="set_review_mode"
+      phx-value-mode={@mode}
+      class={[
+        "rounded-[7px] px-3 py-1 text-[11.5px] font-semibold transition-colors",
+        @active? && "bg-surface text-text shadow-sm",
+        !@active? && "text-text3 hover:text-text2"
+      ]}
+    >
+      {@label}
+    </button>
+    """
+  end
+
+  attr :task, :map, required: true
+  attr :reviews, :list, required: true
+  attr :diff_files, :list, default: nil
+  attr :diff_stats, :map, default: nil
+  attr :diff_error, :string, default: nil
+  attr :diff_loading?, :boolean, default: false
+  attr :expanded, :any, required: true
+  attr :following?, :boolean, default: false
+  attr :executing?, :boolean, default: false
+  attr :folder_artifact, :map, default: nil
+
+  defp diff_view(assigns) do
     ~H"""
     <div class="flex h-full min-h-0">
       <aside
