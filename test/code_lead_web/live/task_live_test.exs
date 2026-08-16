@@ -666,6 +666,18 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert has_element?(view, "#task-tab-agent.text-warn")
       assert has_element?(view, "#task-tab-agent .hero-hand-raised")
     end
+
+    test "review_ready attention does not flag the Agent tab", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :review})
+
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      refute has_element?(view, "#task-tab-agent.text-warn")
+      refute has_element?(view, "#task-tab-agent .hero-hand-raised")
+    end
   end
 
   describe "run meta" do
