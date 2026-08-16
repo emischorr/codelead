@@ -267,6 +267,11 @@ defmodule CodeLead.RuntimeContainerTest do
                "/var/run/docker.sock"
     end
 
+    test "explains a socket the app user cannot read" do
+      assert TaskRunner.dispatch_error({:provision, {:docker_permission_denied, "boom"}}) =~
+               "group_add"
+    end
+
     test "explains an unstaged harness" do
       assert TaskRunner.dispatch_error({:harness_not_staged, "/x/claude-agent-acp"}) =~
                "HARNESS_VERSION"
