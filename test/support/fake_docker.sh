@@ -18,6 +18,8 @@
 #   no_image            no container, image missing, pull succeeds
 #   pull_fails          image missing and the pull fails
 #   daemon_down         every command fails with the connect error
+#   socket_missing      same, in the newer CLI's wording (socket not mounted)
+#   socket_denied       same, but the socket is there and unreadable by our uid
 #   start_fails         create ok, start fails (no `sleep` in the image)
 #   exec_dies           exec exits 137 (container killed mid-run)
 #   orphans             `ps` lists two reapable containers
@@ -47,6 +49,16 @@ acp_scenario="${scenario#*+}"
 
 if [ "$docker_scenario" = "daemon_down" ]; then
   echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+  exit 1
+fi
+
+if [ "$docker_scenario" = "socket_missing" ]; then
+  echo "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+  exit 1
+fi
+
+if [ "$docker_scenario" = "socket_denied" ]; then
+  echo "Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock"
   exit 1
 fi
 

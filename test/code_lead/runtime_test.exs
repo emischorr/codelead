@@ -110,16 +110,36 @@ defmodule CodeLead.RuntimeTest do
       assert Enum.any?(steps, &(&1.kind == :run and &1.summary == "run started"))
       assert List.last(steps).summary =~ "moved to Review"
 
-      # the transcript: chunks coalesced per message, nothing left open
+      # the transcript: chunks coalesced per message, nothing left open.
+      # The scenario's tool call lands between the two chunks, and inside
+      # the resume window that reopens the row rather than splitting it.
       events = AgentFeed.list_run(task.id)
-      assert [:run_started, :message, :tool_call, :message, :result] = Enum.map(events, & &1.kind)
-      assert Enum.map(events, & &1.text) |> Enum.member?("Working on it. ")
+      assert [:run_started, :message, :tool_call, :result] = Enum.map(events, & &1.kind)
+      assert Enum.map(events, & &1.text) |> Enum.member?("Working on it. Done.")
       refute Enum.any?(events, & &1.streaming)
 
       assert %{"status" => "ok", "tokens" => 340, "cost_cents" => 42, "duration_ms" => duration} =
                List.last(events).data
 
       assert duration > 0
+    end
+
+    test "a tool call still ends the message once the resume window has passed" do
+      original = Application.get_env(:code_lead, :message_resume_window_ms)
+      Application.put_env(:code_lead, :message_resume_window_ms, 0)
+      on_exit(fn -> Application.put_env(:code_lead, :message_resume_window_ms, original) end)
+
+      use_scenario("happy")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _task} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      events = AgentFeed.list_run(task.id)
+      assert [:run_started, :message, :tool_call, :message, :result] = Enum.map(events, & &1.kind)
+      assert ["Working on it. ", "Done."] = for(e <- events, e.kind == :message, do: e.text)
     end
 
     test "a tool call is one row that advances in place" do

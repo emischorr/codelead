@@ -821,11 +821,19 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp executing?(%Task{run_state: run_state}), do: run_state == :executing
 
+  # A row the runner reopened is already a block in the feed; routing it
+  # to the live pane too would render the message twice.
   defp apply_feed_row(socket, %{streaming: true} = row) do
-    assign(socket, live_message: row)
+    if AgentFeedBlocks.known?(socket.assigns.feed_blocks, row.id) do
+      apply_block_row(socket, row)
+    else
+      assign(socket, live_message: row)
+    end
   end
 
-  defp apply_feed_row(socket, row) do
+  defp apply_feed_row(socket, row), do: apply_block_row(socket, row)
+
+  defp apply_block_row(socket, row) do
     {blocks, changed} = AgentFeedBlocks.apply_row(socket.assigns.feed_blocks, row)
 
     live_message =

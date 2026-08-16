@@ -79,6 +79,17 @@ defmodule CodeLeadWeb.TaskLive.AgentFeedBlocksTest do
     end
   end
 
+  describe "known?/2" do
+    test "finds a row inside a group as well as a standalone block" do
+      blocks =
+        AgentFeedBlocks.fold([row(1, :tool_call), row(2, :tool_call), row(3, :message)], false)
+
+      assert AgentFeedBlocks.known?(blocks, 2)
+      assert AgentFeedBlocks.known?(blocks, 3)
+      refute AgentFeedBlocks.known?(blocks, 4)
+    end
+  end
+
   describe "toggle/2" do
     test "flips and pins the block, ignoring unknown ids" do
       blocks = AgentFeedBlocks.fold([row(1, :tool_call)], false)

@@ -51,6 +51,13 @@ defmodule CodeLeadWeb.TaskLive.AgentFeedBlocks do
   end
 
   @doc """
+  Whether a row already sits in a block — the caller's cue that an
+  incoming row updates in place rather than arriving for the first time.
+  """
+  @spec known?([block()], pos_integer()) :: boolean()
+  def known?(blocks, row_id), do: Enum.any?(blocks, &member?(&1, row_id))
+
+  @doc """
   Toggles a block's collapse state and pins it, so auto-collapse leaves
   it alone from then on.
   """

@@ -966,6 +966,31 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert render(view) =~ "Thinking about the fix."
     end
 
+    test "a reopened message row grows in its block, not in the live pane", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      row = feed_row(task, kind: :message, text: "Kicked it off, now let me", streaming: false)
+      send(view.pid, {:agent_feed, task.id, row})
+      tool = feed_row(task, kind: :tool_call, text: "Read mix.exs")
+      send(view.pid, {:agent_feed, task.id, tool})
+
+      # the runner reopens the row rather than starting a second message
+      reopened =
+        AgentFeed.update_event(row, %{
+          text: "Kicked it off, now let me read a few files.",
+          streaming: true
+        })
+
+      send(view.pid, {:agent_feed, task.id, reopened})
+
+      refute has_element?(view, "#agent-live-message")
+      assert has_element?(view, block_id(row))
+      assert has_element?(view, block_id(tool))
+      assert render(view) =~ "read a few files."
+    end
+
     test "an unresolved permission is answerable, a resolved one is not", ctx do
       %{conn: conn, project: project, task: task} = ctx
 

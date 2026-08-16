@@ -248,10 +248,11 @@ defmodule CodeLead.Executor.DockerContainer do
         :ok
 
       {:error, {:docker, _status, output}} ->
-        if daemon_unreachable?(output) do
-          {:error, {:docker_unreachable, trim_output(output)}}
-        else
-          pull_image(image_ref)
+        # A socket problem must never be mistaken for a cache miss: pulling
+        # would fail again and report itself as an image error.
+        case classify(output, :absent) do
+          :absent -> pull_image(image_ref)
+          socket_failure -> {:error, socket_failure}
         end
 
       {:error, :docker_cli_not_found} = error ->
@@ -335,12 +336,30 @@ defmodule CodeLead.Executor.DockerContainer do
     Enum.flat_map(env ++ base, fn {key, value} -> ["-e", "#{key}=#{value}"] end)
   end
 
+  # The CLI's wording for "no daemon at the other end" has changed across
+  # versions and differs per transport, so match every form we have seen
+  # rather than the one the current CLI happens to emit.
+  @unreachable_markers [
+    "Cannot connect to the Docker daemon",
+    "error during connect",
+    "failed to connect to the docker API",
+    "Is the docker daemon running"
+  ]
+
+  @denied_marker "permission denied while trying to connect"
+
   defp daemon_unreachable?(output) do
-    output =~ "Cannot connect to the Docker daemon" or output =~ "error during connect"
+    Enum.any?(@unreachable_markers, &String.contains?(output, &1))
   end
 
+  defp permission_denied?(output), do: String.contains?(output, @denied_marker)
+
   defp classify(output, fallback) do
-    if daemon_unreachable?(output), do: {:docker_unreachable, trim_output(output)}, else: fallback
+    cond do
+      permission_denied?(output) -> {:docker_permission_denied, trim_output(output)}
+      daemon_unreachable?(output) -> {:docker_unreachable, trim_output(output)}
+      true -> fallback
+    end
   end
 
   defp trim_output(output) do

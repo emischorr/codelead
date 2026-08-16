@@ -1,4 +1,4 @@
-# Deployment (last updated: 2026-08-15)
+# Deployment (last updated: 2026-08-16)
 
 How to run CodeLead on a server. For the five-minute version see the
 README's *Getting started*; for the full environment variable reference see
@@ -122,8 +122,40 @@ the CodeLead process can start privileged containers. That trade is accepted,
 and stated here rather than discovered, under the single-tenant, self-hosted
 assumption ([ADR-0003](adr/0003-container-execution-model.md),
 [ADR-0004](adr/0004-container-executor-iteration-two.md)). To run without
-container execution, remove the socket mount and the `WORKSPACE_VOLUME` env —
-container-selecting tasks then refuse to start with a clear message.
+container execution, remove the socket mount, `group_add`, and the
+`WORKSPACE_VOLUME` env — container-selecting tasks then refuse to start with a
+clear message.
+
+**Mounting is only half of it.** The app runs as uid 1000 while the socket is
+`root:docker 0660` on the host, so the container also needs that group:
+
+```bash
+stat -c '%g' /var/run/docker.sock     # on the host -> DOCKER_GID in .env
+```
+
+The compose file passes it through as `group_add: ["${DOCKER_GID:-0}"]`. It has
+to be the numeric id — the image has no `docker` group to resolve a name
+against — and the `0` fallback is right only where the socket is root-owned
+(Docker Desktop). With an unset `DOCKER_GID` on a Linux host, every docker call
+comes back `permission denied` and container tasks refuse to start with a
+message saying so.
+
+Under **rootless Docker** there is no `/var/run/docker.sock`; the socket lives
+at `$XDG_RUNTIME_DIR/docker.sock`. Mount that path instead and set `DOCKER_HOST`
+on the `app` service — the CLI honours it ([`configuration.md`](configuration.md)).
+
+Verify both halves from inside the container:
+
+```bash
+docker compose exec app ls -l /var/run/docker.sock
+docker compose exec app docker info      # server info, not an error
+```
+
+One more thing the socket does not solve: a repository's declared `image_ref` is
+resolved against the **host** daemon. CodeLead inspects the local image store
+first and pulls only on a miss, so a locally built tag like
+`myorg-dev/app:latest` works — but it must exist on the *deployment* host, not
+just the machine it was built on.
 
 Container execution is also the one **licensed** feature
 (`:container_execution_env`). An instance with no `LICENSE_KEY` cannot select
@@ -299,6 +331,15 @@ apply themselves. Watch it if you want the reassurance:
 ```bash
 docker compose logs migrate
 ```
+
+`pull` only refreshes the image. Changes to the compose file itself — the docker
+socket mount and `group_add` were added after the first stacks went out — reach
+the running container only when it is recreated, which `up -d` does once the
+file on disk actually differs. Take the current
+[`deployment/docker-compose.yml`](../deployment/docker-compose.yml) over yours,
+and read [The data volume](#the-data-volume) before you do: a stack older than
+the `name: codelead-data` pin keeps its workspace in `deployment_codelead-data`,
+and adopting the pin as-is starts you on a new, empty volume.
 
 ## Backups
 
