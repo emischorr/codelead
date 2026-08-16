@@ -1053,7 +1053,7 @@ defmodule CodeLeadWeb.TaskLive do
         id: tab,
         label: tab_label(tab),
         patch: ~p"/projects/#{project.id}/tasks/#{task.id}?tab=#{tab}",
-        warn: tab == :agent and task.attention != nil
+        warn: tab == :agent and match?(%{type: t} when t != :review_ready, task.attention)
       }
     end
   end
