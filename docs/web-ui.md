@@ -410,6 +410,10 @@ above the bar instead of underneath it.
   true`) renders in `#agent-live-message` outside the stream, where
   `{:task_event, _, {:message_chunk, _}}` appends to it cheaply; the row
   broadcast replaces that text wholesale and is always authoritative.
+  One exception: a streaming row the runner *reopened* is already a
+  block in the stream, so `AgentFeedBlocks.known?/2` routes it back into
+  the feed to update in place — rendering it in the live pane as well
+  would show the message twice.
   Permission Allow/Deny render only while the run is executing and the
   row has no `data["resolved"]` — `answerable?/2`, which a `:question`
   row shares. Composer is disabled: the ACP driver's mid-run

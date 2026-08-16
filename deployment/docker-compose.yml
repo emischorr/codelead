@@ -45,8 +45,7 @@ services:
       # ALLOWED_HOSTS: "192.168.1.50, codelead.local"
       # The name the *host* docker daemon knows the data volume by — sibling
       # task containers mount it by this name for container execution. Must
-      # match the pinned volume name below. Upgrading an older stack whose
-      # volume is named "deployment_codelead-data"? See docs/deployment.md.
+      # match the pinned volume name below.
       WORKSPACE_VOLUME: codelead-data
       # Signed license key. Optional — without one the instance runs the
       # community tier, which today grants everything. See docs/licensing.md.
@@ -56,8 +55,17 @@ services:
       # Container task execution creates sibling containers through the host
       # docker daemon. Mounting the socket is root-equivalent on the host —
       # an accepted trade under the single-tenant model (ADR-0003/0004).
-      # Remove this line and WORKSPACE_VOLUME above to disable it.
+      # Remove this line, group_add below, and WORKSPACE_VOLUME above to
+      # disable it. Mounting alone is not enough — see group_add.
       - /var/run/docker.sock:/var/run/docker.sock
+    # The socket is root:docker 0660 on the host while CodeLead runs as uid
+    # 1000, so the app container also needs the host's docker group id:
+    # `stat -c '%g' /var/run/docker.sock` on the host, into DOCKER_GID in .env.
+    # Numeric only — the image has no `docker` group to resolve a name against.
+    # The 0 fallback keeps the stack bootable (and is right on Docker Desktop),
+    # but on a Linux host an unset DOCKER_GID means permission denied.
+    group_add:
+      - "${DOCKER_GID:-0}"
     ports:
       - "4000:4000"
     depends_on:
@@ -68,9 +76,6 @@ services:
 
 volumes:
   pg:
-  # Pinned so WORKSPACE_VOLUME above stays correct regardless of the compose
-  # project name. On a stack created before this pin the volume already exists
-  # as "deployment_codelead-data" — see the upgrade note in docs/deployment.md
-  # before changing anything, or a fresh empty volume takes its place.
+  # Pinned so WORKSPACE_VOLUME above stays correct regardless of the compose project name.
   codelead-data:
     name: codelead-data

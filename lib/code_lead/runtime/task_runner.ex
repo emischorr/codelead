@@ -17,7 +17,10 @@ defmodule CodeLead.Runtime.TaskRunner do
   Message chunks accumulate into one `streaming: true` transcript row,
   rewritten on a short debounce, and that row is always finalized
   before any other row is written — so row id order is display order and
-  a reader joining mid-message sees the text so far.
+  a reader joining mid-message sees the text so far. A row finalized by a
+  tool call stays reopenable for a short window, because a background
+  subagent's tool calls interleave with the parent's streaming text and
+  must not split one message across two rows.
   """
 
   use GenServer, restart: :temporary
@@ -34,6 +37,11 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   # How often the open message row is rewritten while chunks stream in.
   @flush_interval_ms 400
+
+  # How long a tool-call-closed message row stays reopenable. A real turn
+  # boundary waits for a tool round trip plus model latency; a background
+  # subagent's tool call lands between two chunks of one sentence.
+  @default_resume_window_ms 500
 
   # Tool input is echoed into the transcript, so it is truncated and
   # redacted first — a command line can carry a project env secret.
@@ -136,7 +144,18 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   def dispatch_error({:docker_unreachable, _output}) do
     "the Docker daemon is unreachable — is `/var/run/docker.sock` mounted into the " <>
-      "CodeLead container and the docker CLI installed?"
+      "CodeLead container? A stack whose app container predates the mount picks it " <>
+      "up with `docker compose up -d`; see docs/deployment.md"
+  end
+
+  def dispatch_error({:provision, {:docker_permission_denied, output}}) do
+    dispatch_error({:docker_permission_denied, output})
+  end
+
+  def dispatch_error({:docker_permission_denied, _output}) do
+    "CodeLead cannot use the mounted docker socket — it runs as uid 1000 while the " <>
+      "socket is group-owned by `docker` on the host; add that group's id to the app " <>
+      "container (`group_add`, see docs/deployment.md)"
   end
 
   def dispatch_error(:docker_cli_not_found) do
@@ -224,6 +243,7 @@ defmodule CodeLead.Runtime.TaskRunner do
          monotonic_start: now_ms(),
          live_usage: nil,
          open_row: nil,
+         resumable_row: nil,
          tool_rows: %{},
          permission_rows: %{},
          question_rows: %{}
@@ -315,8 +335,11 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   # No task-topic broadcast: the transcript row is the only consumer.
+  # The row is closed but kept reopenable: tool calls from a background
+  # subagent interleave with the parent's still-streaming text, and those
+  # must not split one message into two rows.
   defp handle_agent_event({:tool_call, detail}, state) do
-    state = finalize_open_row(state)
+    state = finalize_open_row(state, resumable: true)
     {:noreply, record_tool_call(state, detail)}
   end
 
@@ -413,8 +436,16 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   defp append_open_row(%{open_row: nil} = state, text) do
-    row = record_row(state, %{kind: :message, text: text, streaming: true})
-    %{state | open_row: %{event: row, text: text, flushed_at: now_ms()}}
+    case resume_candidate(state) do
+      nil ->
+        row = record_row(state, %{kind: :message, text: text, streaming: true})
+        open_row(state, row, text)
+
+      %{event: event, text: previous} ->
+        text = previous <> text
+        row = AgentFeed.update_event(event, %{text: text, streaming: true})
+        open_row(state, row, text)
+    end
   end
 
   defp append_open_row(%{open_row: open} = state, chunk) do
@@ -429,11 +460,41 @@ defmodule CodeLead.Runtime.TaskRunner do
     end
   end
 
-  defp finalize_open_row(%{open_row: nil} = state), do: state
+  defp open_row(state, row, text) do
+    %{
+      state
+      | open_row: %{event: row, text: text, flushed_at: now_ms()},
+        resumable_row: nil
+    }
+  end
 
-  defp finalize_open_row(%{open_row: open} = state) do
-    AgentFeed.update_event(open.event, %{text: open.text, streaming: false})
-    %{state | open_row: nil}
+  # A row closed by a tool call may still be continued; one closed by a
+  # question, permission, result or shutdown never is — text after those
+  # is a new message.
+  defp finalize_open_row(state, opts \\ [])
+
+  defp finalize_open_row(%{open_row: nil} = state, opts) do
+    if opts[:resumable], do: state, else: %{state | resumable_row: nil}
+  end
+
+  defp finalize_open_row(%{open_row: open} = state, opts) do
+    row = AgentFeed.update_event(open.event, %{text: open.text, streaming: false})
+
+    resumable =
+      if opts[:resumable],
+        do: %{event: row, text: open.text, closed_at: now_ms()}
+
+    %{state | open_row: nil, resumable_row: resumable}
+  end
+
+  defp resume_candidate(%{resumable_row: %{closed_at: closed_at} = resumable}) do
+    if now_ms() - closed_at < resume_window_ms(), do: resumable
+  end
+
+  defp resume_candidate(_state), do: nil
+
+  defp resume_window_ms do
+    Application.get_env(:code_lead, :message_resume_window_ms, @default_resume_window_ms)
   end
 
   defp record_tool_call(state, %{id: id} = detail) when is_binary(id) do

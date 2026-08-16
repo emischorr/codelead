@@ -229,6 +229,20 @@ steps because events weren't persisted), which is exactly the mixing
 this split exists to prevent. See
 [ADR-0002](adr/0002-persist-agent-transcript.md).
 
+**One message, one row.** Chunks accumulate into a single `streaming:
+true` row that a tool call finalizes, so row id order is display order.
+But tool calls do *not* only arrive between messages: a background
+subagent's calls stream up the same ACP session while the parent is
+still talking, and finalizing on those split one sentence across two or
+three rows. So a row closed by a tool call stays reopenable — a chunk
+arriving within `:message_resume_window_ms` (default 500 ms, in
+`Runtime.TaskRunner`) continues it instead of starting a new row. The
+window is measured *after* the close because that is the only reliable
+discriminator: a genuine turn boundary waits for a tool round trip plus
+model latency, background interleaving does not. Rows closed by a
+question, permission, result, or shutdown are never reopened — those are
+real interruptions.
+
 `send_back_to_planning/1` discards the worktree, branch, and ACP
 session, but **keeps** the transcript: history the human may still want
 to read is not context the next run would inherit.

@@ -211,6 +211,22 @@ defmodule CodeLead.Executor.DockerContainerTest do
       assert output =~ "Cannot connect"
     end
 
+    test "an unmounted socket is unreachable, not a pull failure" do
+      use_docker("socket_missing")
+      %{task: task} = container_task_setup()
+
+      assert {:error, {:docker_unreachable, output}} = DockerContainer.provision(task)
+      assert output =~ "failed to connect to the docker API"
+    end
+
+    test "an unreadable socket is a permission failure, not a pull failure" do
+      use_docker("socket_denied")
+      %{task: task} = container_task_setup()
+
+      assert {:error, {:docker_permission_denied, output}} = DockerContainer.provision(task)
+      assert output =~ "permission denied"
+    end
+
     test "a failed start (image without sleep) surfaces the output" do
       use_docker("start_fails")
       %{task: task} = container_task_setup()
