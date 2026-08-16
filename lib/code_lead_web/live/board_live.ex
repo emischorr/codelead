@@ -575,9 +575,16 @@ defmodule CodeLeadWeb.BoardLive do
   attr :executors, :list, required: true
 
   defp new_task_modal(assigns) do
+    assigns = assign(assigns, :discard_confirm, discard_confirm(assigns.form))
+
     ~H"""
     <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[8vh]">
-      <.link patch={~p"/projects/#{@project.id}/board"} class="absolute inset-0" aria-label="Close">
+      <.link
+        patch={~p"/projects/#{@project.id}/board"}
+        class="absolute inset-0"
+        aria-label="Close"
+        data-confirm={@discard_confirm}
+      >
         <span class="sr-only">Close</span>
       </.link>
       <div class="relative w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-2xl">
@@ -587,6 +594,7 @@ defmodule CodeLeadWeb.BoardLive do
             patch={~p"/projects/#{@project.id}/board"}
             class="flex size-8 items-center justify-center rounded-lg text-text3 hover:bg-surface2"
             aria-label="Close"
+            data-confirm={@discard_confirm}
           >
             <.icon name="hero-x-mark" class="size-4" />
           </.link>
@@ -637,7 +645,9 @@ defmodule CodeLeadWeb.BoardLive do
             options={Enum.map(@executors, &{&1.name, &1.id})}
           />
           <div class="mt-4 flex justify-end gap-2">
-            <.button patch={~p"/projects/#{@project.id}/board"}>Cancel</.button>
+            <.button patch={~p"/projects/#{@project.id}/board"} data-confirm={@discard_confirm}>
+              Cancel
+            </.button>
             <.button variant="primary" type="submit" phx-disable-with="Creating…">
               Create task
             </.button>
@@ -647,6 +657,17 @@ defmodule CodeLeadWeb.BoardLive do
     </div>
     """
   end
+
+  defp discard_confirm(form) do
+    if blank?(form[:title].value) and blank?(form[:description].value) do
+      nil
+    else
+      "Discard this task? Your changes will be lost."
+    end
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(value), do: String.trim(to_string(value)) == ""
 
   defp work_type_options, do: FormOptions.work_types()
   defp target_options, do: FormOptions.targets()
