@@ -34,13 +34,15 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
   end
 
   describe "create" do
-    test "with an initial password the user is confirmed and can log in", %{conn: conn} do
+    test "with just a username and password the user is confirmed and can log in", %{
+      conn: conn
+    } do
       {:ok, view, _html} = live(conn, ~p"/settings/users/new")
 
       view
       |> form("#user-form",
         user: %{
-          email: "new@example.com",
+          username: "newuser",
           access: "password",
           password: "hello world!123",
           password_confirmation: "hello world!123"
@@ -50,16 +52,19 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
 
       assert_patch(view, ~p"/settings/users")
 
-      user = Accounts.get_user_by_email("new@example.com")
+      user = Accounts.get_user_by_username("newuser")
+      refute user.email
       assert user.confirmed_at
-      assert Accounts.get_user_by_email_and_password("new@example.com", "hello world!123")
+      assert Accounts.get_user_by_username_and_password("newuser", "hello world!123")
     end
 
     test "with an invite the user gets a magic link and no password", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/settings/users/new")
 
       view
-      |> form("#user-form", user: %{email: "invitee@example.com", access: "invite"})
+      |> form("#user-form",
+        user: %{username: "invitee", email: "invitee@example.com", access: "invite"}
+      )
       |> render_submit()
 
       assert_patch(view, ~p"/settings/users")
@@ -70,13 +75,25 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
       assert_invite_email_to(user)
     end
 
+    test "an invite without an email is rejected", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings/users/new")
+
+      html =
+        view
+        |> form("#user-form", user: %{username: "invitee", access: "invite"})
+        |> render_submit()
+
+      assert html =~ "is required to send an invite"
+      refute Accounts.get_user_by_username("invitee")
+    end
+
     test "surfaces validation errors", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/settings/users/new")
 
       html =
         view
         |> form("#user-form",
-          user: %{email: "nope", access: "password", password: "short"}
+          user: %{username: "newuser", email: "nope", access: "password", password: "short"}
         )
         |> render_submit()
 

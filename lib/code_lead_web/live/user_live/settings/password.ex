@@ -32,11 +32,11 @@ defmodule CodeLeadWeb.UserLive.Settings.Password do
               phx-trigger-action={@trigger_submit}
             >
               <input
-                name={@password_form[:email].name}
+                name={@password_form[:username].name}
                 type="hidden"
-                id="hidden-user-email"
+                id="hidden-user-username"
                 spellcheck="false"
-                value={@current_email}
+                value={@current_username}
               />
               <.input
                 field={@password_form[:password]}
@@ -69,7 +69,7 @@ defmodule CodeLeadWeb.UserLive.Settings.Password do
 
     socket =
       socket
-      |> assign(:current_email, user.email)
+      |> assign(:current_username, user.username)
       |> assign(:password_form, to_form(password_changeset))
       |> assign(:trigger_submit, false)
 

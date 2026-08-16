@@ -24,7 +24,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
 
       html =
         view
-        |> form("#setup-admin-form", user: %{email: "admin@example.com", password: "short"})
+        |> form("#setup-admin-form", user: %{username: "admin", password: "short"})
         |> render_change()
 
       assert html =~ "should be at least 12 character"
@@ -36,7 +36,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
       conn =
         post(conn, ~p"/setup/admin", %{
           "organization" => %{"name" => "Acme"},
-          "user" => %{"email" => "admin@example.com", "password" => @password}
+          "user" => %{"username" => "admin", "password" => @password}
         })
 
       assert redirected_to(conn) == ~p"/setup"
@@ -45,7 +45,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
       assert %{name: "Acme"} = Accounts.get_organization!()
 
       assert %{role: :admin, confirmed_at: %DateTime{}} =
-               Accounts.get_user_by_email("admin@example.com")
+               Accounts.get_user_by_username("admin")
 
       refute Accounts.setup_done?()
     end
@@ -53,14 +53,14 @@ defmodule CodeLeadWeb.SetupLiveTest do
     test "retrying after a rejected password still applies the organization name", %{conn: conn} do
       post(conn, ~p"/setup/admin", %{
         "organization" => %{"name" => "First Try"},
-        "user" => %{"email" => "admin@example.com", "password" => "short"}
+        "user" => %{"username" => "admin", "password" => "short"}
       })
 
       refute Accounts.any_users?()
 
       post(conn, ~p"/setup/admin", %{
         "organization" => %{"name" => "Second Try"},
-        "user" => %{"email" => "admin@example.com", "password" => @password}
+        "user" => %{"username" => "admin", "password" => @password}
       })
 
       assert %{name: "Second Try"} = Accounts.get_organization!()
@@ -70,7 +70,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
     test "a blank organization name falls back to the default", %{conn: conn} do
       post(conn, ~p"/setup/admin", %{
         "organization" => %{"name" => "  "},
-        "user" => %{"email" => "admin@example.com", "password" => @password}
+        "user" => %{"username" => "admin", "password" => @password}
       })
 
       assert %{name: "CodeLead"} = Accounts.get_organization!()
@@ -79,14 +79,14 @@ defmodule CodeLeadWeb.SetupLiveTest do
     test "a second admin registration is refused", %{conn: conn} do
       params = %{
         "organization" => %{"name" => "Acme"},
-        "user" => %{"email" => "admin@example.com", "password" => @password}
+        "user" => %{"username" => "admin", "password" => @password}
       }
 
       post(conn, ~p"/setup/admin", params)
-      conn = post(conn, ~p"/setup/admin", put_in(params, ["user", "email"], "two@example.com"))
+      conn = post(conn, ~p"/setup/admin", put_in(params, ["user", "username"], "second"))
 
       assert redirected_to(conn) == ~p"/setup"
-      refute Accounts.get_user_by_email("two@example.com")
+      refute Accounts.get_user_by_username("second")
     end
   end
 
@@ -324,7 +324,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
     conn =
       post(conn, ~p"/setup/admin", %{
         "organization" => %{"name" => "Acme"},
-        "user" => %{"email" => "admin@example.com", "password" => @password}
+        "user" => %{"username" => "admin", "password" => @password}
       })
 
     %{conn: recycle(conn)}

@@ -31,7 +31,7 @@ defmodule CodeLead.Accounts.UserNotifier do
 
     ==============================
 
-    Hi #{user.email},
+    Hi #{user.username},
 
     You can change your email by visiting the URL below:
 
@@ -61,7 +61,7 @@ defmodule CodeLead.Accounts.UserNotifier do
 
     ==============================
 
-    Hi #{user.email},
+    Hi #{user.username},
 
     An account has been created for you on CodeLead. Visit the URL below to
     confirm it and log in:
@@ -80,7 +80,7 @@ defmodule CodeLead.Accounts.UserNotifier do
 
     ==============================
 
-    Hi #{user.email},
+    Hi #{user.username},
 
     You can log into your account by visiting the URL below:
 
@@ -97,7 +97,7 @@ defmodule CodeLead.Accounts.UserNotifier do
 
     ==============================
 
-    Hi #{user.email},
+    Hi #{user.username},
 
     You can confirm your account by visiting the URL below:
 

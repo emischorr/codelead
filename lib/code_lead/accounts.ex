@@ -85,7 +85,7 @@ defmodule CodeLead.Accounts do
       {:error, :already_registered}
     else
       %User{role: :admin}
-      |> User.email_changeset(attrs)
+      |> User.changeset(attrs)
       |> User.password_changeset(attrs)
       |> User.confirm_changeset()
       |> Repo.insert()
@@ -99,7 +99,7 @@ defmodule CodeLead.Accounts do
   @spec change_admin_registration(map()) :: Ecto.Changeset.t()
   def change_admin_registration(attrs \\ %{}) do
     %User{}
-    |> User.email_changeset(attrs, validate_unique: false)
+    |> User.changeset(attrs, validate_unique: false)
     |> User.password_changeset(attrs, hash_password: false)
   end
 
@@ -107,7 +107,7 @@ defmodule CodeLead.Accounts do
 
   @spec list_users() :: [User.t()]
   def list_users do
-    Repo.all(from u in User, order_by: u.email)
+    Repo.all(from u in User, order_by: u.username)
   end
 
   @spec get_user!(pos_integer()) :: User.t()
@@ -122,13 +122,17 @@ defmodule CodeLead.Accounts do
   @spec get_user_by_email(String.t()) :: User.t() | nil
   def get_user_by_email(email) when is_binary(email), do: Repo.get_by(User, email: email)
 
+  @spec get_user_by_username(String.t()) :: User.t() | nil
+  def get_user_by_username(username) when is_binary(username),
+    do: Repo.get_by(User, username: username)
+
   @doc """
-  Gets a user by email and password, or `nil` when either does not match.
+  Gets a user by username and password, or `nil` when either does not match.
   """
-  @spec get_user_by_email_and_password(String.t(), String.t()) :: User.t() | nil
-  def get_user_by_email_and_password(email, password)
-      when is_binary(email) and is_binary(password) do
-    user = Repo.get_by(User, email: email)
+  @spec get_user_by_username_and_password(String.t(), String.t()) :: User.t() | nil
+  def get_user_by_username_and_password(username, password)
+      when is_binary(username) and is_binary(password) do
+    user = Repo.get_by(User, username: username)
     if User.valid_password?(user, password), do: user
   end
 
@@ -194,12 +198,14 @@ defmodule CodeLead.Accounts do
   ## User registration
 
   @doc """
-  Registers a user by email only; they gain access via a magic link.
+  Registers a user with no password. Test-fixture only — the app has no
+  self-signup route. Leaves the account unconfirmed; it gains access via a
+  magic link once it has an email.
   """
   @spec register_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def register_user(attrs) do
     %User{}
-    |> User.email_changeset(attrs)
+    |> User.changeset(attrs)
     |> Repo.insert()
   end
 

@@ -30,7 +30,7 @@
 Key fields only. `enc` = encrypted at rest. `seam` = present for a future feature, unused in MVP logic.
 
 - **organization** — singleton for the instance: `name`, `settings` *(jsonb; includes `setup_done`, `max_concurrent_runs`)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
-- **users** — `email`, `hashed_password`, `role` (`:admin` | `:member`), `locale`, `settings` *(jsonb: theme, UI preferences)*.
+- **users** — `username` (required, unique login identifier), `email` (optional — only used for the magic-link/invite flow), `hashed_password`, `role` (`:admin` | `:member`), `locale`, `settings` *(jsonb: theme, UI preferences)*.
 - **projects** — `org_id`, `name`, `settings` *(jsonb; `finalize` holds the project's Done defaults: `{repo, folder, commit_path}` — see §6; `pr_template` holds the PR/MR description template used when Approve opens a pull request — see §7)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
 - **repositories** — `project_id`, `name`, `git_url`, `default_branch`, `base_clone_path`.
 - **project_envs** — `project_id`, `key`, `value` *(enc)*. Injected as env vars at executor spawn.

@@ -112,7 +112,7 @@ defmodule CodeLeadWeb.SettingsLive do
 
   defp users_detail(users) do
     case Enum.count(users, &is_nil(&1.confirmed_at)) do
-      0 -> join_names(Enum.map(users, & &1.email))
+      0 -> join_names(Enum.map(users, & &1.username))
       1 -> "1 invite pending"
       pending -> "#{pending} invites pending"
     end
