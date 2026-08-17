@@ -209,6 +209,7 @@ defmodule CodeLeadWeb.BoardLive do
     <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope}>
       <header class="flex h-[58px] shrink-0 items-center gap-3.5 border-b border-border bg-surface px-4 sm:px-5">
         <Layouts.sidebar_toggle />
+        <.project_dot color={@project.color} />
         <span class="truncate text-[15px] font-semibold text-text">{@project.name}</span>
         <span
           :if={@running_count > 0}
