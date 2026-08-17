@@ -81,7 +81,8 @@ defmodule CodeLeadWeb.TaskLive do
         live_usage: nil,
         tick_timer: nil,
         now: DateTime.utc_now(),
-        container_licensed?: License.feature_enabled?(:container_execution_env)
+        container_licensed?: License.feature_enabled?(:container_execution_env),
+        board_column: nil
       )
       |> load_task()
       |> stream_configure(:feed, dom_id: &"agent-block-#{&1.id}")
@@ -103,6 +104,7 @@ defmodule CodeLeadWeb.TaskLive do
     end
 
     socket = assign(socket, tab: tab)
+    socket = maybe_set_board_column(socket, params["column"])
     socket = if tab == :review, do: enter_review(socket, entering_review?), else: socket
 
     # LiveView prunes stream inserts after every render, whether or not
@@ -731,6 +733,15 @@ defmodule CodeLeadWeb.TaskLive do
   defp default_tab(:review), do: :review
   defp default_tab(_state), do: :task
 
+  # The board link the task arrived from carries the mobile column it was
+  # opened from, so "back to board" (button or browser back) restores it
+  # instead of always landing on Planning.
+  defp maybe_set_board_column(socket, nil), do: socket
+  defp maybe_set_board_column(socket, column), do: assign(socket, board_column: column)
+
+  defp board_path(project_id, nil), do: ~p"/projects/#{project_id}/board"
+  defp board_path(project_id, column), do: ~p"/projects/#{project_id}/board?column=#{column}"
+
   # First entry picks the primary view: work types with a visual result
   # open on the live preview when one is available, everything else on
   # the diff. The user's toggle choice sticks for the LiveView's life.
@@ -1069,7 +1080,7 @@ defmodule CodeLeadWeb.TaskLive do
         <div class="flex items-center gap-2.5 px-4 pt-3.5 sm:gap-3.5 sm:px-6">
           <Layouts.sidebar_toggle />
           <.link
-            navigate={~p"/projects/#{@project.id}/board"}
+            navigate={board_path(@project.id, @board_column)}
             class="inline-flex size-8 shrink-0 items-center justify-center rounded-[9px] border border-border bg-surface text-text2 hover:bg-surface2"
             aria-label="Back to board"
           >
