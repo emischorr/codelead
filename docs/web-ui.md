@@ -482,16 +482,26 @@ above the bar instead of underneath it.
   preview is primary and the diff view was never opened.
 
   The preview pane (`PreviewPane`, hook `.PreviewFrame`) is a slim
-  toolbar over a same-origin iframe: back/forward/refresh drive
-  `contentWindow` directly, a read-only path readout strips the
-  `/preview/<id>` prefix, and open-in-new-tab is the devtools escape
-  hatch. Reviewer findings render in both modes (a collapsible strip
-  above the frame in preview mode). Known accepted quirks: iframe
-  navigation shares the parent's browser history (our toolbar buttons
-  are the mitigation), and the previewed app's cookies land on the
-  CodeLead origin (the proxy strips CodeLead's own session cookie from
-  the *forwarded* direction; `SubdomainProxy` is the real fix —
-  ADR-0008).
+  toolbar over a same-origin iframe. The toolbar owns its **own
+  history stack** — an iframe shares the browser's joint session
+  history, so all toolbar navigation goes through
+  `contentWindow.location.replace`, which never adds a host-history
+  entry; back/forward walk the internal stack (disabled at either
+  end), and the hook patches the frame's `pushState` to
+  `replaceState` on each load so SPA navigations (LiveView live-nav,
+  Vite routers) stay out of the host history too and keep the path
+  field live. The path field is an editable address bar scoped to the
+  `/preview/<id>` prefix (Enter navigates); open-in-new-tab is the
+  devtools escape hatch. Pages that leave the origin are shown as
+  `(external page)` and skipped by back/forward. Reviewer findings
+  render in both modes (a collapsible strip above the frame in
+  preview mode). Known accepted quirks: plain full-page link clicks
+  *inside* the frame still add joint-history entries (the host back
+  button may step a classic multi-page app before leaving the task
+  page — intercepting those clicks would break SPA routing), and the
+  previewed app's cookies land on the CodeLead origin (the proxy
+  strips CodeLead's own session cookie from the *forwarded*
+  direction; `SubdomainProxy` is the real fix — ADR-0008).
 
   **Diff view** — for repo targets with a worktree: `Git.diff/2` parsed
   by `CodeLead.Git.Diff` in `start_async`; collapsible reviewer

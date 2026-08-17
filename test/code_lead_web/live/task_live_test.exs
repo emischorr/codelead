@@ -1131,6 +1131,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert has_element?(view, "#review-mode-toggle")
       assert has_element?(view, ~s(#preview-pane iframe[src="/preview/#{task.id}/"]))
+      assert has_element?(view, "input#preview-path")
     end
 
     test "a code task with a declared port opens on the diff, preview a toggle away", ctx do
