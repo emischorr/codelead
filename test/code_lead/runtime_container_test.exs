@@ -346,8 +346,9 @@ defmodule CodeLead.RuntimeContainerTest do
     end
 
     test "explains a socket the app user cannot read" do
-      assert TaskRunner.dispatch_error({:provision, {:docker_permission_denied, "boom"}}) =~
-               "group_add"
+      message = TaskRunner.dispatch_error({:provision, {:docker_permission_denied, "boom"}})
+      assert message =~ "entrypoint"
+      assert message =~ "group_add"
     end
 
     test "explains an unstaged harness" do
