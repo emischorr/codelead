@@ -33,13 +33,15 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `WORKSPACE_VOLUME` | — | Name of the docker volume holding `/data`, **as the host daemon knows it** (`codelead-data` in the shipped stack). When set, sibling task containers mount the workspace by this name. Unset (dev): the workspace root is bind-mounted at the identical path instead. |
 | `WORKSPACE_VOLUME_MOUNT` | `/data` | Where the volume (or `HOST_DATA_ROOT` bind) is mounted inside sibling containers. |
 | `HOST_DATA_ROOT` | — | Escape hatch (ADR-0003) for stacks whose `/data` is a bind mount rather than a named volume: the *host* path of that directory, passed as the bind source for sibling containers. |
-| `CONTAINER_USER` | `1000:1000` in the image, unset in dev | `uid:gid` sibling task containers run as (`docker create --user`), matching the owner of the workspace volume. Unset omits the flag (image default user). |
-| `CONTAINER_CPUS` | — | `--cpus` cap per task container (e.g. `2`). |
-| `CONTAINER_MEMORY_MB` | — | `--memory` cap per task container, in MB. |
+| `CONTAINER_USER` | `1000:1000` in the image, unset in dev | `uid:gid` the one-shot **harness build** container runs as, matching the owner of the workspace volume. Task containers no longer use it — their user (like their resource caps via `runArgs`/`hostRequirements`) comes from the repo's devcontainer config (ADR-0009). |
+| `DEVCONTAINER_CLI` | `devcontainer` | The devcontainer CLI executable provisioning task environments. Baked into the published image; on a dev machine install it with `npm i -g @devcontainers/cli`. |
 | `HARNESS_VERSION` | `0.66.0`, pinned in `config/runtime.exs` in sync with the image's `CLAUDE_ACP_VERSION` build arg | Version directory the compiled harness binary is staged under (`<WORKSPACE_ROOT>/harness/<version>/`). |
 | `HARNESS_SOURCE` | — | Air-gapped escape hatch: a directory of pre-staged harness runtime dirs, one per libc flavor (`<flavor>/` with `claude-agent-acp`, `bun`, `node_modules/`), copied at boot. Normally unset — the harness runtime is staged lazily in-docker on the first container run needing the flavor (ADR-0005/0007). |
-| `PREVIEW_PUBLISH_IP` | `127.0.0.1` | Host interface a task container's declared `preview_port` is published on (`docker create -p <ip>:0:<port>`, ephemeral host port). Loopback works when the BEAM runs on the docker host (dev); in the deployed stack set the docker bridge gateway (usually `172.17.0.1`). Never a public interface — browsers only ever reach previews through the authenticated `/preview/:task_id/` proxy (ADR-0008). |
-| `PREVIEW_UPSTREAM_HOST` | `127.0.0.1` | Address the in-app preview proxy dials for container-task upstreams (the host port comes from `docker port`). Matches `PREVIEW_PUBLISH_IP` in practice. Local-task previews always dial loopback and need neither variable. |
+| `PREVIEW_PUBLISH_IP` | `127.0.0.1` | Host interface a container task's declared `preview_port` is published on — by a per-task relay sidecar (`codelead-preview-<task_id>`, ephemeral host port), not by the task container itself. Loopback works when the BEAM runs on the docker host (dev); in the deployed stack set the docker bridge gateway (usually `172.17.0.1`). Never a public interface — browsers only ever reach previews through the authenticated `/preview/:task_id/` proxy (ADR-0008). |
+| `PREVIEW_UPSTREAM_HOST` | `127.0.0.1` | Address the in-app preview proxy dials for container-task upstreams (the host port comes from `docker port` on the relay). Matches `PREVIEW_PUBLISH_IP` in practice. Local-task previews always dial loopback and need neither variable. |
+| `PREVIEW_RELAY_IMAGE` | `alpine/socat` | Image the preview relay sidecar runs. Pulled on the first container-task preview; override for mirrored/air-gapped registries — any image whose entrypoint is `socat` works. |
+| `PREVIEW_IDLE_MINUTES` | `30` | How long a one-click preview server keeps running with nobody on the Review tab before it stops itself. |
+| `PREVIEW_START_TIMEOUT_SECONDS` | `120` | How long a started preview command gets to answer on the preview port before the session gives up and surfaces its log tail. |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
 `config/prod.exs` — no redirect, no HSTS — because TLS termination belongs to
@@ -143,11 +145,21 @@ it never points at a route that doesn't exist.
 The live preview serves the task's dev server under
 `/preview/<task_id>/`, and the proxy never rewrites response bodies —
 an app that emits absolute asset paths must be told its base path.
-Terminal sessions export `PREVIEW_BASE_PATH` (e.g. `/preview/42`) and
-`PREVIEW_ORIGIN` for exactly this: `vite --base "$PREVIEW_BASE_PATH/"`,
-Phoenix `url: [path: System.get_env("PREVIEW_BASE_PATH")]`, Next.js
-`basePath`, etc. Framework recipes are iteration-2 material
-(`PREVIEW_ROADMAP.md`); the branded 502 page reminds the user meanwhile.
+Terminal and one-click preview sessions export `PREVIEW_BASE_PATH`
+(e.g. `/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the
+repository's declared port — unique per repository across the
+instance, so serve commands should bind it rather than hardcode one):
+
+| Stack | Recipe |
+|---|---|
+| Vite | `vite --port "$PREVIEW_PORT" --base "$PREVIEW_BASE_PATH/"` |
+| Phoenix | `PORT="$PREVIEW_PORT" mix phx.server` with `url: [path: System.get_env("PREVIEW_BASE_PATH", "/")]` in the endpoint config (read the env in `dev.exs` at boot, or in `config/runtime.exs`) |
+| Next.js | `next dev -p "$PREVIEW_PORT"` with `basePath: process.env.PREVIEW_BASE_PATH ?? ""` in `next.config` |
+| Rails | `rails server -p "$PREVIEW_PORT"` with `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]` |
+| Plain static server | serve the directory on `$PREVIEW_PORT`; relative asset paths need nothing more |
+
+An app that cannot be path-prefix-hosted waits for the `SubdomainProxy`
+gateway; the branded 502 page reminds the user meanwhile.
 
 ### Serving a preview from a container task
 
@@ -158,9 +170,9 @@ because its server runs in the app's own process space and the proxy
 dials loopback.
 
 **Bind `0.0.0.0`, not `127.0.0.1`.** The proxy reaches a container task
-through a host port published at container create
-(`-p <PREVIEW_PUBLISH_IP>:0:<preview_port>`), and a published port cannot
-reach a socket bound to the container's own loopback. A server on
+through a relay sidecar on the task container's network, which forwards
+to the container's ip — and a connection arriving over the network
+cannot reach a socket bound to the container's own loopback. A server on
 `127.0.0.1` is invisible to the preview no matter how the deployment is
 configured:
 
@@ -170,53 +182,44 @@ configured:
 | Vite | `--host` |
 | Next.js | `-H 0.0.0.0` |
 
-**Listen on exactly the declared `preview_port`.** The binding is created
-for the port the repository declares, so a server on any other port
-resolves to nothing. Declaring or changing `preview_port` after the
-container already exists recreates the container on the next terminal or
-preview touch — see [Container-task live previews](deployment.md#container-task-live-previews).
+**Listen on exactly the declared `preview_port`.** The relay forwards
+the port the repository declares, so a server on any other port resolves
+to nothing — bind `$PREVIEW_PORT` and it always matches. Declaring or
+changing `preview_port` needs no container recreate — the relay is
+(re)created to match on the next preview touch — see
+[Container-task live previews](deployment.md#container-task-live-previews).
 
-**Expect a toolchain, not an environment.** Task containers run with
-`--entrypoint sleep`, so the image's own `ENTRYPOINT`/`CMD` never
-executes and there is no init system — a database *installed* in the
-`image_ref` is never *started*. Nor can you generally start it by hand:
-on a **deployed** instance the app image sets `CONTAINER_USER=1000:1000`
-itself, so every task container is created `--user 1000:1000` whether or
-not the operator asked. That uid usually has no `/etc/passwd` entry in
-the task image, which is why `whoami` reports a bare number — you are
-not root, `su` prompts for a password that does not exist, and you can
-chown nothing. The paths you *do* own are the ones the app created on
-the workspace volume: the worktree, the agent home, and the `TMPDIR`
-beneath it. (Dev is the opposite case — `CONTAINER_USER` is unset there,
-so containers run as the image's default user; see the variable's row
-above.)
+**Companion services come from the devcontainer.** A database or cache
+beside the app belongs in the repo's `.devcontainer` setup —
+`dockerComposeFile` services come up with the environment, and
+dependency installs or seeds run in its lifecycle hooks
+(`postCreateCommand`/`postStartCommand`). The executor never invents a
+services model of its own (ADR-0009).
 
-None of that is accidental. Files written to the shared volume have to
-stay owned by the service user, and the [image
-contract](adr/0004-container-executor-iteration-two.md) asks for little
-more than `sleep`, a shell and git: the container supplies the toolchain
-an agent's commands run against, not a running environment.
+**One-click preview.** With a `preview_command` declared on the
+repository, the Review tab grows a Start preview button: the command
+runs in the worktree (locally, or `docker exec`'d into the task's
+devcontainer) with the project env plus `PREVIEW_BASE_PATH`/
+`PREVIEW_ORIGIN`, a status chip follows
+`Starting… → Running`, and a failure surfaces the command's log tail in
+place. The command should be a single process (installs belong in the
+lifecycle hooks); the session stops on request-changes, on leaving
+Review for good, and after `PREVIEW_IDLE_MINUTES` with nobody watching.
 
-**So the preview covers a single-process dev server** — one that needs
-no companion services. An app that wants a database beside it is waiting
-on devcontainer support, which owns the multi-service story
-(`PREVIEW_ROADMAP.md`); today the honest answer is to point the app at a
-database that already exists somewhere reachable, or to review that work
-by diff.
+**Manual fallback.** Without a `preview_command`, start the server from
+the task's Terminal. The terminal session closes its `docker exec`
+after 15 minutes with no viewer; the shell sees EOF and takes its
+*foreground* children with it. A server started with `nohup … &` is
+reparented to the container's PID 1 and keeps serving — nothing ever
+stops the container.
 
-**Background long-running processes.** The terminal session closes its
-`docker exec` after 15 minutes with no viewer; the shell sees EOF and
-takes its *foreground* children with it. A server started with
-`nohup … &` is reparented to the container's PID 1 and keeps serving —
-nothing ever stops the container.
-
-What does end it is container *removal*: cancel, Review→Planning
+What does end it is environment *removal*: cancel, Review→Planning
 (`worktree_policy: :discard`), reaching Done (finalize always releases
-the container), a changed `image_ref`, the stale-binding recreate above,
-or the boot reaper for any task not sitting in Review. Only the
-workspace mount survives that, so anything written outside it — an
-`initdb`'d data dir included — goes with the container. Durable state
-belongs under the worktree or the agent home.
+the environment), or the boot reaper for any task not sitting in
+Review. Only the workspace mount survives that, so anything written
+outside it — an `initdb`'d data dir included — goes with the
+environment. Durable state belongs under the worktree, the agent home,
+or a compose volume the repo's own compose file declares.
 
 ## Git credentials
 
@@ -460,36 +463,29 @@ RUN printf 'export PATH="/opt/mytool/bin:$PATH"\n' > /etc/profile.d/mytool.sh
 > tools, it stops it.
 
 Extending the image is the workaround for **local** execution's single
-shared environment. The per-repository fix is live: declare a container
-image on the repository (Settings → Project → Repositories, or
-`repositories.env_kind: :image` + `image_ref`) and switch the task's
-Execution to Container — the agent then runs inside that image, with
-the project's exact toolchain, over the docker socket
+shared environment. The per-repository fix is devcontainer execution:
+enable it on the repository (Settings → Project → Repositories, or
+`repositories.env_kind: :devcontainer`) and switch the task's Execution
+to Container — the agent then runs inside the environment the repo's
+own `.devcontainer` configuration describes, provisioned by the
+official devcontainer CLI over the docker socket
 ([ADR-0003](adr/0003-container-execution-model.md),
-[ADR-0004](adr/0004-container-executor-iteration-two.md)). Container
-execution is the one licensed feature — `:container_execution_env` — so
-an instance with no `LICENSE_KEY` can declare an image but cannot select
-or start Container execution; see [`licensing.md`](licensing.md). There
-is deliberately no fallback image: an undeclared environment blocks the
-start instead of running somewhere nobody chose. The
-`devcontainer_path`/`dockerfile` fields and `agents.tool_features`
-remain dormant seams. The declared image must provide `sleep` (the idle
-entrypoint) and, practically, a shell and git — beyond that, any musl
-(Alpine) or glibc (Debian bookworm or newer) base works: the image's
-libc is probed at run start and the matching harness flavor is used
-(ADR-0006). The harness ships its own runtime — a staged directory on
-the workspace volume holding bun plus the adapter's package tree
-(ADR-0007), assembled in-docker on first use — so user images need no
-node, nothing harness-related.
-
-Two things the image does *not* get to decide, worth knowing before
-building one. Its `ENTRYPOINT`/`CMD` is replaced by the idle `sleep`, so
-nothing the image would normally start on boot ever runs; and on a
-deployed instance the container is created `--user 1000:1000` regardless
-of the image's own `USER`, so execs land on a uid that typically has no
-account in the image. Both follow from the container being a toolchain
-rather than an environment — see [Serving a preview from a container
-task](#serving-a-preview-from-a-container-task) for what that rules out.
+[ADR-0009](adr/0009-devcontainer-execution.md)). Whatever works in VS
+Code or Codespaces works here: a plain `"image":`, a
+`build.dockerfile`, a `dockerComposeFile` with services, `features`,
+lifecycle hooks, `remoteUser`, `runArgs`. Container execution is the
+one licensed feature — `:container_execution_env` — so an instance with
+no `LICENSE_KEY` can enable the environment but cannot select or start
+Container execution; see [`licensing.md`](licensing.md). There is
+deliberately no fallback environment: an undeclared one blocks the
+start, and an enabled repo without a devcontainer config in the
+worktree fails the run visibly. `agents.tool_features` remains a
+dormant seam. Any musl (Alpine) or glibc (Debian bookworm or newer)
+base works: the environment's libc is probed at run start and the
+matching harness flavor is used (ADR-0006). The harness ships its own
+runtime — a staged directory on the workspace holding bun plus the
+adapter's package tree (ADR-0007), assembled in-docker on first use —
+so devcontainer images need no node, nothing harness-related.
 
 ### Container execution in dev
 
@@ -498,21 +494,35 @@ applies to a dev instance exactly as it does to a deployed one, and there
 is no config override. Mint yourself an `owner` key
 (see [`licensing.md`](licensing.md)) and export it from `.envrc`.
 
-The BEAM runs on the host in dev, so sibling containers bind-mount the
+The BEAM runs on the host in dev, so task environments bind-mount the
 workspace at its real path — Docker Desktop's file sharing must cover
-it. Nothing else to set up: declare a container image on a repository
-(the field in the repository modal — a `container:` badge confirms it),
-set a task's Execution to Container, and Start. The **first** container
-run per libc family stages the matching harness runtime in a one-shot
-bun container (ADR-0005/0007) — a few minutes, logged as `staging
-container harness …`, while the task sits dispatched; it needs
-docker-side network access to the npm registry, and a failed staging
-lands as a `run_failed` attention with the remedy. Every later run
-starts instantly, and `docker ps` shows `codelead-task-<id>` while one
-runs.
+it. The devcontainer CLI is a dev prerequisite:
+`npm i -g @devcontainers/cli` (the published image ships it). Then:
+enable Devcontainer on a repository (the select in the repository
+modal — a `devcontainer` badge confirms it), set a task's Execution to
+Container, and Start. The first `devcontainer up` for a repo may build
+images and install features (minutes, streamed to the log while the
+task sits dispatched); later ups reuse the environment and are
+near-instant. The **first** container run per libc family additionally
+stages the matching harness runtime in a one-shot bun container
+(ADR-0005/0007) — a few minutes, logged as `staging container harness
+…`; it needs docker-side network access to the npm registry, and a
+failed staging lands as a `run_failed` attention with the remedy.
 Air-gapped or picky setups can bypass the build by pointing
 `HARNESS_SOURCE` at a pre-built binary. `mix test --only docker` runs
-the real-daemon integration test.
+the real-daemon integration test, and `mix test --only devcontainer`
+the real-CLI one.
+
+The quickest end-to-end check is dogfooding: CodeLead's own repo ships
+a `.devcontainer` (app + Postgres via compose). Point your dev instance
+at the checkout, set the repository to Devcontainer with
+`preview_port: 4001` (4000 is the instance's own port, which is
+blocked) and `preview_command: PORT="$PREVIEW_PORT" mix phx.server`,
+and run a container task — the Review tab's Start preview then shows
+CodeLead itself through `/preview/<task_id>/`. The repo's
+`config/dev.exs` and `config/test.exs` read `PGHOST` (the compose `db`
+service) and `DEVCONTAINER` (bind `0.0.0.0` instead of loopback) for
+exactly this.
 
 Migrations are not automatic *inside the image*: `/app/bin/server` is the
 default command, and `/app/bin/migrate` (which evals

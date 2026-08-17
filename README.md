@@ -75,6 +75,7 @@ Merging is plain local git — `git merge` and `git push` — never a forge acti
 - **Bring your own agents and models.** Full coding harnesses via the Agent Client Protocol — **Claude Code** and **Codex** — plus direct model calls to **Anthropic**, **OpenAI**, or a local **Ollama** for cheap reviewers, planners, and short-form content. Not every agent needs to be a coding harness.
 - **Not just code.** Code, design, content, and file work each get the review surface that suits them: a diff, a rendered HTML preview, rendered Markdown, or a file listing. Content and design tasks can target a repository and go through the same branch-and-PR flow as code.
 - **Isolated by construction.** One task, one worktree, one feature branch. Non-repo work gets its own task folder. Cancel a run and the worktree stays for inspection.
+- **Your repo's devcontainer is the environment.** Enable Container execution on a repository and its tasks run inside the environment the repo's own `.devcontainer` setup describes — toolchain, services, lifecycle hooks, provisioned by the official devcontainer CLI. Declare a preview port and command, and the Review tab starts the dev server and renders the running app in one click.
 - **Parallel review, advisory only.** Several reviewers with different focuses on the same artifact. A reviewer that crashes or times out never blocks your cycle.
 - **Plan before you burn tokens.** A repo-aware survey reads your existing code and tells you what your spec leaves out — before an executor spends an hour building the wrong thing.
 - **Know what it costs.** Per-run tokens (prompt, completion, cached, reasoning), money, and duration. Monthly budgets at project and organization level that hold a task rather than starting it and lift by themselves on the 1st. Subscription-based providers are shown as estimates, local models as free — the number never pretends to a precision it doesn't have.
@@ -179,11 +180,10 @@ Early, and honest about it. So issues are welcome. Eat your own dog food: I use 
 - **Email is off by default.** Without `SMTP_HOST` there is no mail transport, and the flows that need one (magic-link login, magic-link invites) stay hidden — create users with a password from Settings → Users. Set `SMTP_HOST` to enable them. The self-service email-change page is the exception: it still claims to have sent a confirmation link.
 - No profile page, and no organization/instance settings (the tile is a placeholder).
 - No metrics page — the sidebar item is deactivated.
-- A container task supplies a toolchain, not a running environment: the image's own `ENTRYPOINT` never runs and execs are unprivileged, so a database packaged in the image can't be started. Previews there cover a single-process dev server.
 - You can't message an agent mid-run; ask-and-answer works, free-form chat doesn't.
 - Project-scoped agents exist in the model but aren't creatable through the UI.
 
-**Planned:** sub-tasks and epics, cost and usage dashboards, a review walkthrough that explains a diff step by step, agent memory that learns your preferences, devcontainer-based environments (so a task's preview can bring up the services it needs), and queuing that waits for a subscription's token window to reset.
+**Planned:** sub-tasks and epics, cost and usage dashboards, a review walkthrough that explains a diff step by step, agent memory that learns your preferences, and queuing that waits for a subscription's token window to reset.
 
 **Out of scope on purpose:** releasing (tags, changelogs, deploy pipelines), forge-side automation (auto-merge, closing PRs, gating on required checks), and enterprise features (fine-grained RBAC, SSO, several organizations per deployment).
 
@@ -199,7 +199,9 @@ mix setup                     # deps, database, seeds, assets
 mix phx.server                # http://localhost:4000
 ```
 
-Sign in with `admin@example.com` / `codelead-dev-password`. The seeds create a demo project backed by a local bare git repository, so the full clone → branch → review → merge flow works offline, and they mark setup as done — to exercise the wizard, create and migrate a database without running the seeds.
+Sign in with `admin` / `codelead-dev-password`. The seeds create a demo project backed by a local bare git repository, so the full clone → branch → review → merge flow works offline, and they mark setup as done — to exercise the wizard, create and migrate a database without running the seeds.
+
+Prefer containers? The repo ships its own [`.devcontainer`](.devcontainer/devcontainer.json): "Reopen in Container" (VS Code, or any devcontainer client) gets the pinned toolchain, Postgres, and a seeded database with no local setup — and the same config is what lets a CodeLead instance run tasks on this repository with Container execution, dogfooding style.
 
 ```bash
 mix test                      # creates and migrates the test database first

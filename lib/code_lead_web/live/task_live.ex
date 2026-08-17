@@ -16,6 +16,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Git.DiffFile
   alias CodeLead.License
   alias CodeLead.Planning
+  alias CodeLead.Preview
   alias CodeLead.PreviewGateway
   alias CodeLead.Projects
   alias CodeLead.Reviews
@@ -100,6 +101,11 @@ defmodule CodeLeadWeb.TaskLive do
     # shell in it) stays alive for the idle window.
     if previous_tab == :terminal and tab != :terminal do
       Terminal.detach(socket.assigns.task.id)
+    end
+
+    # Same contract for the preview server's viewer-keyed idle window.
+    if previous_tab == :review and tab != :review do
+      Preview.detach(socket.assigns.task.id)
     end
 
     socket = assign(socket, tab: tab)
@@ -298,6 +304,27 @@ defmodule CodeLeadWeb.TaskLive do
       _unknown ->
         {:noreply, socket}
     end
+  end
+
+  ## Preview server
+
+  def handle_event("preview_start", _params, socket) do
+    task = socket.assigns.task
+    extra_env = PreviewGateway.preview_env(task, CodeLeadWeb.Endpoint.url())
+
+    case Preview.ensure_session(task, extra_env: extra_env) do
+      {:ok, _pid} ->
+        Preview.attach(task.id)
+        {:noreply, assign(socket, preview_run: Preview.status(task.id))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, preview_error(reason))}
+    end
+  end
+
+  def handle_event("preview_stop", _params, socket) do
+    Preview.stop(socket.assigns.task.id)
+    {:noreply, assign(socket, preview_run: :stopped)}
   end
 
   ## Planning: edits, executor/reviewers, chat
@@ -511,6 +538,10 @@ defmodule CodeLeadWeb.TaskLive do
 
   # Output for a hidden tab is dropped — the session's scrollback
   # repaints the terminal when the tab (re)attaches.
+  def handle_info({:preview_state, _task_id, status}, socket) do
+    {:noreply, assign(socket, preview_run: status)}
+  end
+
   def handle_info({:terminal_data, _task_id, chunk}, %{assigns: %{tab: :terminal}} = socket) do
     {:noreply, push_event(socket, "terminal:data", %{data: Base.encode64(chunk)})}
   end
@@ -547,6 +578,8 @@ defmodule CodeLeadWeb.TaskLive do
       repository: repository,
       preview_available?: preview_src != nil,
       preview_src: preview_src,
+      preview_command?: preview_command?(repository),
+      preview_run: preview_run(socket),
       finalize_mode: finalize.mode,
       project_finalize_mode: finalize.project_mode,
       forge_known?: finalize.forge_known?,
@@ -704,6 +737,34 @@ defmodule CodeLeadWeb.TaskLive do
     assign(socket, terminal_subscribed?: true)
   end
 
+  defp preview_command?(repository) do
+    repository != nil and repository.preview_command != nil
+  end
+
+  # A failed session is gone from the registry, so its terminal state
+  # would read :stopped on the next reload — keep the failure visible
+  # until a new start (or an explicit stop) replaces it.
+  defp preview_run(socket) do
+    case {Map.get(socket.assigns, :preview_run), Preview.status(socket.assigns.task.id)} do
+      {{:failed, _tail} = failed, :stopped} -> failed
+      {_previous, status} -> status
+    end
+  end
+
+  defp preview_error(:no_preview_command),
+    do: "Declare a preview command on the repository to start the preview from here."
+
+  defp preview_error(:no_worktree),
+    do: "This task has no worktree yet — the preview starts after the first run."
+
+  defp preview_error(:container_unlicensed),
+    do: "Container execution requires a commercial license, so the preview cannot start."
+
+  defp preview_error({:shell_not_found, shell}),
+    do: "No #{inspect(shell)} shell is available on the server."
+
+  defp preview_error(reason), do: "The preview could not start: #{inspect(reason)}"
+
   defp terminal_error(:no_worktree),
     do: "No execution context yet — the terminal opens once a run has provisioned a worktree."
 
@@ -735,6 +796,17 @@ defmodule CodeLeadWeb.TaskLive do
   # open on the live preview when one is available, everything else on
   # the diff. The user's toggle choice sticks for the LiveView's life.
   defp enter_review(socket, entering?) do
+    # Register as a preview viewer (no-op without a live session) and
+    # pick up the session's current state.
+    if entering? do
+      Preview.attach(socket.assigns.task.id)
+    end
+
+    socket =
+      if entering?,
+        do: assign(socket, :preview_run, preview_run(socket)),
+        else: socket
+
     socket =
       case socket.assigns.review_mode do
         nil ->
@@ -1162,6 +1234,8 @@ defmodule CodeLeadWeb.TaskLive do
           review_mode={@review_mode || :diff}
           preview_available?={@preview_available?}
           preview_src={@preview_src}
+          preview_command?={@preview_command?}
+          preview_run={@preview_run}
         />
         <TerminalTab.terminal_tab :if={@tab == :terminal} task={@task} />
       </div>

@@ -4,7 +4,7 @@ defmodule CodeLead.Executor.DockerCli do
   prefix comes from the `:docker_cli` config key so tests can swap in a
   fake, mirroring the `:harnesses` pattern. Lifecycle commands run via
   `System.cmd/3`; the agent process itself is opened as a Port by
-  `CodeLead.Executor.DockerContainer.spawn/3` using `cli/0`.
+  `CodeLead.Executor.Devcontainer.spawn/3` using `cli/0`.
   """
 
   @doc """

@@ -10,6 +10,7 @@ defmodule CodeLead.PreviewGateway do
   `SubdomainProxy` would hand out per-task subdomains instead.
   """
 
+  alias CodeLead.Projects
   alias CodeLead.Tasks.Task
 
   @typedoc "Where the in-app proxy dials a task's preview server."
@@ -34,21 +35,39 @@ defmodule CodeLead.PreviewGateway do
   def impl, do: Application.get_env(:code_lead, :preview_gateway, __MODULE__.PathProxy)
 
   @doc """
-  Env vars injected into terminal (and later preview) execs so serve
-  commands can configure a base path / allowed origins. The external
-  origin is pre-computed by the web-layer caller.
+  The task's declared preview port — the repository's `preview_port`,
+  the one field every gateway implementation keys on.
+  """
+  @spec preview_port(Task.t()) ::
+          {:ok, :inet.port_number()} | {:error, :no_preview_port | :unsupported}
+  def preview_port(%Task{target: :repo, repository_id: repository_id})
+      when is_integer(repository_id) do
+    case Projects.get_repository!(repository_id).preview_port do
+      nil -> {:error, :no_preview_port}
+      port -> {:ok, port}
+    end
+  end
+
+  def preview_port(%Task{target: :repo}), do: {:error, :no_preview_port}
+  def preview_port(%Task{}), do: {:error, :unsupported}
+
+  @doc """
+  Env vars injected into terminal and preview execs so serve commands
+  can configure themselves: the base path and allowed origin, plus the
+  declared port to bind (unique per repository across the instance).
+  The external origin is pre-computed by the web-layer caller.
   """
   @spec preview_env(Task.t(), String.t()) :: [{String.t(), String.t()}]
   def preview_env(%Task{} = task, origin) do
-    case impl().url_for(task) do
-      {:ok, base} ->
-        [
-          {"PREVIEW_BASE_PATH", String.trim_trailing(base, "/")},
-          {"PREVIEW_ORIGIN", origin}
-        ]
-
-      {:error, _reason} ->
-        []
+    with {:ok, base} <- impl().url_for(task),
+         {:ok, port} <- preview_port(task) do
+      [
+        {"PREVIEW_BASE_PATH", String.trim_trailing(base, "/")},
+        {"PREVIEW_ORIGIN", origin},
+        {"PREVIEW_PORT", Integer.to_string(port)}
+      ]
+    else
+      {:error, _reason} -> []
     end
   end
 end

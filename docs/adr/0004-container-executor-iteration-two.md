@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-08-15)
+Accepted (2026-08-15). Superseded in part by ADR-0009 (image
+declaration, idle entrypoint, forced user, resource caps).
 
 ## Context
 

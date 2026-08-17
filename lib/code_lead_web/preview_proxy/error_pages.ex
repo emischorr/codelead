@@ -21,9 +21,9 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
       Start your dev server in the task's <strong>Terminal</strong> tab.
       For container tasks it must listen on <code>0.0.0.0</code>, and it
       should honor <code>PREVIEW_BASE_PATH</code> so assets resolve under
-      the preview URL. Container tasks are dialed via their published
-      host port — if the address above looks unreachable from the app,
-      check <code>PREVIEW_PUBLISH_IP</code> /
+      the preview URL. Container tasks are dialed via a relay sidecar's
+      published host port — if the address above looks unreachable from
+      the app, check <code>PREVIEW_PUBLISH_IP</code> /
       <code>PREVIEW_UPSTREAM_HOST</code>. This page retries automatically.
       """,
       ~s(<meta http-equiv="refresh" content="4">)

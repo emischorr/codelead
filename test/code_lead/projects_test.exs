@@ -49,36 +49,29 @@ defmodule CodeLead.ProjectsTest do
       refute Projects.get_repository!(first.id).is_default
     end
 
-    test "env_kind is derived from the image reference" do
+    test "env_kind and devcontainer_path are cast, with blank paths normalized away" do
       project = project_fixture()
       repo = repository_fixture(project.id)
 
       assert repo.env_kind == :default
       assert repo.devcontainer_path == nil
-      assert repo.image_ref == nil
-      assert repo.dockerfile == nil
 
-      assert {:ok, updated} =
-               Projects.update_repository(repo, %{image_ref: "ghcr.io/acme/toolchain:1"})
-
-      assert updated.env_kind == :image
-      assert updated.image_ref == "ghcr.io/acme/toolchain:1"
-
-      # Blank (or whitespace) clears both.
-      assert {:ok, cleared} = Projects.update_repository(updated, %{image_ref: "  "})
-      assert cleared.env_kind == :default
-      assert cleared.image_ref == nil
-
-      # A dormant kind set via console is never clobbered by derivation.
-      assert {:ok, dormant} =
-               Projects.update_repository(cleared, %{
+      assert {:ok, enabled} =
+               Projects.update_repository(repo, %{
                  env_kind: :devcontainer,
-                 devcontainer_path: ".devcontainer"
+                 devcontainer_path: ".devcontainer/devcontainer.json"
                })
 
-      assert dormant.env_kind == :devcontainer
-      assert {:ok, still} = Projects.update_repository(dormant, %{image_ref: nil})
-      assert still.env_kind == :devcontainer
+      assert enabled.env_kind == :devcontainer
+      assert enabled.devcontainer_path == ".devcontainer/devcontainer.json"
+
+      # Blank (or whitespace) clears the pinned path back to discovery.
+      assert {:ok, discovered} = Projects.update_repository(enabled, %{devcontainer_path: "  "})
+      assert discovered.env_kind == :devcontainer
+      assert discovered.devcontainer_path == nil
+
+      assert {:ok, disabled} = Projects.update_repository(discovered, %{env_kind: :default})
+      assert disabled.env_kind == :default
     end
 
     test "preview_port accepts valid ports, blanks, and rejects out-of-range values" do
@@ -98,6 +91,34 @@ defmodule CodeLead.ProjectsTest do
         assert {:error, changeset} = Projects.update_repository(cleared, %{preview_port: invalid})
         assert %{preview_port: _} = errors_on(changeset)
       end
+    end
+
+    test "preview ports are unique across the instance, with the app's own port blocked" do
+      project = project_fixture()
+      other_project = project_fixture()
+      first = repository_fixture(project.id, %{preview_port: 4001})
+
+      # Local previews all serve from the app's host, so the rule spans
+      # projects, not just one.
+      assert {:error, changeset} =
+               Projects.update_repository(
+                 repository_fixture(other_project.id),
+                 %{preview_port: 4001}
+               )
+
+      assert "already used by another repository on this instance" in errors_on(changeset).preview_port
+
+      # A repository keeping (or re-submitting) its own port is fine.
+      assert {:ok, _repo} = Projects.update_repository(first, %{preview_port: 4001})
+
+      # Undeclared ports coexist freely — the partial index skips NULLs.
+      assert {:ok, _repo} = Projects.update_repository(repository_fixture(project.id), %{})
+
+      # The instance's own port (PORT, default 4000) is never a preview port.
+      assert {:error, changeset} =
+               Projects.update_repository(repository_fixture(project.id), %{preview_port: 4000})
+
+      assert "is the port this CodeLead instance itself listens on" in errors_on(changeset).preview_port
     end
 
     test "repository names are unique per project" do

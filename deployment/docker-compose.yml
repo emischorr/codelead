@@ -50,19 +50,26 @@ services:
       # Signed license key. Optional — without one the instance runs the
       # community tier, which today grants everything. See docs/licensing.md.
       # LICENSE_KEY: ${LICENSE_KEY}
-      # Live preview of container tasks: sibling containers publish their
-      # repository's declared preview port on this host IP, and the app
-      # dials it at PREVIEW_UPSTREAM_HOST. On a Linux host set both to the
-      # docker bridge gateway (usually 172.17.0.1) — off public interfaces,
+      # Live preview of container tasks: a per-task relay sidecar
+      # (codelead-preview-<id>, image PREVIEW_RELAY_IMAGE, pulled on first
+      # use) joins the task container's network and publishes the
+      # repository's declared preview port on this host IP; the app dials it
+      # at PREVIEW_UPSTREAM_HOST. On a Linux host set both to the docker
+      # bridge gateway (usually 172.17.0.1) — off public interfaces,
       # reachable from this container. Unset, container-task previews stay
       # disabled (local-task previews need no config). See docs/deployment.md.
       # PREVIEW_PUBLISH_IP: 172.17.0.1
       # PREVIEW_UPSTREAM_HOST: 172.17.0.1
+      # PREVIEW_RELAY_IMAGE: alpine/socat
+      # One-click preview: how long a started server may keep a viewer-less
+      # session, and how long it gets to answer on its port before failing.
+      # PREVIEW_IDLE_MINUTES: "30"
+      # PREVIEW_START_TIMEOUT_SECONDS: "120"
     volumes:
       - codelead-data:/data
-      # Container task execution creates sibling containers through the host
-      # docker daemon. Mounting the socket is root-equivalent on the host —
-      # an accepted trade under the single-tenant model (ADR-0003/0004).
+      # Container task execution provisions each task's devcontainer through
+      # the host docker daemon. Mounting the socket is root-equivalent on the
+      # host — an accepted trade under the single-tenant model (ADR-0003/0009).
       # Remove this line, group_add below, and WORKSPACE_VOLUME above to
       # disable it. Mounting alone is not enough — see group_add.
       - /var/run/docker.sock:/var/run/docker.sock

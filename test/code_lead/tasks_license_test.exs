@@ -23,8 +23,7 @@ defmodule CodeLead.TasksLicenseTest do
 
     project = project_fixture()
 
-    repository =
-      repository_fixture(project.id, %{env_kind: :image, image_ref: "ghcr.io/acme/dev:1"})
+    repository = repository_fixture(project.id, %{env_kind: :devcontainer})
 
     executor = agent_fixture(%{roles: [:execute], work_type: :code})
 
@@ -46,12 +45,13 @@ defmodule CodeLead.TasksLicenseTest do
       :ok
     end
 
-    test "refuses to start a container task even with a declared image", %{
+    test "refuses to start a container task even with a declared environment", %{
       task: task,
       executor: executor
     } do
-      # The repository *does* declare an image, so :missing_execution_env
-      # is ruled out and the refusal can only be the licence.
+      # The repository *does* declare devcontainer execution, so
+      # :missing_execution_env is ruled out and the refusal can only be
+      # the licence.
       assert Tasks.startable(task, executor) == {:error, :unlicensed_execution_env}
       refute Tasks.startable?(task, executor)
     end
@@ -109,12 +109,12 @@ defmodule CodeLead.TasksLicenseTest do
       assert running.state == :running
     end
 
-    test "still refuses one whose repository declares no image", %{
+    test "still refuses one whose repository declares no environment", %{
       task: task,
       repository: repository,
       executor: executor
     } do
-      {:ok, _repository} = Projects.update_repository(repository, %{image_ref: nil})
+      {:ok, _repository} = Projects.update_repository(repository, %{env_kind: :default})
 
       assert Tasks.startable(task, executor) == {:error, :missing_execution_env}
     end

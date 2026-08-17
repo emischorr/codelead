@@ -27,13 +27,14 @@ defmodule CodeLead.Application do
       ] ++
         CodeLead.Runtime.RunSupervisor.child_specs() ++
         CodeLead.Terminal.child_specs() ++
+        CodeLead.Preview.child_specs() ++
         [
           # One-shot, async: stages the container harness onto the
-          # workspace volume and reaps orphaned task containers. Never
+          # workspace volume and reaps orphaned task environments. Never
           # crashes boot; no-ops without docker.
           Supervisor.child_spec(
-            {Task, &CodeLead.Executor.DockerContainer.Bootstrap.run/0},
-            id: CodeLead.Executor.DockerContainer.Bootstrap,
+            {Task, &CodeLead.Executor.Devcontainer.Bootstrap.run/0},
+            id: CodeLead.Executor.Devcontainer.Bootstrap,
             restart: :temporary
           ),
           # Start to serve requests, typically the last entry

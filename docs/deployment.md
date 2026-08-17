@@ -116,12 +116,13 @@ alpine cp -a /from/. /to/`) with the stack down.
 ### The docker socket
 
 The `app` service mounts `/var/run/docker.sock`, which is what lets a task
-run in its own container built from the repository's declared image. **A
-mounted docker socket is root-equivalent on the host** — anyone who controls
-the CodeLead process can start privileged containers. That trade is accepted,
-and stated here rather than discovered, under the single-tenant, self-hosted
-assumption ([ADR-0003](adr/0003-container-execution-model.md),
-[ADR-0004](adr/0004-container-executor-iteration-two.md)). To run without
+run in the environment its repository's `.devcontainer` configuration
+describes — the bundled devcontainer CLI provisions it through this socket.
+**A mounted docker socket is root-equivalent on the host** — anyone who
+controls the CodeLead process can start privileged containers. That trade is
+accepted, and stated here rather than discovered, under the single-tenant,
+self-hosted assumption ([ADR-0003](adr/0003-container-execution-model.md),
+[ADR-0009](adr/0009-devcontainer-execution.md)). To run without
 container execution, remove the socket mount, `group_add`, and the
 `WORKSPACE_VOLUME` env — container-selecting tasks then refuse to start with a
 clear message.
@@ -151,11 +152,13 @@ docker compose exec app ls -l /var/run/docker.sock
 docker compose exec app docker info      # server info, not an error
 ```
 
-One more thing the socket does not solve: a repository's declared `image_ref` is
-resolved against the **host** daemon. CodeLead inspects the local image store
-first and pulls only on a miss, so a locally built tag like
-`myorg-dev/app:latest` works — but it must exist on the *deployment* host, not
-just the machine it was built on.
+Everything a devcontainer config references resolves against the **host**
+daemon: an `"image":` is pulled there, a `build.dockerfile` is built there
+(the image ships the compose and buildx CLI plugins for exactly this), and
+compose services run there. The repo carries its own environment, so nothing
+needs to be hand-built or pre-copied onto the deployment host — the first
+`devcontainer up` per task does whatever pulling and building the config
+demands, and later ups reuse it.
 
 Container execution is also the one **licensed** feature
 (`:container_execution_env`). An instance with no `LICENSE_KEY` cannot select
@@ -164,15 +167,20 @@ unrestricted on the community tier. See [`licensing.md`](licensing.md).
 
 ### Container-task live previews
 
-The Review tab's live preview proxies `/preview/:task_id/` to the dev server
-the user starts in the task's Terminal ([ADR-0008](adr/0008-preview-and-terminal.md)).
+The Review tab's live preview proxies `/preview/:task_id/` to the task's dev
+server — started with the one-click Start preview button (repositories with a
+`preview_command`) or by hand in the task's Terminal
+([ADR-0008](adr/0008-preview-and-terminal.md),
+[ADR-0009](adr/0009-devcontainer-execution.md)).
 For **local** tasks nothing needs configuring — the server runs in the app's
-own process space and the proxy dials loopback. For **container** tasks the
-declared `preview_port` is published on the host at container create, and the
-app container must be able to reach it. The app container and sibling task
-containers sit on *different* docker networks, so loopback publishing (the
-default) is unreachable from the app — set both variables to the docker
-bridge gateway instead:
+own process space and the proxy dials loopback. For **container** tasks a
+relay sidecar (`codelead-preview-<task_id>`, image `PREVIEW_RELAY_IMAGE`,
+default `alpine/socat` — pulled on first use) joins the task container's
+network and publishes the declared `preview_port` on the host, and the app
+container must be able to reach that published port. The app container and
+sibling task containers sit on *different* docker networks, so loopback
+publishing (the default) is unreachable from the app — set both variables to
+the docker bridge gateway instead:
 
 ```bash
 docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'   # usually 172.17.0.1
@@ -185,19 +193,18 @@ PREVIEW_UPSTREAM_HOST: 172.17.0.1
 ```
 
 The port binds to that gateway address only — not a public interface — and
-browsers always go through the authenticated proxy. Containers created
-*before* the variables changed carry the old binding; the reconciler treats a
-binding on a stale publish IP like a missing one and recreates the container
-on the next terminal/preview touch (unless a run is live — then it waits so
-the agent's exec survives). Existing stacks need no
+browsers always go through the authenticated proxy. A relay created *before*
+the variables changed carries the old binding; the next preview touch
+recreates it on the current one — always safe, because no agent exec runs
+inside a relay. Existing stacks need no
 change until an operator wants container-task previews; the websocket rules
 below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
 exactly as they do to `/live/websocket`, so a *location-scoped* proxy config
 must cover this path too.
 
-That is the operator's half. What the server *inside* the container has to do
-— bind `0.0.0.0`, listen on exactly the declared port, and start the image's
-own services by hand — is in
+That is the operator's half. What the server *inside* the environment has to
+do — bind `0.0.0.0`, listen on exactly the declared port — and where its
+companion services come from is in
 [`configuration.md`](configuration.md#serving-a-preview-from-a-container-task).
 
 ### What you must add

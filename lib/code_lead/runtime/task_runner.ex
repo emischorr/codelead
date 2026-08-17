@@ -121,21 +121,20 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   def dispatch_error({:provision, {:missing_execution_env, repo_name}}) do
     "this task is set to run in a container, but repository #{inspect(repo_name)} " <>
-      "declares no container image — declare one in Settings → Project → Repositories, " <>
-      "or switch the task's execution back to Local"
+      "does not enable devcontainer execution — enable it in Settings → Project → " <>
+      "Repositories (the repo needs a .devcontainer setup), or switch the task's " <>
+      "execution back to Local"
   end
 
-  def dispatch_error({:provision, {:image_pull_failed, image_ref, output}}) do
-    "could not pull the container image #{inspect(image_ref)}: #{Git.redact(output)}"
+  def dispatch_error({:provision, {:missing_devcontainer_config, repo_name}}) do
+    "repository #{inspect(repo_name)} enables devcontainer execution but carries no " <>
+      "devcontainer configuration — add a .devcontainer/devcontainer.json to the repo " <>
+      "(or fix the declared config path), or switch the task's execution back to Local"
   end
 
-  def dispatch_error({:provision, {:container_create_failed, output}}) do
-    "could not create the task container: #{Git.redact(output)}"
-  end
-
-  def dispatch_error({:provision, {:container_start_failed, output}}) do
-    "could not start the task container: #{Git.redact(output)} — the declared image " <>
-      "must provide a `sleep` binary (any regular Linux base image does)"
+  def dispatch_error({:provision, {:devcontainer_up_failed, message, tail}}) do
+    "could not bring the task's devcontainer up: #{Git.redact(message)}" <>
+      if(tail == "", do: "", else: " — log tail: #{Git.redact(tail)}")
   end
 
   def dispatch_error({:provision, {:docker_unreachable, output}}) do
@@ -160,6 +159,11 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   def dispatch_error(:docker_cli_not_found) do
     "the docker CLI is not installed where CodeLead runs — container execution needs it"
+  end
+
+  def dispatch_error(:devcontainer_cli_not_found) do
+    "the devcontainer CLI is not installed where CodeLead runs — container execution " <>
+      "needs it (npm i -g @devcontainers/cli; the published image ships it)"
   end
 
   def dispatch_error({:harness_not_staged, detail}) do

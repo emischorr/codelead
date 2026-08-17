@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    command: sleep infinity
+    volumes:
+      - ..:/workspace:cached
+    environment:
+      # config/dev.exs + config/test.exs read PGHOST for the Repo host.
+      PGHOST: db
+      # config/dev.exs binds 0.0.0.0 instead of loopback when set — port
+      # forwards and CodeLead's preview relay both need that.
+      DEVCONTAINER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: code_lead_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      # A named volume on purpose: per-environment DB state that a
+      # `compose down --volumes` teardown wipes with the environment.
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

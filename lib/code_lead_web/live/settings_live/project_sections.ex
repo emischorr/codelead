@@ -181,8 +181,8 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
             <.badge variant={if repository.base_clone_path, do: :ok, else: :neutral}>
               {if repository.base_clone_path, do: "Cloned", else: "Not cloned yet"}
             </.badge>
-            <.badge :if={repository.env_kind == :image} variant={:neutral}>
-              container: {repository.image_ref}
+            <.badge :if={repository.env_kind == :devcontainer} variant={:neutral}>
+              devcontainer
             </.badge>
           </:badges>
           <:meta>

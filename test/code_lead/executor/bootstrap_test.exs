@@ -1,8 +1,8 @@
-defmodule CodeLead.Executor.DockerContainer.BootstrapTest do
+defmodule CodeLead.Executor.Devcontainer.BootstrapTest do
   # async: false — swaps the :docker_cli config and env vars.
   use CodeLead.DataCase, async: false
 
-  alias CodeLead.Executor.DockerContainer.Bootstrap
+  alias CodeLead.Executor.Devcontainer.Bootstrap
   alias CodeLead.Workspace
 
   @fake_docker Path.expand("../../support/fake_docker.sh", __DIR__)
@@ -19,6 +19,8 @@ defmodule CodeLead.Executor.DockerContainer.BootstrapTest do
       Application.put_env(:code_lead, :harness_version, original_version)
       Application.put_env(:code_lead, :harness_source, original_source)
       System.delete_env("FAKE_DOCKER_LOG")
+      System.delete_env("FAKE_DOCKER_ORPHANS")
+      System.delete_env("FAKE_DOCKER_COMPOSE_PROJECT")
       File.rm(log)
     end)
 
@@ -99,17 +101,34 @@ defmodule CodeLead.Executor.DockerContainer.BootstrapTest do
   end
 
   describe "orphan reaping" do
-    test "removes labeled containers whose tasks are not running", %{log: log} do
+    test "reaps a primary as an environment and a relay as a container", %{log: log} do
       use_docker("orphans")
+      System.put_env("FAKE_DOCKER_ORPHANS", "abc123 41 true\ndef456 42 ")
 
       assert Bootstrap.run() == :ok
 
-      lines = log |> File.read!() |> String.split("\n", trim: true)
-      assert "rm -f abc123" in lines
+      lines = log_lines(log)
+      # The primary resolves through the id-label lookup and is removed
+      # as an environment; the relay is just force-removed by id.
+      assert "rm -f f4k3devc0ntainer" in lines
       assert "rm -f def456" in lines
+      refute "rm -f abc123" in lines
     end
 
-    test "keeps a Review-state container task's container across restarts", %{log: log} do
+    test "takes a compose-based environment down as a whole project", %{log: log} do
+      use_docker("orphans")
+      System.put_env("FAKE_DOCKER_ORPHANS", "abc123 41 true")
+      System.put_env("FAKE_DOCKER_COMPOSE_PROJECT", "task-41_devcontainer")
+
+      assert Bootstrap.run() == :ok
+
+      assert Enum.any?(
+               log_lines(log),
+               &String.starts_with?(&1, "compose -p task-41_devcontainer down --volumes")
+             )
+    end
+
+    test "keeps a Review-state container task's environment across restarts", %{log: log} do
       import CodeLead.ProjectsFixtures
       import CodeLead.TasksFixtures
 
@@ -122,13 +141,13 @@ defmodule CodeLead.Executor.DockerContainer.BootstrapTest do
         |> put_context!(%{state: :review, execution_env: :container})
 
       use_docker("orphans")
-      System.put_env("FAKE_DOCKER_ORPHANS", "abc123 #{task.id}\ndef456 42")
-      on_exit(fn -> System.delete_env("FAKE_DOCKER_ORPHANS") end)
+      System.put_env("FAKE_DOCKER_ORPHANS", "abc123 #{task.id} true\ndef456 42 ")
 
       assert Bootstrap.run() == :ok
 
-      lines = log |> File.read!() |> String.split("\n", trim: true)
+      lines = log_lines(log)
       refute "rm -f abc123" in lines
+      refute "rm -f f4k3devc0ntainer" in lines
       assert "rm -f def456" in lines
     end
 

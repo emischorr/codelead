@@ -4,12 +4,11 @@ defmodule CodeLead.Executor do
   and spawning agent processes inside them.
 
   The locked contract (ADR-0003): `spawn/3` launches the agent process
-  *inside* the provisioned execution context. Under the future
-  `DockerContainer` implementation the ACP harness runs in the sibling
-  container, attached over `docker exec -i` — the same Port stdio
-  bridge as today. Client-side ACP capabilities (permission prompts,
-  display) stay host-side in the driver; they are not the executor's
-  concern.
+  *inside* the provisioned execution context. Under the `Devcontainer`
+  implementation the ACP harness runs in the task's devcontainer,
+  attached over `docker exec -i` — the same Port stdio bridge as
+  locally. Client-side ACP capabilities (permission prompts, display)
+  stay host-side in the driver; they are not the executor's concern.
 
   Implementations must not assume a `Context` round-trips intact:
   `CodeLead.Runtime.StageEffects.discard_context/1` rebuilds one from
@@ -21,7 +20,7 @@ defmodule CodeLead.Executor do
   `function_exported?/3` by the fail path to refine a failure detail.
 
   Implementations: `CodeLead.Executor.LocalSubprocess` (default) and
-  `CodeLead.Executor.DockerContainer` (per-task opt-in via
+  `CodeLead.Executor.Devcontainer` (per-task opt-in via
   `tasks.execution_env`, resolved by `for_task/1`). The agent driver is
   independent of the executor.
   """
@@ -74,7 +73,7 @@ defmodule CodeLead.Executor do
   """
   @spec for_task(Task.t()) :: module()
   def for_task(%Task{target: :repo, execution_env: :container}) do
-    CodeLead.Executor.DockerContainer
+    CodeLead.Executor.Devcontainer
   end
 
   def for_task(%Task{}), do: impl()

@@ -284,10 +284,7 @@ defmodule CodeLead.TasksTest do
       assert {:error, :missing_execution_env} = Tasks.move_to_running(task)
 
       {:ok, _} =
-        CodeLead.Projects.update_repository(repository, %{
-          env_kind: :image,
-          image_ref: "ghcr.io/acme/dev:1"
-        })
+        CodeLead.Projects.update_repository(repository, %{env_kind: :devcontainer})
 
       assert Tasks.startable(task, executor) == :ok
       assert {:ok, _task} = Tasks.move_to_running(task)

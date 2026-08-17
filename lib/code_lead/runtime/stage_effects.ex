@@ -21,6 +21,7 @@ defmodule CodeLead.Runtime.StageEffects do
 
   alias CodeLead.Executor
   alias CodeLead.Executor.Context
+  alias CodeLead.Preview
   alias CodeLead.Projects
   alias CodeLead.Reviews
   alias CodeLead.Runtime.RunSupervisor
@@ -47,7 +48,13 @@ defmodule CodeLead.Runtime.StageEffects do
   task has already moved.
   """
   @spec on_enter(Stage.stage_type(), Task.t(), term()) :: term()
-  def on_enter(:execute, %Task{} = task, _prepared), do: try_dispatch(task)
+  def on_enter(:execute, %Task{} = task, _prepared) do
+    # A run entering means the reviewed build is history — the preview
+    # server (if any) stops here, covering request-changes, whose edge
+    # keeps the context alive.
+    Preview.stop(task.id)
+    try_dispatch(task)
+  end
 
   def on_enter(:review, %Task{} = task, _prepared) do
     {:ok, _cycle} = Reviews.start_cycle(task)
@@ -75,6 +82,7 @@ defmodule CodeLead.Runtime.StageEffects do
   def discard_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
   def discard_context(%Task{worktree_path: nil, target: :repo} = task) do
+    Preview.stop(task.id)
     # No worktree was ever provisioned, but ephemeral resources (a
     # container) may still exist under the task's identity.
     context = rebuilt_context(%{task | worktree_path: CodeLead.Workspace.worktree_path(task.id)})
@@ -82,6 +90,7 @@ defmodule CodeLead.Runtime.StageEffects do
   end
 
   def discard_context(%Task{} = task) do
+    Preview.stop(task.id)
     context = rebuilt_context(task)
     context.executor.teardown(context, keep: false)
   end
@@ -96,6 +105,8 @@ defmodule CodeLead.Runtime.StageEffects do
   def release_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
   def release_context(%Task{} = task) do
+    Preview.stop(task.id)
+
     context =
       rebuilt_context(%{
         task
