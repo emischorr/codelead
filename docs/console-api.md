@@ -35,14 +35,15 @@ Planning.chat(task.id, auditor.id)      # type into the REPL; `exit` to leave
 {:ok, task} = Tasks.set_executor(task, judy.id)
 :ok         = Tasks.set_reviewers(task, [auditor.id])
 
-# Optional: run the agent inside a container built from the repo's
-# declared image instead of a local subprocess (ADR-0004). Setting an
-# image derives env_kind: :image; execution stays a per-task choice.
+# Optional: run the agent inside the environment the repo's own
+# .devcontainer setup describes instead of a local subprocess
+# (ADR-0009). Enabling it is a repo-level switch; execution stays a
+# per-task choice.
 #
 # Container execution is licensed (:container_execution_env). The console
 # is not a way around that — without a granting LICENSE_KEY the second
 # call returns {:error, changeset}. See licensing.md.
-{:ok, _} = Projects.update_repository(repo, %{image_ref: "elixir:1.18-alpine"})
+{:ok, _} = Projects.update_repository(repo, %{env_kind: :devcontainer})
 {:ok, task} = Tasks.update_task(task, %{execution_env: :container})
 ```
 

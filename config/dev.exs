@@ -1,10 +1,11 @@
 import Config
 
-# Configure your database
+# Configure your database. PGHOST covers containerized dev (the repo's
+# own .devcontainer runs Postgres as a compose service named `db`).
 config :code_lead, CodeLead.Repo,
   username: "postgres",
   password: "postgres",
-  hostname: "localhost",
+  hostname: System.get_env("PGHOST", "localhost"),
   database: "code_lead_dev",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
@@ -18,8 +19,14 @@ config :code_lead, CodeLead.Repo,
 # to bundle .js and .css sources.
 config :code_lead, CodeLeadWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # Inside a container (the repo's .devcontainer sets DEVCONTAINER) the
+  # server must be reachable beyond loopback — VS Code port forwards and
+  # CodeLead's own preview relay alike.
+  http: [ip: if(System.get_env("DEVCONTAINER"), do: {0, 0, 0, 0}, else: {127, 0, 0, 1})],
+  # When this checkout runs as a CodeLead task, the preview proxy serves it
+  # under /preview/<task_id>/ and injects PREVIEW_BASE_PATH — the documented
+  # Phoenix recipe (docs/configuration.md, "Preview base path").
+  url: [path: System.get_env("PREVIEW_BASE_PATH", "/")],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

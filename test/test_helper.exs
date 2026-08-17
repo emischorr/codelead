@@ -30,6 +30,8 @@ File.rm_rf!(workspace_root)
 # community grant in their own setup; see `CodeLead.LicenseHelpers`.
 CodeLead.LicenseHelpers.grant_owner!()
 
-# :docker tests need a real Docker daemon; run them with `mix test --only docker`.
-ExUnit.start(exclude: [:docker])
+# :docker tests need a real Docker daemon (`mix test --only docker`);
+# :devcontainer tests additionally need the devcontainer CLI
+# (`mix test --only devcontainer`).
+ExUnit.start(exclude: [:docker, :devcontainer])
 Ecto.Adapters.SQL.Sandbox.mode(CodeLead.Repo, :manual)

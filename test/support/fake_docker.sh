@@ -11,20 +11,14 @@
 # the script execs the fake ACP agent with it, inheriting stdio so the
 # whole Port/JSON-RPC bridge runs for real:
 #
-#   absent+happy        no container, image present; exec bridges "happy"
-#   running             container running with $FAKE_DOCKER_IMAGE
-#   running_published   running, with $FAKE_DOCKER_PREVIEW_PORT published
-#                       to 127.0.0.1:$FAKE_DOCKER_HOST_PORT
-#   stopped             container exists, not running
-#   image_mismatch      running, but with a different image than declared
-#   no_image            no container, image missing, pull succeeds
-#   pull_fails          image missing and the pull fails
+#   absent+happy        no task container; exec bridges "happy"
+#   running             the task's devcontainer is running
+#   stopped             the task's devcontainer exists, not running
 #   daemon_down         every command fails with the connect error
 #   socket_missing      same, in the newer CLI's wording (socket not mounted)
 #   socket_denied       same, but the socket is there and unreadable by our uid
-#   start_fails         create ok, start fails (no `sleep` in the image)
 #   exec_dies           exec exits 137 (container killed mid-run)
-#   orphans             `ps` lists two reapable containers
+#   orphans             `ps` lists reapable containers
 #   build_fails         `run` (the harness build) fails with a registry error
 #
 # `run` is the one-shot harness build: it succeeds under every scenario
@@ -35,6 +29,23 @@
 #
 # An `exec` whose argv mentions ld-musl is the libc probe: it answers
 # $FAKE_DOCKER_LIBC (default glibc) instead of bridging the agent.
+#
+# The preview relay sidecar reads its own knobs: `inspect` of the task
+# container's networks reports the task container on the bridge at
+# $FAKE_DOCKER_TASK_IP (default 172.17.0.5) whenever the scenario has a
+# running container; `inspect` of the relay reports the relay per
+# $FAKE_DOCKER_RELAY (unset = absent, running, stopped) with the target
+# label $FAKE_DOCKER_RELAY_TARGET; `port` answers
+# $FAKE_DOCKER_PUBLISH_IP:$FAKE_DOCKER_HOST_PORT (defaults
+# 127.0.0.1:55001); a relay `run -d` just logs and reports an id.
+#
+# The devcontainer executor's lookups: `ps` filtered on the
+# task_container id-label answers the scenario's container state with
+# the id $FAKE_DEVCONTAINER_CONTAINER_ID (default f4k3devc0ntainer,
+# matching fake_devcontainer.sh); `inspect` of the compose-project
+# label answers $FAKE_DOCKER_COMPOSE_PROJECT (default none); `inspect`
+# of devcontainer.metadata answers $FAKE_DOCKER_METADATA (default []);
+# `compose` (project down) just logs.
 #
 # Every invocation's argv is appended to $FAKE_DOCKER_LOG (one line per
 # call) for tests to assert on.
@@ -65,44 +76,48 @@ if [ "$docker_scenario" = "socket_denied" ]; then
 fi
 
 case "$1" in
-  container) # container inspect --format '{{.State.Running}}|{{.Config.Image}}|{{json .HostConfig.PortBindings}}' <name>
-    bindings="{\"${FAKE_DOCKER_PREVIEW_PORT:-5173}/tcp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"${FAKE_DOCKER_HOST_PORT:-55001}\"}]}"
-    case "$docker_scenario" in
-      running) echo "true|${FAKE_DOCKER_IMAGE:-img}|null" ;;
-      running_published) echo "true|${FAKE_DOCKER_IMAGE:-img}|$bindings" ;;
-      stopped) echo "false|${FAKE_DOCKER_IMAGE:-img}|null" ;;
-      image_mismatch) echo "true|some-other-image|null" ;;
-      *) echo "Error: No such object" && exit 1 ;;
+  inspect) # inspect -f <format> <name> — the executor's/relay's lookups
+    case "$*" in
+      *NetworkSettings.Networks*) # the task container's network + ip
+        case "$docker_scenario" in
+          running | exec_dies)
+            echo "{\"bridge\":{\"IPAddress\":\"${FAKE_DOCKER_TASK_IP:-172.17.0.5}\"}}"
+            ;;
+          *) echo "Error: No such object" && exit 1 ;;
+        esac
+        ;;
+      *preview_target*) # the relay's running state + target label
+        case "$FAKE_DOCKER_RELAY" in
+          running) echo "true|${FAKE_DOCKER_RELAY_TARGET}" ;;
+          stopped) echo "false|${FAKE_DOCKER_RELAY_TARGET}" ;;
+          *) echo "Error: No such object" && exit 1 ;;
+        esac
+        ;;
+      *com.docker.compose.project*) # is the primary part of a compose project?
+        echo "${FAKE_DOCKER_COMPOSE_PROJECT:-}"
+        ;;
+      *devcontainer.metadata*) # the merged devcontainer config (exec user)
+        echo "${FAKE_DOCKER_METADATA:-[]}"
+        ;;
+      *) echo "fake docker: unhandled inspect $*" && exit 64 ;;
     esac
     ;;
-  port) # port <name> <port>/tcp
-    case "$docker_scenario" in
-      running_published) echo "127.0.0.1:${FAKE_DOCKER_HOST_PORT:-55001}" ;;
-      *) echo "Error: No public port published" && exit 1 ;;
-    esac
-    ;;
-  image) # image inspect <ref>
-    case "$docker_scenario" in
-      no_image | pull_fails) echo "Error: No such image" && exit 1 ;;
-      *) echo "[]" ;;
-    esac
-    ;;
-  pull)
-    case "$docker_scenario" in
-      pull_fails) echo "Error response from daemon: manifest unknown" && exit 1 ;;
-      *) echo "pulled" ;;
-    esac
-    ;;
-  create)
-    echo "f4k3c0ntain3rid"
-    ;;
-  start)
-    case "$docker_scenario" in
-      start_fails) echo 'exec: "sleep": executable file not found in $PATH' && exit 1 ;;
-      *) echo "started" ;;
-    esac
+  port) # port <relay name> <port>/tcp
+    echo "${FAKE_DOCKER_PUBLISH_IP:-127.0.0.1}:${FAKE_DOCKER_HOST_PORT:-55001}"
     ;;
   ps)
+    # The devcontainer executor resolves the task's primary container by
+    # its id-labels; the docker state scenarios answer for it.
+    case "$*" in
+      *label=codelead.task_container=true*)
+        case "$docker_scenario" in
+          running | exec_dies | orphans) echo "${FAKE_DEVCONTAINER_CONTAINER_ID:-f4k3devc0ntainer}|running" ;;
+          stopped) echo "${FAKE_DEVCONTAINER_CONTAINER_ID:-f4k3devc0ntainer}|exited" ;;
+          *) : ;;
+        esac
+        exit 0
+        ;;
+    esac
     case "$docker_scenario" in
       orphans)
         # Task ids are test-data dependent, so a test may override the
@@ -115,6 +130,10 @@ case "$1" in
         ;;
       *) : ;;
     esac
+    ;;
+  compose)
+    # compose -p <project> down --volumes --remove-orphans
+    echo "compose ok"
     ;;
   rm)
     echo "removed"
@@ -132,6 +151,13 @@ case "$1" in
     esac
     ;;
   run)
+    # A relay `run -d --name codelead-preview-<id> ...` only needs an id.
+    case "$*" in
+      *codelead-preview-*)
+        echo "f4k3r3l4yid"
+        exit 0
+        ;;
+    esac
     # The one-shot harness staging. Simulates the staged runtime
     # directory (wrapper + bun) at the OUT path scanned from argv.
     # Matched against the whole scenario so it composes with a docker

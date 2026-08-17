@@ -185,7 +185,7 @@ existing clone, so changing a project's repository URL retargets the
 base clone instead of being silently ignored.
 
 Executor selection: `CodeLead.Executor.for_task/1` resolves per task —
-`:repo` targets with `execution_env: :container` get `DockerContainer`,
+`:repo` targets with `execution_env: :container` get `Devcontainer`,
 everything else (including every `:folder` target) the configured
 default (`impl/0`, `LocalSubprocess`). The resolved module travels on
 `Context.executor`, so spawn and teardown always use the executor the
@@ -193,29 +193,33 @@ context was built for; hand-built contexts (planning surveys) default
 to local. `Executor.available?/1` is the preflight face of the
 behaviour — see `docs/agent-drivers.md`.
 
-`DockerContainer` ([ADR-0003](adr/0003-container-execution-model.md),
-[ADR-0004](adr/0004-container-executor-iteration-two.md)) delegates all
+`Devcontainer` ([ADR-0003](adr/0003-container-execution-model.md),
+[ADR-0009](adr/0009-devcontainer-execution.md)) delegates all
 git/worktree provisioning to `LocalSubprocess` — git stays host-side —
-and adds the sibling container: created from the repository's declared
-`image_ref` (`env_kind: :image`; no fallback image exists), named
-`codelead-task-<id>`, labeled `codelead.*`, idling on `sleep` so any
-number of `docker exec -i` bridges can attach. The workspace reaches it
-as a named volume (`WORKSPACE_VOLUME`), a `HOST_DATA_ROOT` bind, or —
-in dev, where the BEAM runs on the host — a bind of the workspace root
-at the identical path; all three keep host and container paths
-coincident. Containers are cattle: `spawn` re-ensures the container, so
-external removal costs one recreate; the harness `HOME` lives in
-`agent-homes/task-<id>` on the volume so sessions survive, and every
-exec also gets `TMPDIR=<agent-home>/.tmp` because the task image's
-`/tmp` may not be writable for `CONTAINER_USER`.
-`Context.exec_ref` (the container name) is not durable —
+and provisions the environment the repository's own `.devcontainer`
+configuration describes via `devcontainer up` (`env_kind:
+:devcontainer`; no fallback environment exists), identified by
+`codelead.task_container`/`codelead.task_id` id-labels so any number of
+`docker exec -i` bridges can attach. The workspace rides in as one
+extra `--mount` — a named volume (`WORKSPACE_VOLUME`), a
+`HOST_DATA_ROOT` bind, or, in dev where the BEAM runs on the host, a
+bind of the workspace root at the identical path; all three keep host
+and container paths coincident, which is how the worktree's gitdir and
+the staged harness resolve in-container. Environments are cattle:
+`devcontainer up` is idempotent, so `spawn` re-ensures the environment
+and external removal costs one re-up; the harness `HOME` lives in
+`agent-homes/task-<id>` on the workspace so sessions survive, and every
+exec also gets `TMPDIR=<agent-home>/.tmp` because the environment's
+`/tmp` may not be writable for the exec user (`--user` follows the
+config's `remoteUser`, read from the `devcontainer.metadata` label).
+`Context.exec_ref` (the container id) is not durable —
 `StageEffects.discard_context/1` rebuilds a `%Context{}` from DB rows
 before teardown, so the executor recovers identity from the task id
 alone. `teardown(keep: true)` means "release ephemeral, keep durable":
-cancel and Done remove the container while the worktree and agent home
-stay; send-back-to-planning removes all three. The repository's
-`devcontainer_path`/`dockerfile` fields and `agents.tool_features`
-remain dormant seams.
+cancel and Done remove the environment (a compose-based one goes down
+as a whole project) while the worktree and agent home stay;
+send-back-to-planning removes all three. `agents.tool_features`
+remains a dormant seam.
 
 Tests build throwaway `file://` origins via `CodeLead.GitHelpers`
 inside the test workspace root — no network, no real harness needed.

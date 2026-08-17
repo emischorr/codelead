@@ -8,14 +8,14 @@ defmodule CodeLead.Terminal do
   status}`).
 
   Local tasks get a host shell in the worktree; container tasks a
-  `docker exec` shell into `codelead-task-<id>` (self-healing via
-  `DockerContainer.ensure_for_task/1`, licensed like every container
+  `docker exec` shell into the task's devcontainer (self-healing via
+  `Devcontainer.ensure_for_task/1`, licensed like every container
   exec). PTY where `script(1)` exists, plain pipe otherwise
   (`CodeLead.Terminal.Command`).
   """
 
+  alias CodeLead.Executor.Devcontainer
   alias CodeLead.Executor.DockerCli
-  alias CodeLead.Executor.DockerContainer
   alias CodeLead.Executor.EnvScrub
   alias CodeLead.License
   alias CodeLead.Projects
@@ -145,11 +145,13 @@ defmodule CodeLead.Terminal do
 
   defp spawn_spec(%Task{target: :repo, execution_env: :container} = task, env) do
     with :ok <- check_container_license(),
-         {:ok, name} <- DockerContainer.ensure_for_task(task.id),
+         {:ok, container_id} <- Devcontainer.ensure_for_task(task.id),
          {:ok, {cli_path, prefix}} <- DockerCli.cli() do
-      script? = container_has_script?(name)
-      env_flags = DockerContainer.exec_env_flags(task.id, env)
-      args = Command.docker(prefix, name, task.worktree_path, env_flags, shell(), script?)
+      script? = container_has_script?(container_id)
+      exec_flags = Devcontainer.exec_flags(task.id, container_id, env)
+
+      args =
+        Command.docker(prefix, container_id, task.worktree_path, exec_flags, shell(), script?)
 
       {:ok,
        %{

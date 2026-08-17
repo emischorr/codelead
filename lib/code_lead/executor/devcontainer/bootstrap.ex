@@ -1,16 +1,18 @@
-defmodule CodeLead.Executor.DockerContainer.Bootstrap do
+defmodule CodeLead.Executor.Devcontainer.Bootstrap do
   @moduledoc """
   One-shot boot work for the container executor: copies pre-staged
   harness runtimes from a `HARNESS_SOURCE` directory when one is
   configured (the lazy in-docker staging is
   `CodeLead.Executor.HarnessStaging`'s job, and boot never triggers it)
-  and reaps orphaned task containers left by a crash. Runs as a supervised `Task`; every failure degrades to a
-  log line, so an instance without docker — or without any container
-  use — boots unaffected.
+  and reaps orphaned task environments left by a crash. Runs as a
+  supervised `Task`; every failure degrades to a log line, so an
+  instance without docker — or without any container use — boots
+  unaffected.
   """
 
   require Logger
 
+  alias CodeLead.Executor.Devcontainer
   alias CodeLead.Executor.DockerCli
   alias CodeLead.Executor.HarnessStaging
   alias CodeLead.Runtime.RunSupervisor
@@ -57,9 +59,13 @@ defmodule CodeLead.Executor.DockerContainer.Bootstrap do
     end
   end
 
+  # Compose service containers (a devcontainer's database, say) carry no
+  # codelead labels, so the listing only surfaces primaries and relays —
+  # a primary is reaped as a whole environment (compose project
+  # included) while a relay is just a container.
   defp reap_orphans do
     if DockerCli.available?() do
-      list_format = ~s({{.ID}} {{.Label "codelead.task_id"}})
+      list_format = ~s({{.ID}} {{.Label "codelead.task_id"}} {{.Label "codelead.task_container"}})
 
       case DockerCli.run([
              "ps",
@@ -84,27 +90,33 @@ defmodule CodeLead.Executor.DockerContainer.Bootstrap do
 
   # active_task_ids is re-checked per container rather than snapshotted:
   # a task dispatched while the reaper walks the list must not lose its
-  # freshly ensured container.
+  # freshly ensured environment.
   defp reap_line(line) do
-    with [id, task_id] <- String.split(line, " ", parts: 2),
+    with [id, task_id | rest] <- String.split(line, " "),
          {task_id_int, ""} <- Integer.parse(task_id),
-         false <- keep_container?(task_id_int) do
-      _ = DockerCli.run(["rm", "-f", id])
-      Logger.info("reaped orphan task container #{id} (task #{task_id_int})")
+         false <- keep_environment?(task_id_int) do
+      if rest == ["true"] do
+        _ = Devcontainer.remove_environment(task_id_int)
+        Logger.info("reaped orphan task environment (task #{task_id_int})")
+      else
+        _ = DockerCli.run(["rm", "-f", id])
+        Logger.info("reaped orphan managed container #{id} (task #{task_id_int})")
+      end
     else
       _kept_or_unparsable -> :ok
     end
   end
 
   # A task in Review has no runner but is still being judged — its
-  # container hosts reviewer execs, the Developer terminal, and the live
-  # preview, so a restart must not take it down (execs self-heal the
-  # container, but a dev server running inside it would not come back).
-  defp keep_container?(task_id) do
-    task_id in RunSupervisor.active_task_ids() or review_container?(task_id)
+  # environment hosts reviewer execs, the Developer terminal, and the
+  # live preview, so a restart must not take it down (execs self-heal
+  # the environment, but a dev server running inside it would not come
+  # back).
+  defp keep_environment?(task_id) do
+    task_id in RunSupervisor.active_task_ids() or review_environment?(task_id)
   end
 
-  defp review_container?(task_id) do
+  defp review_environment?(task_id) do
     match?(
       %Task{state: :review, execution_env: :container},
       Tasks.get_task(task_id)

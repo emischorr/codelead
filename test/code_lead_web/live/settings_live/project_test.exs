@@ -187,7 +187,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
       assert Projects.get_repository!(repository.id).default_branch == "develop"
     end
 
-    test "declaring an image derives the container environment", %{
+    test "enabling devcontainer execution stores the env kind and config path", %{
       conn: conn,
       project: project
     } do
@@ -199,19 +199,20 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
           name: "my-app",
           git_url: "git@github.com:me/my-app.git",
           default_branch: "main",
-          image_ref: "ghcr.io/acme/dev:1"
+          env_kind: "devcontainer",
+          devcontainer_path: ".devcontainer/ci/devcontainer.json"
         }
       )
       |> render_submit()
 
       assert [repository] = Projects.list_repositories(project.id)
-      assert repository.env_kind == :image
-      assert repository.image_ref == "ghcr.io/acme/dev:1"
+      assert repository.env_kind == :devcontainer
+      assert repository.devcontainer_path == ".devcontainer/ci/devcontainer.json"
 
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
-      assert render(element(view, "#repository-row-#{repository.id}")) =~ "container: ghcr.io"
+      assert render(element(view, "#repository-row-#{repository.id}")) =~ "devcontainer"
 
-      # Clearing the image derives back to a local-only default.
+      # Switching back disables container execution for the repo's tasks.
       {:ok, view, _html} =
         live(conn, ~p"/settings/projects/#{project.id}/repositories/#{repository.id}/edit")
 
@@ -221,17 +222,18 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
           name: repository.name,
           git_url: repository.git_url,
           default_branch: repository.default_branch,
-          image_ref: ""
+          env_kind: "default",
+          devcontainer_path: ""
         }
       )
       |> render_submit()
 
       repository = Projects.get_repository!(repository.id)
       assert repository.env_kind == :default
-      assert repository.image_ref == nil
+      assert repository.devcontainer_path == nil
 
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
-      refute render(element(view, "#repository-row-#{repository.id}")) =~ "container:"
+      refute render(element(view, "#repository-row-#{repository.id}")) =~ "devcontainer"
     end
 
     test "unlink is blocked while a task targets the repository", %{conn: conn, project: project} do

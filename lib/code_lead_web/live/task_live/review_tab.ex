@@ -26,11 +26,18 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :review_mode, :atom, default: :diff, values: [:preview, :diff]
   attr :preview_available?, :boolean, default: false
   attr :preview_src, :string, default: nil
+  attr :preview_command?, :boolean, default: false
+  attr :preview_run, :any, default: :stopped
 
   def review_tab(assigns) do
     ~H"""
     <div class="flex h-full min-h-0 flex-col">
-      <.mode_toggle :if={@preview_available?} review_mode={@review_mode} />
+      <.mode_toggle
+        :if={@preview_available?}
+        review_mode={@review_mode}
+        preview_command?={@preview_command?}
+        preview_run={@preview_run}
+      />
 
       <div
         :if={!@preview_available? && @task.target == :repo}
@@ -50,6 +57,16 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
       <div :if={@review_mode == :preview && @preview_available?} class="flex min-h-0 flex-1 flex-col">
         <div :if={@reviews != []} class="max-h-48 shrink-0 overflow-y-auto px-4 py-3 sm:px-6">
           <.findings_section reviews={@reviews} />
+        </div>
+        <div
+          :if={match?({:failed, _tail}, @preview_run)}
+          id="preview-failure"
+          class="shrink-0 border-b border-border bg-surface px-4 py-3 sm:px-6"
+        >
+          <p class="mb-2 text-[12px] font-semibold text-warn">
+            The preview command failed to start — its output:
+          </p>
+          <pre class="max-h-40 overflow-auto rounded-[9px] border border-border bg-surface2 p-3 font-mono text-[11px] leading-relaxed text-text2 whitespace-pre-wrap">{failure_tail(@preview_run)}</pre>
         </div>
         <PreviewPane.preview_pane src={@preview_src} task_id={@task.id} />
       </div>
@@ -73,6 +90,8 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   end
 
   attr :review_mode, :atom, required: true
+  attr :preview_command?, :boolean, default: false
+  attr :preview_run, :any, default: :stopped
 
   defp mode_toggle(assigns) do
     ~H"""
@@ -86,9 +105,57 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         <.mode_button mode={:preview} active?={@review_mode == :preview} label="Preview" />
         <.mode_button mode={:diff} active?={@review_mode == :diff} label="Diff" />
       </div>
+
+      <div :if={@preview_command?} class="ml-auto flex items-center gap-2">
+        <span
+          :if={@preview_run != :stopped}
+          id="preview-run-status"
+          class={[
+            "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+            run_status_class(@preview_run)
+          ]}
+        >
+          <span class={["h-1.5 w-1.5 rounded-full", run_dot_class(@preview_run)]}></span>
+          {run_status_label(@preview_run)}
+        </span>
+        <button
+          :if={@preview_run in [:stopped] or match?({:failed, _tail}, @preview_run)}
+          id="preview-server-start"
+          type="button"
+          phx-click="preview_start"
+          class="rounded-[9px] border border-border bg-surface2 px-3 py-1 text-[11.5px] font-semibold text-text2 transition-colors hover:text-text"
+        >
+          Start preview
+        </button>
+        <button
+          :if={@preview_run in [:starting, :ready]}
+          id="preview-server-stop"
+          type="button"
+          phx-click="preview_stop"
+          class="rounded-[9px] border border-border bg-surface2 px-3 py-1 text-[11.5px] font-semibold text-text2 transition-colors hover:text-text"
+        >
+          Stop
+        </button>
+      </div>
     </div>
     """
   end
+
+  defp run_status_label(:starting), do: "Starting…"
+  defp run_status_label(:ready), do: "Running"
+  defp run_status_label({:failed, _tail}), do: "Failed"
+  defp run_status_label(_other), do: ""
+
+  defp run_status_class(:ready), do: "border-ok/30 text-ok"
+  defp run_status_class({:failed, _tail}), do: "border-warn-border text-warn"
+  defp run_status_class(_starting), do: "border-border text-text3"
+
+  defp run_dot_class(:ready), do: "bg-ok"
+  defp run_dot_class({:failed, _tail}), do: "bg-warn"
+  defp run_dot_class(_starting), do: "animate-pulse bg-text3"
+
+  defp failure_tail({:failed, tail}) when is_binary(tail) and tail != "", do: tail
+  defp failure_tail(_other), do: "(no output)"
 
   attr :mode, :atom, required: true
   attr :active?, :boolean, required: true

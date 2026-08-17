@@ -16,6 +16,9 @@ ARG RUNNER_IMAGE="alpine:${ALPINE_VERSION}"
 # Keep in sync with the harness_version default in config/runtime.exs.
 ARG CLAUDE_ACP_VERSION=0.66.0
 
+# The devcontainer CLI provisioning task environments (ADR-0009).
+ARG DEVCONTAINER_CLI_VERSION=0.88.0
+
 # -----------------------------------------------------------------------------
 ARG MIX_ENV="prod"
 
@@ -37,6 +40,24 @@ RUN apk add --no-cache nodejs npm && node --version
 # /opt/harness/bin/claude-agent-acp (a relative symlink, so COPY keeps it).
 RUN npm install -g --prefix /opt/harness --no-fund --no-audit \
   "@agentclientprotocol/claude-agent-acp@${CLAUDE_ACP_VERSION}"
+
+
+# -----------------------------------------------------------------------------
+
+# devcontainer-cli stage
+# Bundle the devcontainer CLI the same way as the harness: built on the
+# runner image so npm resolves musl-flavored packages, copied in below,
+# resolved through PATH by the nodejs already in the runner.
+FROM ${RUNNER_IMAGE} AS devcontainer-cli
+
+ARG DEVCONTAINER_CLI_VERSION
+
+# `devcontainer --version` fails the build loudly if the CLI's node
+# floor ever outruns Alpine's nodejs.
+RUN apk add --no-cache nodejs npm \
+  && npm install -g --prefix /opt/devcontainer --no-fund --no-audit \
+  "@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}" \
+  && /opt/devcontainer/bin/devcontainer --version
 
 
 # -----------------------------------------------------------------------------
@@ -109,12 +130,14 @@ ARG MIX_ENV
 # docker-cli: the container executor drives sibling task containers through
 #   the host daemon (`/var/run/docker.sock` mounted by the compose stack) —
 #   the CLI only, no daemon.
+# docker-cli-compose/-buildx: the devcontainer CLI orchestrates
+#   compose-based configs and builds Dockerfile-based ones (ADR-0009).
 #
 # `bash --version` fails the build loudly if the package ever goes missing,
 # the same guard the harness stage puts on node.
 RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs \
   bash coreutils findutils grep sed diffutils curl jq ripgrep openssh-client \
-  docker-cli \
+  docker-cli docker-cli-compose docker-cli-buildx \
   && bash --version
 
 ENV USER="elixir"
@@ -140,6 +163,10 @@ RUN \
 COPY --from=harness /opt/harness /opt/harness
 ENV PATH="/opt/harness/bin:${PATH}"
 
+# The bundled devcontainer CLI, same mechanism.
+COPY --from=devcontainer-cli /opt/devcontainer /opt/devcontainer
+ENV PATH="/opt/devcontainer/bin:${PATH}"
+
 # The container-execution harness is NOT baked into this image: it is a
 # staged runtime directory (bun + package tree, ADR-0007), built lazily
 # onto the workspace volume via the docker socket on the first container
@@ -148,8 +175,10 @@ ENV PATH="/opt/harness/bin:${PATH}"
 ARG CLAUDE_ACP_VERSION
 ENV HARNESS_VERSION=${CLAUDE_ACP_VERSION}
 
-# Sibling task containers run as this uid:gid so files they write to the
-# shared volume stay owned by the service user below.
+# The one-shot harness build container runs as this uid:gid so files it
+# writes to the shared volume stay owned by the service user below. Task
+# containers get their user from the repo's devcontainer config instead
+# (ADR-0009).
 ENV CONTAINER_USER=1000:1000
 
 # Alpine's /etc/profile assigns PATH outright rather than extending it, so a
@@ -158,7 +187,7 @@ ENV CONTAINER_USER=1000:1000
 # anything installed outside the profile's fixed list — the harness here, and
 # any toolchain an operator layers on in /opt or $HOME — is invisible to every
 # command the agent runs.
-RUN printf 'export PATH="/opt/harness/bin:$PATH"\n' > /etc/profile.d/codelead-path.sh
+RUN printf 'export PATH="/opt/harness/bin:/opt/devcontainer/bin:$PATH"\n' > /etc/profile.d/codelead-path.sh
 
 # Mutable state, kept out of the release directory. Mount a volume here:
 # `home` is where the agent harness writes its own config and session state,

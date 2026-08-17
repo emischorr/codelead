@@ -146,7 +146,7 @@ without first cloning a repository.
   it can run it (`available?/1`). "Available" means runnable *inside
   the execution environment* ([ADR-0003](adr/0003-container-execution-model.md)):
   `System.find_executable/1` under `LocalSubprocess`; under
-  `DockerContainer`, the docker CLI resolves and the staged harness
+  `Devcontainer`, the docker and devcontainer CLIs resolve and the staged harness
   binary exists (returning `{:error, {:harness_not_staged, path}}` or
   `{:error, {:container_command_unsupported, cmd}}` — only the Claude
   Code harness runs in containers). Local errors stay

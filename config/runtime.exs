@@ -25,6 +25,11 @@ end
 config :code_lead, CodeLeadWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# The same port again as plain app config: core code (the repository
+# changeset blocks it as a preview port) reads it without touching the
+# endpoint.
+config :code_lead, app_port: String.to_integer(System.get_env("PORT", "4000"))
+
 # Encryption key for Cloak (provider credentials, project env store).
 # Base64-encoded 32 bytes; generate with:
 #
@@ -87,18 +92,24 @@ config :code_lead,
 # escape hatch, copied at boot. HARNESS_VERSION's default must stay in
 # sync with the Dockerfile's ARG CLAUDE_ACP_VERSION.
 config :code_lead,
+  # Scoped to the one-shot harness build container these days: task
+  # containers get their user from the repo's devcontainer config
+  # (resource caps likewise via runArgs/hostRequirements, ADR-0009).
   container_user: System.get_env("CONTAINER_USER"),
-  container_cpus: System.get_env("CONTAINER_CPUS"),
-  container_memory_mb: System.get_env("CONTAINER_MEMORY_MB"),
   workspace_volume: System.get_env("WORKSPACE_VOLUME"),
   workspace_volume_mount: System.get_env("WORKSPACE_VOLUME_MOUNT", "/data"),
   host_data_root: System.get_env("HOST_DATA_ROOT"),
   harness_version: System.get_env("HARNESS_VERSION", "0.66.0"),
-  harness_source: System.get_env("HARNESS_SOURCE")
+  harness_source: System.get_env("HARNESS_SOURCE"),
+  # The devcontainer CLI head (@devcontainers/cli). Baked into the
+  # published image; a dev machine installs it with
+  # `npm i -g @devcontainers/cli`.
+  devcontainer_cli: [System.get_env("DEVCONTAINER_CLI", "devcontainer")]
 
-# Live preview of container tasks. A task container with a declared
-# `preview_port` publishes it on PREVIEW_PUBLISH_IP with an ephemeral
-# host port; the in-app proxy dials PREVIEW_UPSTREAM_HOST on that port.
+# Live preview of container tasks. A relay sidecar (PREVIEW_RELAY_IMAGE,
+# a socat image) joins the task container's network and publishes the
+# declared `preview_port` on PREVIEW_PUBLISH_IP with an ephemeral host
+# port; the in-app proxy dials PREVIEW_UPSTREAM_HOST on that port.
 # Loopback works when the BEAM runs on the docker host (dev). In the
 # deployed stack — app in a container, task containers as siblings on
 # the default bridge — set both to the docker bridge gateway (usually
@@ -106,7 +117,11 @@ config :code_lead,
 # from the app container.
 config :code_lead,
   preview_publish_ip: System.get_env("PREVIEW_PUBLISH_IP", "127.0.0.1"),
-  preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST", "127.0.0.1")
+  preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST", "127.0.0.1"),
+  preview_relay_image: System.get_env("PREVIEW_RELAY_IMAGE", "alpine/socat"),
+  preview_idle_ms: String.to_integer(System.get_env("PREVIEW_IDLE_MINUTES", "30")) * 60_000,
+  preview_start_timeout_ms:
+    String.to_integer(System.get_env("PREVIEW_START_TIMEOUT_SECONDS", "120")) * 1_000
 
 if config_env() == :prod do
   database_url =

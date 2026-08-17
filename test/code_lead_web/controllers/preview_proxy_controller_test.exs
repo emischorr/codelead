@@ -35,7 +35,9 @@ defmodule CodeLeadWeb.PreviewProxyControllerTest do
 
   describe "unauthenticated" do
     test "responds 401 with the branded page, not a redirect", %{conn: conn} do
-      task = repo_task(4000)
+      # Any declared port works — 4000 itself is refused these days (the
+      # instance's own port).
+      task = repo_task(4321)
 
       conn = get(conn, "/preview/#{task.id}/")
 

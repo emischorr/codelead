@@ -257,18 +257,30 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           />
           <.input field={@repository_form[:default_branch]} label="Default branch" required />
           <.input
-            field={@repository_form[:image_ref]}
-            label="Container image"
-            placeholder="ghcr.io/acme/dev-env:latest"
+            field={@repository_form[:env_kind]}
+            type="select"
+            label="Execution environment"
+            options={[{"Local only", :default}, {"Devcontainer", :devcontainer}]}
+          />
+          <p class="mb-4 text-[12px] leading-relaxed text-text3">
+            Devcontainer runs this repository's tasks in the environment its
+            own <code class="font-mono">.devcontainer</code>
+            setup describes (services included) — tasks can then choose
+            Container execution (Local stays the default). Private HTTPS
+            repositories need a <code class="font-mono">GITHUB_TOKEN</code>
+            or <code class="font-mono">GITLAB_TOKEN</code>
+            in the environment section below. SSH URLs use this machine's key.
+          </p>
+          <.input
+            field={@repository_form[:devcontainer_path]}
+            label="Devcontainer config path"
+            placeholder=".devcontainer/devcontainer.json"
             spellcheck="false"
           />
           <p class="mb-4 text-[12px] leading-relaxed text-text3">
-            Setting an image declares this repository's container environment —
-            tasks can then choose Container execution (Local stays the
-            default). Leave blank for local-only. Private HTTPS repositories
-            need a <code class="font-mono">GITHUB_TOKEN</code>
-            or <code class="font-mono">GITLAB_TOKEN</code>
-            in the environment section below. SSH URLs use this machine's key.
+            Optional. Leave blank to auto-discover the config in the
+            devcontainer spec's search order; set it to pin one of several
+            configs in the repo.
           </p>
           <.input
             field={@repository_form[:preview_port]}
@@ -280,9 +292,22 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           />
           <p class="mb-4 text-[12px] leading-relaxed text-text3">
             The port a dev server inside this repository's tasks listens on.
-            Declaring it enables the live preview in the Review tab — start
-            the server yourself from the task's Terminal. Leave blank to
-            review by diff only.
+            Declaring it enables the live preview in the Review tab; the
+            serve command receives it as <code class="font-mono">PREVIEW_PORT</code>. Unique per
+            repository across this instance — CodeLead's own port is taken.
+            Leave blank to review by diff only.
+          </p>
+          <.input
+            field={@repository_form[:preview_command]}
+            label="Preview command"
+            placeholder="npm run dev -- --host"
+            spellcheck="false"
+          />
+          <p class="mb-4 text-[12px] leading-relaxed text-text3">
+            Optional. The command that starts the dev server on the preview
+            port — declaring it puts a Start preview button on the Review
+            tab. It runs in the worktree with the project env plus <code class="font-mono">PREVIEW_BASE_PATH</code>; without it,
+            start the server yourself from the task's Terminal.
           </p>
 
           <div class="mt-4 flex justify-end gap-2">

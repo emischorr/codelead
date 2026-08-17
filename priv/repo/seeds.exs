@@ -20,7 +20,11 @@ admin =
   case Accounts.get_user_by_email("admin@example.com") do
     nil ->
       {:ok, user} =
-        Accounts.register_admin(%{email: "admin@example.com", password: admin_password})
+        Accounts.register_admin(%{
+          username: "admin",
+          email: "admin@example.com",
+          password: admin_password
+        })
 
       user
 
@@ -29,10 +33,10 @@ admin =
   end
 
 IO.puts(
-  "Seeded organization ##{organization.id} (#{organization.name}), admin ##{admin.id} (#{admin.email})"
+  "Seeded organization ##{organization.id} (#{organization.name}), admin ##{admin.id} (#{admin.username})"
 )
 
-IO.puts("Log in with #{admin.email} / #{admin_password} (override with ADMIN_PASSWORD)")
+IO.puts("Log in with #{admin.username} / #{admin_password} (override with ADMIN_PASSWORD)")
 
 # Providers. The Anthropic key comes from the local environment when
 # present; a placeholder otherwise (update via Agents.update_provider/2).

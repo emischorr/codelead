@@ -1081,14 +1081,14 @@ defmodule CodeLead.Tasks do
   #
   # Beyond that it queries only for container tasks, so the board's
   # per-card `startable?/2` stays query-free for the common case. There is
-  # no fallback image by design — an undeclared environment blocks the
-  # start instead of running somewhere nobody chose.
+  # no fallback environment by design — an undeclared environment blocks
+  # the start instead of running somewhere nobody chose.
   defp check_execution_env(
          %Task{target: :repo, execution_env: :container, repository_id: repository_id} = _task
        )
        when not is_nil(repository_id) do
     if License.feature_enabled?(:container_execution_env) do
-      check_declared_image(repository_id)
+      check_declared_env(repository_id)
     else
       {:error, :unlicensed_execution_env}
     end
@@ -1096,9 +1096,9 @@ defmodule CodeLead.Tasks do
 
   defp check_execution_env(%Task{}), do: :ok
 
-  defp check_declared_image(repository_id) do
+  defp check_declared_env(repository_id) do
     case Projects.get_repository!(repository_id) do
-      %{env_kind: :image, image_ref: ref} when is_binary(ref) and ref != "" -> :ok
+      %{env_kind: :devcontainer} -> :ok
       _undeclared -> {:error, :missing_execution_env}
     end
   end

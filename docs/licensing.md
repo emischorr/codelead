@@ -167,9 +167,10 @@ places, in descending order of authority:
    already set to `:container` render with Local selected and misreport its own
    state.
 
-Note what is *not* gated: the repository's "Container image" field in project
-settings. Declaring an image is a repository property, not the execution
-feature, so an operator can prepare repositories before buying a key.
+Note what is *not* gated: the repository's execution-environment select in
+project settings. Enabling devcontainer execution is a repository property,
+not the execution feature, so an operator can prepare repositories before
+buying a key.
 
 A community instance therefore keeps every container-targeted task it already
 has — visible, editable, refusing to start with a message that says why.

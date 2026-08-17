@@ -391,13 +391,17 @@ above the bar instead of underneath it.
   and misreport itself) under a one-line note, and the Start button's
   tooltip carries the `:unlicensed_execution_env` copy; see
   [`licensing.md`](licensing.md). A Container task whose
-  repository declares no image is not startable either — that tooltip
-  carries the `:missing_execution_env` copy instead. The repository
-  modal in project settings is where the image is declared (not itself
-  gated: declaring an image is a repository property) — a single
-  image-reference field (`env_kind` is derived from it: set = container
-  environment declared, cleared = local-only), with a
-  `container: <ref>` badge in the repo list. Outside Planning the
+  repository doesn't enable devcontainer execution is not startable
+  either — that tooltip carries the `:missing_execution_env` copy
+  instead. The repository modal in project settings is where the
+  environment is declared (not itself gated: declaring it is a
+  repository property) — an execution-environment select (`env_kind`:
+  Local only / Devcontainer) plus an optional devcontainer config path
+  (blank = spec-order auto-discovery), with a `devcontainer` badge in
+  the repo list. The preview port there is unique per repository across
+  the instance and refuses the app's own port (local previews all serve
+  from the app's host); serve commands receive the assigned port as
+  `PREVIEW_PORT`. Outside Planning the
   card turns into read-only rows plus the branch name. The same card
   carries the **On approve** selector (`#finalize-form`, another bare
   `phx-change` form) until the task is Done: its first option is
@@ -490,6 +494,19 @@ above the bar instead of underneath it.
   one-line enablement hint (`#preview-hint`) linking to the project
   settings. Diff loading stays lazy: nothing runs `git diff` while the
   preview is primary and the diff view was never opened.
+
+  With a `preview_command` declared on the repository, the toggle row
+  also carries a **Start/Stop preview** button (`#preview-server-start`
+  / `#preview-server-stop`) and a status chip (`#preview-run-status`):
+  `CodeLead.Preview` runs the command in the task's execution context
+  (host shell for local tasks, `docker exec` into the devcontainer for
+  container tasks) with the project env plus `PREVIEW_BASE_PATH`, and a
+  `Preview.Session` probes the upstream until the port answers —
+  `Starting… → Running`, or a failure panel (`#preview-failure`) with
+  the command's log tail. The session stops on request-changes, on the
+  task leaving Review for good, and after a viewer-less idle window;
+  the branded 502 page's auto-refresh picks the frame up the moment the
+  server answers.
 
   The preview pane (`PreviewPane`, hook `.PreviewFrame`) is a slim
   toolbar over a same-origin iframe. The toolbar owns its **own

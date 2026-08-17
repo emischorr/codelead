@@ -22,9 +22,10 @@ defmodule CodeLeadWeb.FlashMessages do
 
   def transition_error(:missing_execution_env),
     do:
-      "This task is set to run in a container, but its repository doesn't declare " <>
-        "a container image. Set one under Settings → Project → Repositories, or " <>
-        "switch the task's execution back to Local."
+      "This task is set to run in a container, but its repository doesn't enable " <>
+        "devcontainer execution. Enable it under Settings → Project → Repositories " <>
+        "(the repo needs a .devcontainer setup), or switch the task's execution " <>
+        "back to Local."
 
   def transition_error(:unlicensed_execution_env),
     do:

@@ -5,8 +5,8 @@ defmodule CodeLead.Executor.Context do
   `:folder` otherwise).
 
   `exec_ref` is the executor's private identity for the provisioned
-  environment — `nil` under `LocalSubprocess`, the container name under
-  `DockerContainer`. It is not durable: teardown may receive a context
+  environment — `nil` under `LocalSubprocess`, the container id under
+  `Devcontainer`. It is not durable: teardown may receive a context
   rebuilt from DB rows without it, so no implementation may depend on it
   for teardown (ADR-0003).
 

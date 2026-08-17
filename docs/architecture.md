@@ -24,9 +24,9 @@ note is the "how it works today" map.
 | Behaviour | MVP impl | Later |
 |---|---|---|
 | `CodeLead.AgentDriver` | `Acp` (harness over ACP, ADR-0001), `LlmApi` (one completion) | — (driver-independent of executor) |
-| `CodeLead.Executor` | `LocalSubprocess` (default) and `DockerContainer` (per-task opt-in, `Executor.for_task/1` on `tasks.execution_env`); `spawn/3` runs the agent *inside* the provisioned context ([ADR-0003](adr/0003-container-execution-model.md), [ADR-0004](adr/0004-container-executor-iteration-two.md)) | `:devcontainer`/`:dockerfile` env kinds |
+| `CodeLead.Executor` | `LocalSubprocess` (default) and `Devcontainer` (per-task opt-in, `Executor.for_task/1` on `tasks.execution_env`; provisions via the devcontainer CLI, execs via docker); `spawn/3` runs the agent *inside* the provisioned context ([ADR-0003](adr/0003-container-execution-model.md), [ADR-0009](adr/0009-devcontainer-execution.md)) | container execution for `:folder` targets |
 | `CodeLead.Scheduler` | `PassThrough` — an ordered `CodeLead.Scheduler.Gate` list (schedule → budget → capacity) | a `WindowGate` in the same list |
-| `CodeLead.PreviewGateway` | `PathProxy` — the Review tab frames `/preview/:task_id/` and `CodeLeadWeb.PreviewProxyController` reverse-proxies it (HTTP + websockets) to the task's dev server, resolved per execution env ([ADR-0008](adr/0008-preview-and-terminal.md)) | `SubdomainProxy` (per-task subdomains) |
+| `CodeLead.PreviewGateway` | `PathProxy` — the Review tab frames `/preview/:task_id/` and `CodeLeadWeb.PreviewProxyController` reverse-proxies it (HTTP + websockets) to the task's dev server, resolved per execution env: loopback for local tasks, a relay sidecar's published port for container tasks ([ADR-0008](adr/0008-preview-and-terminal.md), [ADR-0009](adr/0009-devcontainer-execution.md)) | `SubdomainProxy` (per-task subdomains) |
 
 ## Runtime (processes)
 
@@ -50,10 +50,10 @@ note is the "how it works today" map.
   its state rather than in SQL. Board notifications (`project:<id>` →
   `:board_changed`) come from `CodeLead.Tasks` on every task write.
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
-- `CodeLead.Executor.DockerContainer.Bootstrap` — one-shot boot task:
-  stages the compiled harness binary onto the workspace volume and
-  reaps labeled orphan task containers; no-ops (with a log) when docker
-  or the staging source is absent.
+- `CodeLead.Executor.Devcontainer.Bootstrap` — one-shot boot task:
+  stages baked harness runtimes onto the workspace and reaps labeled
+  orphan task environments (compose-aware) and relays; no-ops (with a
+  log) when docker or the staging source is absent.
 - `CodeLead.TaskSupervisor` — Task.Supervisor for review fan-out,
   LlmApi calls, terminal commands, queue kicks.
 - `CodeLead.Terminal.Session` — one GenServer per task with an open
@@ -61,6 +61,14 @@ note is the "how it works today" map.
   `CodeLead.Terminal`): owns the shell Port so the session survives
   page refreshes, keeps a bounded scrollback, broadcasts on
   `terminal:<id>`, idles out viewer-less (ADR-0008).
+- `CodeLead.Preview.Session` — one GenServer per task running the
+  repository's `preview_command` (same supervision shape as the
+  terminal): owns the server's Port, probes the preview upstream until
+  the port answers, broadcasts `{:preview_state, id, status}` on the
+  task topic, stops on run entry/context teardown/viewer-less idle.
+- `CodeLead.PreviewGateway.Relay` — per-task socat sidecar
+  (`codelead-preview-<id>`) joining the task container's network and
+  publishing the preview port on an ephemeral host port (ADR-0009).
 - `CodeLead.Finalizer` — the system executor behind Approve → Done,
   dispatched on the task's target and its resolved finalize mode (PR,
   merge, squash, artifact, commit-to-path).

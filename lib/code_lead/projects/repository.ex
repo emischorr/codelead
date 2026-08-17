@@ -3,18 +3,20 @@ defmodule CodeLead.Projects.Repository do
   A git repository linked to a project by URL. `base_clone_path` is
   filled in once the managed base clone exists on the workspace volume.
 
-  `env_kind`/`devcontainer_path`/`image_ref`/`dockerfile` declare the
-  repository's toolchain environment for the container executor.
-  `env_kind` is derived, not chosen: a non-blank `image_ref` means
-  `:image`, blank means `:default` — declaring an image *enables*
-  Container execution for the repo's tasks, while the choice itself
-  stays per task (`tasks.execution_env`, default `:local`), so a task
-  that needs no toolchain keeps running locally (ADR-0003/0004).
-  `:devcontainer` and `:dockerfile` remain dormant seams, unreachable
-  from the UI and untouched by the derivation.
+  `env_kind`/`devcontainer_path` declare the repository's execution
+  environment for the container executor: `:devcontainer` *enables*
+  Container execution for the repo's tasks — provisioned from the
+  repo's own `.devcontainer` configuration (ADR-0009) — while the
+  choice itself stays per task (`tasks.execution_env`, default
+  `:local`), so a task that needs no toolchain keeps running locally.
+  `devcontainer_path` optionally pins the config file; blank leaves
+  discovery to the devcontainer spec's search order.
 
   `preview_port` declares the port a dev server inside this repo's
   tasks listens on; declaring it enables the Review tab's live preview.
+  `preview_command` optionally names the command that starts that
+  server — declaring it enables the one-click Start preview button
+  (without it the server is started by hand in the Terminal tab).
 
   `is_default` marks the repository a new `:repo`-target task prefills
   when the project links more than one. It is never cast through
@@ -40,13 +42,12 @@ defmodule CodeLead.Projects.Repository do
     field :is_default, :boolean, default: false
 
     field :env_kind, Ecto.Enum,
-      values: [:devcontainer, :image, :dockerfile, :default],
+      values: [:devcontainer, :default],
       default: :default
 
     field :devcontainer_path, :string
-    field :image_ref, :string
-    field :dockerfile, :string
     field :preview_port, :integer
+    field :preview_command, :string
 
     timestamps(type: :utc_datetime)
   end
@@ -65,40 +66,47 @@ defmodule CodeLead.Projects.Repository do
       :base_clone_path,
       :env_kind,
       :devcontainer_path,
-      :image_ref,
-      :dockerfile,
-      :preview_port
+      :preview_port,
+      :preview_command
     ])
-    |> update_change(:image_ref, &normalize_ref/1)
-    |> derive_env_kind()
-    |> validate_number(:preview_port, greater_than: 0, less_than: 65_536)
+    |> update_change(:devcontainer_path, &normalize_blank/1)
+    |> update_change(:preview_command, &normalize_blank/1)
+    |> validate_preview_port()
     |> validate_required([:name, :git_url, :default_branch])
     |> unique_constraint([:project_id, :name])
   end
 
-  # A whitespace-only ref would slip past the executor's `ref != ""`
-  # guard while naming no image. Cast maps `""` to a nil change, so nil
-  # arrives here too.
-  defp normalize_ref(nil), do: nil
+  # Preview ports are unique across the instance: local-execution
+  # previews all serve from the app's own host, so two repositories on
+  # one port would collide there — and the app's own port is taken by
+  # CodeLead itself. Container previews would not collide (each server
+  # listens inside its own container), but one rule covers both modes;
+  # the assigned port reaches serve commands as PREVIEW_PORT.
+  defp validate_preview_port(changeset) do
+    app_port = Application.get_env(:code_lead, :app_port, 4000)
 
-  defp normalize_ref(ref) do
-    case String.trim(ref) do
-      "" -> nil
-      trimmed -> trimmed
-    end
+    changeset
+    |> validate_number(:preview_port, greater_than: 0, less_than: 65_536)
+    |> validate_exclusion(:preview_port, [app_port],
+      message: "is the port this CodeLead instance itself listens on"
+    )
+    |> unsafe_validate_unique(:preview_port, CodeLead.Repo,
+      message: "already used by another repository on this instance"
+    )
+    |> unique_constraint(:preview_port,
+      message: "already used by another repository on this instance"
+    )
   end
 
-  # Only flips between :default and :image — a dormant kind set via
-  # console stays untouched. Consequence: an explicit `env_kind: :image`
-  # with a blank ref derives back to :default rather than erroring.
-  defp derive_env_kind(changeset) do
-    case get_field(changeset, :env_kind) do
-      kind when kind in [:default, :image] ->
-        derived = if get_field(changeset, :image_ref), do: :image, else: :default
-        put_change(changeset, :env_kind, derived)
+  # A whitespace-only value would name no config (or command) while
+  # passing presence checks. Cast maps `""` to a nil change, so nil
+  # arrives here too.
+  defp normalize_blank(nil), do: nil
 
-      _dormant ->
-        changeset
+  defp normalize_blank(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
     end
   end
 end

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-08-16)
+Accepted (2026-08-16). Superseded in part by ADR-0009 (published-ports
+upstream resolution — a relay sidecar replaces `-p`-at-create).
 
 ## Context
 
