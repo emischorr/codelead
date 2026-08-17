@@ -44,8 +44,25 @@ defmodule CodeLeadWeb.DashboardLiveTest do
 
       assert tile_value(view, "tile-review") == "2"
       assert tile_value(view, "tile-failed") == "1"
-      assert tile_value(view, "tile-running") == "0"
-      assert view |> element("#tile-running") |> render() =~ "1 queued"
+      assert tile_value(view, "tile-waiting-input") == "0"
+    end
+
+    test "counts agent questions and permission requests as waiting for input", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, _} =
+        project.id
+        |> task_fixture()
+        |> Tasks.set_attention(:agent_question, "which retention window?")
+
+      {:ok, _} =
+        project.id
+        |> task_fixture()
+        |> Tasks.set_attention(:permission_request, "allow network access?")
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert tile_value(view, "tile-waiting-input") == "2"
     end
 
     test "reports a task executing without a runner process as stalled", %{conn: conn} do
