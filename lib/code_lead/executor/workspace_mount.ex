@@ -3,16 +3,25 @@ defmodule CodeLead.Executor.WorkspaceMount do
   How a sibling container sees the workspace — shared by the task
   devcontainers (`CodeLead.Executor.Devcontainer`) and the one-shot
   harness build (`CodeLead.Executor.HarnessStaging`).
+
+  Devcontainer execution (ADR-0009) additionally requires the workspace
+  root to be *host-coincident*: the devcontainer CLI resolves the
+  repository's own bind sources (its compose file, the CLI's workspace
+  mount) against this process's filesystem view and hands them to the
+  host daemon, so both must see the workspace at the identical path.
+  The legacy `WORKSPACE_VOLUME`/`HOST_DATA_ROOT` modes cannot satisfy
+  that — they remain resolvable here exactly so container tasks can
+  refuse with guidance (`coincident?/0`) instead of building against
+  an empty phantom directory the daemon auto-creates.
   """
 
   alias CodeLead.Workspace
 
   @doc """
   The `-v` docker flags for the workspace, resolved in precedence order:
-  named volume (deployed stack), `HOST_DATA_ROOT` bind (escape hatch),
-  bind of the workspace root at the identical path (dev, host BEAM).
-  All three keep host and container paths coincident — the rule
-  everything host-side (git, fs capabilities) depends on.
+  named volume (`WORKSPACE_VOLUME`, legacy), `HOST_DATA_ROOT` bind
+  (legacy), bind of the workspace root at the identical path (the rule
+  everything depends on — see `coincident?/0`).
   """
   @spec flags() :: [String.t()]
   def flags do
@@ -34,6 +43,15 @@ defmodule CodeLead.Executor.WorkspaceMount do
       {:volume, volume, mount} -> ["type=volume,source=#{volume},target=#{mount}"]
       {:bind, source, mount} -> ["type=bind,source=#{source},target=#{mount}"]
     end
+  end
+
+  @doc """
+  Whether the workspace root is host-coincident — the topology
+  devcontainer execution requires (see the moduledoc).
+  """
+  @spec coincident?() :: boolean()
+  def coincident? do
+    match?({:bind, path, path}, resolve())
   end
 
   defp resolve do

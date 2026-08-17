@@ -201,11 +201,13 @@ configuration describes via `devcontainer up` (`env_kind:
 :devcontainer`; no fallback environment exists), identified by
 `codelead.task_container`/`codelead.task_id` id-labels so any number of
 `docker exec -i` bridges can attach. The workspace rides in as one
-extra `--mount` — a named volume (`WORKSPACE_VOLUME`), a
-`HOST_DATA_ROOT` bind, or, in dev where the BEAM runs on the host, a
-bind of the workspace root at the identical path; all three keep host
-and container paths coincident, which is how the worktree's gitdir and
-the staged harness resolve in-container. Environments are cattle:
+extra `--mount`: a bind of the workspace root at the identical path,
+which is how the worktree's gitdir and the staged harness resolve
+in-container — and the topology `devcontainer up` itself requires,
+since the host daemon resolves the repo's own bind sources host-side.
+Provisioning refuses under the legacy `WORKSPACE_VOLUME`/
+`HOST_DATA_ROOT` modes (`:workspace_not_host_coincident`), where the
+daemon would mount phantom paths. Environments are cattle:
 `devcontainer up` is idempotent, so `spawn` re-ensures the environment
 and external removal costs one re-up; the harness `HOME` lives in
 `agent-homes/task-<id>` on the workspace so sessions survive, and every

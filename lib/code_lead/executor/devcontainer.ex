@@ -224,8 +224,23 @@ defmodule CodeLead.Executor.Devcontainer do
   defp declared_env(%{env_kind: :devcontainer}), do: :ok
   defp declared_env(repository), do: {:error, {:missing_execution_env, repository.name}}
 
+  defp workspace_coincident do
+    if WorkspaceMount.coincident?() do
+      :ok
+    else
+      {:error, :workspace_not_host_coincident}
+    end
+  end
+
+  # The coincidence check guards provision *and* the terminal/preview
+  # heal path: the CLI resolves the repo's own bind sources (compose
+  # relative paths, its workspace mount) against this process's
+  # filesystem and hands them to the host daemon — under a named volume
+  # or a non-coincident bind the daemon would mount a phantom empty
+  # directory instead of the worktree.
   defp up_environment(%Task{} = task, repository, worktree) do
-    with {:ok, config} <- resolve_config(worktree, repository) do
+    with :ok <- workspace_coincident(),
+         {:ok, config} <- resolve_config(worktree, repository) do
       id_labels = [
         {"codelead.managed", "true"},
         {"codelead.task_container", "true"},
