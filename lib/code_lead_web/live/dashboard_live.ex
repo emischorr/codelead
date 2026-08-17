@@ -107,38 +107,28 @@ defmodule CodeLeadWeb.DashboardLive do
         </div>
 
         <div :if={@projects != []} class="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
-          <section class="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+          <section class="grid grid-cols-2 gap-3.5">
             <.stat_tile
               id="tile-review"
               icon="hero-eye"
               label="Needs approval"
               value={to_string(@summary.review)}
-              detail={oldest_detail(@attention_tasks, :review_ready)}
+              detail={attention_detail(@attention_tasks, [:review_ready], "Nothing in Review")}
               tone={(@summary.review > 0 && :warn) || :neutral}
             />
             <.stat_tile
-              id="tile-failed"
-              icon="hero-x-circle"
-              label="Failed runs"
-              value={to_string(@summary.failed)}
-              detail={(@summary.failed > 0 && "Waiting on retry or abort") || "No failures"}
-              tone={(@summary.failed > 0 && :warn) || :ok}
-            />
-            <.stat_tile
-              id="tile-running"
-              icon="hero-bolt"
-              label="Agents running"
-              value={to_string(@summary.executing)}
-              detail={"#{@summary.queued} queued"}
-              tone={(@summary.executing > 0 && :run) || :neutral}
-            />
-            <.stat_tile
-              id="tile-stalled"
-              icon="hero-clock"
-              label="Stalled runs"
-              value={to_string(@stalled_count)}
-              detail={(@stalled_count > 0 && "Executing with no runner") || "All clear"}
-              tone={(@stalled_count > 0 && :warn) || :ok}
+              id="tile-waiting-input"
+              icon="hero-chat-bubble-left-right"
+              label="Agents waiting for input"
+              value={to_string(@waiting_for_input)}
+              detail={
+                attention_detail(
+                  @attention_tasks,
+                  [:agent_question, :permission_request],
+                  "Nothing waiting"
+                )
+              }
+              tone={(@waiting_for_input > 0 && :warn) || :neutral}
             />
           </section>
 
@@ -275,6 +265,25 @@ defmodule CodeLeadWeb.DashboardLive do
               />
             </div>
           </.section_card>
+
+          <section class="grid grid-cols-2 gap-3.5">
+            <.stat_tile
+              id="tile-failed"
+              icon="hero-x-circle"
+              label="Failed runs"
+              value={to_string(@summary.failed)}
+              detail={(@summary.failed > 0 && "Waiting on retry or abort") || "No failures"}
+              tone={(@summary.failed > 0 && :warn) || :ok}
+            />
+            <.stat_tile
+              id="tile-stalled"
+              icon="hero-clock"
+              label="Stalled runs"
+              value={to_string(@stalled_count)}
+              detail={(@stalled_count > 0 && "Executing with no runner") || "All clear"}
+              tone={(@stalled_count > 0 && :warn) || :ok}
+            />
+          </section>
         </div>
       </div>
     </Layouts.app>
@@ -293,6 +302,7 @@ defmodule CodeLeadWeb.DashboardLive do
     completions = Tasks.completions_by_day(@window_days)
     completion_series = completion_series(completions)
     spend_series = Costs.daily_series(@window_days)
+    attention_counts = Tasks.attention_counts()
 
     assign(socket,
       window_days: @window_days,
@@ -302,6 +312,9 @@ defmodule CodeLeadWeb.DashboardLive do
       projects_by_id: Map.new(projects, &{&1.id, &1}),
       summary: Tasks.board_summary(),
       attention_tasks: Tasks.org_attention_tasks(6),
+      waiting_for_input:
+        Map.get(attention_counts, :agent_question, 0) +
+          Map.get(attention_counts, :permission_request, 0),
       active_runs: active_runs,
       live_task_ids: live_task_ids,
       stalled_count: stalled_count(active_runs, live_task_ids),
@@ -384,9 +397,9 @@ defmodule CodeLeadWeb.DashboardLive do
   defp trend_class(percent) when percent < 0, do: "text-warn"
   defp trend_class(_zero), do: "text-text3"
 
-  defp oldest_detail(attention_tasks, type) do
-    case Enum.find(attention_tasks, &(&1.attention.type == type)) do
-      nil -> "Nothing in Review"
+  defp attention_detail(attention_tasks, types, empty_message) do
+    case Enum.find(attention_tasks, &(&1.attention.type in types)) do
+      nil -> empty_message
       task -> "Oldest #{Format.relative(task.at)}"
     end
   end
