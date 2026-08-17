@@ -195,6 +195,11 @@ below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
 exactly as they do to `/live/websocket`, so a *location-scoped* proxy config
 must cover this path too.
 
+That is the operator's half. What the server *inside* the container has to do
+— bind `0.0.0.0`, listen on exactly the declared port, and start the image's
+own services by hand — is in
+[`configuration.md`](configuration.md#serving-a-preview-from-a-container-task).
+
 ### What you must add
 
 `restart: unless-stopped` on `db` and `app`, so the instance survives a host
