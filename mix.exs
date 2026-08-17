@@ -61,6 +61,9 @@ defmodule CodeLead.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.16"},
+      # SMTP transport for Swoosh — the only mail adapter an operator can
+      # configure (SMTP_HOST and friends, see config/runtime.exs).
+      {:gen_smtp, "~> 1.2"},
       {:req, "~> 0.5"},
       # WS framing over the Mint already in the tree (via req → finch);
       # the preview proxy's upstream leg for websocket relaying.

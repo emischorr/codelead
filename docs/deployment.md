@@ -396,13 +396,15 @@ Known gaps that change how you'd deploy this:
   never checked; every signed-in user reaches every settings page, including
   provider credentials and project secrets. Treat every account as an admin
   account.
-- **Outbound email does not work.** Production has no mail adapter
-  configured (`config/config.exs` sets Swoosh's local adapter, whose preview
-  route is dev-only), so magic-link invites and email-change confirmations go
-  nowhere. This is not a blocker: username + password (set from
-  `/setup` and `/settings/users`) is the default way to create and log in
-  to accounts and needs no email at all. Email only matters if you
-  configure a real mail adapter and want the magic-link/invite path too.
+- **Outbound email is off unless you configure it.** Without `SMTP_HOST` the
+  instance has no transport, and the surfaces that need one are hidden rather
+  than left to fail silently: no magic-link form on the login page, no
+  magic-link invite option in Settings → Users. Username + password (set from
+  `/setup` and `/settings/users`) is the default way to create and log in to
+  accounts and needs no email at all. Set `SMTP_HOST` (see
+  [`configuration.md`](configuration.md)) to turn the email paths on. One
+  loose end remains either way: `/users/settings/email` still reports that a
+  confirmation link was sent, which is untrue on an instance without mail.
 - **There is no health-check endpoint.** No `/health` route exists, and the
   compose file has no healthcheck on `app` — an orchestrator has nothing to
   probe but the TCP port.

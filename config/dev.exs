@@ -70,6 +70,10 @@ config :code_lead, CodeLeadWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :code_lead, dev_routes: true
 
+# The Local adapter plus /dev/mailbox is a working transport for development,
+# so the email surfaces are shown here.
+config :code_lead, mail_enabled: true
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

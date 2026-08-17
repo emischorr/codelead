@@ -18,16 +18,22 @@ defmodule CodeLeadWeb.SettingsLive.Users do
 
   alias CodeLead.Accounts
   alias CodeLead.Accounts.User
+  alias CodeLead.Mailer
   alias CodeLeadWeb.FlashMessages
 
-  @access_options [
-    {"Set an initial password", "password"},
-    {"Send a magic-link invite", "invite"}
-  ]
+  @password_option {"Set an initial password", "password"}
+  @invite_option {"Send a magic-link invite", "invite"}
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, socket |> assign(page_title: "Users") |> load_users()}
+    {:ok,
+     socket
+     |> assign(
+       page_title: "Users",
+       mail_enabled?: Mailer.enabled?(),
+       local_mailbox?: Mailer.local_mailbox?()
+     )
+     |> load_users()}
   end
 
   @impl true
@@ -61,6 +67,9 @@ defmodule CodeLeadWeb.SettingsLive.Users do
          |> push_patch(to: ~p"/settings/users")
          |> load_users()}
 
+      {:error, :mail_disabled} ->
+        {:noreply, put_flash(socket, :error, mail_disabled_message())}
+
       {:error, changeset} ->
         {:noreply, assign(socket, form: to_form(changeset, as: "user"), access: access)}
     end
@@ -82,9 +91,14 @@ defmodule CodeLeadWeb.SettingsLive.Users do
 
   def handle_event("resend_invite", %{"id" => id}, socket) do
     user = Accounts.get_user!(id)
-    deliver_invite(user)
 
-    {:noreply, put_flash(socket, :info, "Login link sent to #{user.email}.")}
+    case deliver_invite(user) do
+      {:error, :mail_disabled} ->
+        {:noreply, put_flash(socket, :error, mail_disabled_message())}
+
+      _sent ->
+        {:noreply, put_flash(socket, :info, "Login link sent to #{user.email}.")}
+    end
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
@@ -134,7 +148,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
                 </:badges>
                 <:actions>
                   <.button
-                    :if={is_nil(user.confirmed_at)}
+                    :if={is_nil(user.confirmed_at) and @mail_enabled?}
                     id={"resend-invite-#{user.id}"}
                     type="button"
                     variant="ghost"
@@ -181,7 +195,10 @@ defmodule CodeLeadWeb.SettingsLive.Users do
             spellcheck="false"
           />
           <div :if={@live_action == :new}>
+            <%!-- With no mail transport the invite option would be a dead end,
+                  so the choice collapses to the password path it defaults to. --%>
             <.input
+              :if={@mail_enabled?}
               field={@form[:access]}
               type="select"
               label="How they get in"
@@ -213,7 +230,9 @@ defmodule CodeLeadWeb.SettingsLive.Users do
             <p :if={@access == "invite"} class="mb-4 text-[12px] leading-relaxed text-text3">
               Needs the email above. They get a one-time login link that expires in 72 hours.
               Use <span class="font-semibold">Resend invite</span>
-              from the list if it lapses.{dev_mailbox_hint()}
+              from the list if it lapses.<span :if={@local_mailbox?}>
+                In development the mail lands in the local mailbox at /dev/mailbox.
+              </span>
             </p>
           </div>
 
@@ -232,7 +251,10 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   ## Loading and forms
 
   defp load_users(socket) do
-    assign(socket, users: Accounts.list_users(), access_options: @access_options)
+    assign(socket,
+      users: Accounts.list_users(),
+      access_options: [@password_option, @invite_option]
+    )
   end
 
   defp assign_form(socket, user, params) do
@@ -257,17 +279,31 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   # A magic-link invite needs somewhere to send the link, which the schema
   # itself no longer requires — that's a rule of this specific UI action, not
   # of a user in general, so it's enforced here rather than in the changeset.
-  defp create_user_for_access("invite", %{"email" => email} = attrs) when email in [nil, ""] do
-    changeset =
-      %User{}
-      |> Accounts.change_user(attrs)
-      |> Ecto.Changeset.add_error(:email, "is required to send an invite")
-      |> Map.put(:action, :validate)
+  # It also needs a transport: the select is hidden without one, and this is
+  # the server-side half of that check.
+  defp create_user_for_access("invite", attrs) do
+    cond do
+      not Mailer.enabled?() ->
+        {:error, :mail_disabled}
 
-    {:error, changeset}
+      attrs["email"] in [nil, ""] ->
+        changeset =
+          %User{}
+          |> Accounts.change_user(attrs)
+          |> Ecto.Changeset.add_error(:email, "is required to send an invite")
+          |> Map.put(:action, :validate)
+
+        {:error, changeset}
+
+      true ->
+        Accounts.create_user(attrs)
+    end
   end
 
   defp create_user_for_access(_access, attrs), do: Accounts.create_user(attrs)
+
+  defp mail_disabled_message,
+    do: "This instance can't send email — set SMTP_HOST to enable invites."
 
   defp maybe_invite(socket, user, "invite") do
     deliver_invite(user)
@@ -300,12 +336,4 @@ defmodule CodeLeadWeb.SettingsLive.Users do
     do: "The last user can't be deleted — the instance would be unreachable."
 
   defp delete_reason(_user, _current, _users), do: nil
-
-  defp dev_mailbox_hint do
-    if Application.get_env(:code_lead, CodeLead.Mailer)[:adapter] == Swoosh.Adapters.Local do
-      " In development the mail lands in the local mailbox at /dev/mailbox."
-    else
-      ""
-    end
-  end
 end

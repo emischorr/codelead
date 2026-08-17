@@ -2,6 +2,7 @@ defmodule CodeLeadWeb.UserLive.Login do
   use CodeLeadWeb, :live_view
 
   alias CodeLead.Accounts
+  alias CodeLead.Mailer
 
   @impl true
   def render(assigns) do
@@ -53,42 +54,44 @@ defmodule CodeLeadWeb.UserLive.Login do
           <.button full>Log in only this time</.button>
         </.form>
 
-        <div class="my-5 flex items-center gap-3">
-          <span class="h-px flex-1 bg-border" />
-          <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">or</span>
-          <span class="h-px flex-1 bg-border" />
-        </div>
+        <div :if={@mail_enabled?}>
+          <div class="my-5 flex items-center gap-3">
+            <span class="h-px flex-1 bg-border" />
+            <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">or</span>
+            <span class="h-px flex-1 bg-border" />
+          </div>
 
-        <.form
-          :let={f}
-          for={@form}
-          id="login-form-magic"
-          action={~p"/users/log-in"}
-          phx-submit="submit_magic"
-        >
-          <.input
-            readonly={!!(@current_scope && @current_scope.user)}
-            field={f[:email]}
-            type="email"
-            label="Email"
-            autocomplete="email"
-            spellcheck="false"
-            required
-          />
-          <.button full>Email me a login link</.button>
-        </.form>
-        <p class="mt-2 text-[12px] text-text3">
-          Only works if you have an email on file.
-        </p>
-
-        <p :if={local_mail_adapter?()} class="mt-4 text-[12px] text-text3">
-          Local mail adapter — sent emails land in <.link
-            href="/dev/mailbox"
-            class="font-semibold text-accent hover:underline"
+          <.form
+            :let={f}
+            for={@form}
+            id="login-form-magic"
+            action={~p"/users/log-in"}
+            phx-submit="submit_magic"
           >
-            the mailbox
-          </.link>.
-        </p>
+            <.input
+              readonly={!!(@current_scope && @current_scope.user)}
+              field={f[:email]}
+              type="email"
+              label="Email"
+              autocomplete="email"
+              spellcheck="false"
+              required
+            />
+            <.button full>Email me a login link</.button>
+          </.form>
+          <p class="mt-2 text-[12px] text-text3">
+            Only works if you have an email on file.
+          </p>
+
+          <p :if={@local_mailbox?} class="mt-4 text-[12px] text-text3">
+            Local mail adapter — sent emails land in <.link
+              href="/dev/mailbox"
+              class="font-semibold text-accent hover:underline"
+            >
+              the mailbox
+            </.link>.
+          </p>
+        </div>
       </div>
     </Layouts.auth>
     """
@@ -104,7 +107,13 @@ defmodule CodeLeadWeb.UserLive.Login do
 
     form = to_form(%{"username" => username, "email" => email}, as: "user")
 
-    {:ok, assign(socket, form: form, trigger_submit: false)}
+    {:ok,
+     assign(socket,
+       form: form,
+       trigger_submit: false,
+       mail_enabled?: Mailer.enabled?(),
+       local_mailbox?: Mailer.local_mailbox?()
+     )}
   end
 
   @impl true
@@ -127,9 +136,5 @@ defmodule CodeLeadWeb.UserLive.Login do
      socket
      |> put_flash(:info, info)
      |> push_navigate(to: ~p"/users/log-in")}
-  end
-
-  defp local_mail_adapter? do
-    Application.get_env(:code_lead, CodeLead.Mailer)[:adapter] == Swoosh.Adapters.Local
   end
 end

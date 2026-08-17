@@ -135,6 +135,14 @@ generated output:
   and a login token can never borrow the longer one. Both are single-use
   and share the confirmation LiveView; invites get their own email copy
   (`UserNotifier.deliver_invite_instructions/2`).
+- **Both contexts exist only when mail does.** Email is opt-in
+  (`CodeLead.Mailer.enabled?/0`, off unless `SMTP_HOST` is set), and with
+  no transport the login page drops its magic-link form and
+  `/settings/users` drops the invite option and *Resend invite* — an
+  instance then runs entirely on the username + password path this whole
+  design already favours. The delivery functions refuse before minting a
+  token, so the hiding is not the only thing standing in the way. See
+  [`configuration.md`](configuration.md#mail).
 - The generated migration was folded into
   `20260810130342_create_users.exs` (nothing was deployed at the time, and
   `create_tasks` already FKs `assignee_id → users`, so a later-timestamped

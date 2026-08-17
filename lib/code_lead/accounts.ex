@@ -13,6 +13,7 @@ defmodule CodeLead.Accounts do
   alias CodeLead.Accounts.User
   alias CodeLead.Accounts.UserNotifier
   alias CodeLead.Accounts.UserToken
+  alias CodeLead.Mailer
   alias CodeLead.Repo
 
   ## Organization
@@ -375,12 +376,22 @@ defmodule CodeLead.Accounts do
 
   @doc """
   Delivers the magic link login instructions to the given user.
+
+  Returns `{:error, :mail_disabled}` on an instance with no mail transport —
+  the check comes before the token is minted, so a hand-crafted request can't
+  leave an unusable token behind.
   """
+  @spec deliver_login_instructions(User.t(), (String.t() -> String.t())) ::
+          {:ok, Swoosh.Email.t()} | {:error, term()}
   def deliver_login_instructions(%User{} = user, magic_link_url_fun)
       when is_function(magic_link_url_fun, 1) do
-    {encoded_token, user_token} = UserToken.build_email_token(user, "login")
-    Repo.insert!(user_token)
-    UserNotifier.deliver_login_instructions(user, magic_link_url_fun.(encoded_token))
+    if Mailer.enabled?() do
+      {encoded_token, user_token} = UserToken.build_email_token(user, "login")
+      Repo.insert!(user_token)
+      UserNotifier.deliver_login_instructions(user, magic_link_url_fun.(encoded_token))
+    else
+      {:error, :mail_disabled}
+    end
   end
 
   @doc """
@@ -391,9 +402,13 @@ defmodule CodeLead.Accounts do
           {:ok, Swoosh.Email.t()} | {:error, term()}
   def deliver_invite_instructions(%User{} = user, invite_url_fun)
       when is_function(invite_url_fun, 1) do
-    {encoded_token, user_token} = UserToken.build_email_token(user, "invite")
-    Repo.insert!(user_token)
-    UserNotifier.deliver_invite_instructions(user, invite_url_fun.(encoded_token))
+    if Mailer.enabled?() do
+      {encoded_token, user_token} = UserToken.build_email_token(user, "invite")
+      Repo.insert!(user_token)
+      UserNotifier.deliver_invite_instructions(user, invite_url_fun.(encoded_token))
+    else
+      {:error, :mail_disabled}
+    end
   end
 
   @doc """
