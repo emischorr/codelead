@@ -38,8 +38,10 @@ config :code_lead, :subscription_usage_req_options,
 # Tests that need it start their own named instance and call refresh_now/1.
 config :code_lead, CodeLead.Agents.SubscriptionUsageCache, auto_refresh: false
 
-# In test we don't send emails
+# In test we don't send emails, but the email surfaces are exercised — tests
+# that need them hidden flip :mail_enabled themselves.
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Test
+config :code_lead, mail_enabled: true
 
 # The wizard's forge-token check must not reach github.com from a test.
 config :code_lead, git_access_check: {CodeLead.GitHelpers, :check_access}

@@ -23,6 +23,13 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `POOL_SIZE` | `10` | Database connection pool size. |
 | `ECTO_IPV6` | — | `true`/`1` to add `:inet6` to the database socket options. |
 | `DNS_CLUSTER_QUERY` | — | DNS query for node clustering; unused in a single-node deployment. |
+| `SMTP_HOST` | — | **The mail switch.** Unset means no transport, and every email surface is hidden (see *Mail* below). Set it to an SMTP relay's hostname to configure `Swoosh.Adapters.SMTP` and turn those surfaces on. |
+| `SMTP_PORT` | `587` | Relay port. `465` usually implies `SMTP_SSL=true`. |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | — | Relay credentials. Leave both unset for an unauthenticated relay (auth is only attempted when a username is given). |
+| `SMTP_TLS` | `if_available` | STARTTLS policy: `always`, `never`, or `if_available`. The peer certificate is verified against the system CA store whenever TLS is used. |
+| `SMTP_SSL` | `false` | `true`/`1` for implicit TLS (the connection is TLS from the start, rather than upgrading via STARTTLS). |
+| `MAIL_FROM` | `codelead@$PHX_HOST` | Sender address. Most relays reject a sender they don't recognise, so set this to an address the relay accepts. |
+| `MAIL_FROM_NAME` | `CodeLead` | Display name on the sender. |
 | `WORKSPACE_VOLUME` | — | Name of the docker volume holding `/data`, **as the host daemon knows it** (`codelead-data` in the shipped stack). When set, sibling task containers mount the workspace by this name. Unset (dev): the workspace root is bind-mounted at the identical path instead. |
 | `WORKSPACE_VOLUME_MOUNT` | `/data` | Where the volume (or `HOST_DATA_ROOT` bind) is mounted inside sibling containers. |
 | `HOST_DATA_ROOT` | — | Escape hatch (ADR-0003) for stacks whose `/data` is a bind mount rather than a named volume: the *host* path of that directory, passed as the bind source for sibling containers. |
@@ -89,6 +96,47 @@ template is not.
 - `:terminal_command` — test-only whole-argv override for local
   terminal spawns (`test/support/fake_shell.sh`), mirroring
   `:docker_cli`.
+- `:mail_enabled` / `:mail_from` — see *Mail* below.
+
+## Mail
+
+Email is **opt-in and off by default**. `CodeLead.Mailer.enabled?/0` reads
+`:mail_enabled`, which is `false` in `config/config.exs`, `true` in dev and
+test, and set to `true` in `config/runtime.exs` only when `SMTP_HOST` is
+present. Everything else about mail hangs off that one predicate.
+
+The switch is a dedicated key rather than a look at the configured adapter,
+because the adapter cannot answer the question: dev wants mail *on* with
+Swoosh's `Local` adapter, and a production build inherits that same adapter
+with nothing behind it. Sniffing the adapter is what used to make a deployed
+instance advertise a magic-link form and a `/dev/mailbox` link that 404s.
+
+**With mail off**, the surfaces that need a transport are hidden rather than
+left to fail silently:
+
+- `/users/log-in` renders only the username/password form — no magic-link
+  form, no mailbox notice.
+- `/settings/users` offers no "Send a magic-link invite" option and no
+  *Resend invite* button.
+- `Accounts.deliver_login_instructions/2` and `deliver_invite_instructions/2`
+  return `{:error, :mail_disabled}` **before** minting a token, so a crafted
+  request can't leave an unusable `users_tokens` row behind. This is the
+  authoritative half of the check, mirroring the
+  [`licensing.md`](licensing.md) discipline: hiding a control is cosmetic.
+
+Not covered: `/users/settings/email` still accepts an email change and
+reports that a confirmation link was sent. With no transport that link never
+arrives and the address never changes.
+
+**With mail on**, `SMTP_*` configures `Swoosh.Adapters.SMTP` (via `gen_smtp`)
+— the only adapter wired up. To smoke-test a relay without sending real mail,
+run a local catcher (`python3 -m aiosmtpd -n -l localhost:1025`) and point
+`SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=never` at it.
+
+In development, mail is on with the `Local` adapter and sent mail is
+browsable at `/dev/mailbox`. `CodeLead.Mailer.local_mailbox?/0` gates the
+links to it on *both* that adapter and the dev routes being compiled in, so
+it never points at a route that doesn't exist.
 
 ### Preview base path
 

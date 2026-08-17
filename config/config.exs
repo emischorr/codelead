@@ -74,9 +74,15 @@ config :code_lead, :model_prices, %{
 # By default it uses the "Local" adapter which stores the emails
 # locally. You can see the emails in your browser, at "/dev/mailbox".
 #
-# For production it's recommended to configure a different adapter
-# at the `config/runtime.exs`.
+# In production a real adapter is configured from SMTP_* in
+# `config/runtime.exs`; without those vars the instance has no transport.
 config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Local
+
+# Email is opt-in. Off means every email surface (magic-link login, invites)
+# is hidden rather than silently failing — see `CodeLead.Mailer`. dev and test
+# turn it on; prod only does so when SMTP_HOST is set.
+config :code_lead, mail_enabled: false
+config :code_lead, mail_from: {"CodeLead", "codelead@localhost"}
 
 # Configure esbuild (the version is required)
 config :esbuild,

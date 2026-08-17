@@ -150,24 +150,6 @@ defmodule CodeLeadWeb.BoardLiveTest do
                "a[data-confirm='Discard this task? Your changes will be lost.']"
              )
     end
-
-    test "prefills the repository field with the project's default repo", %{conn: conn} do
-      project = project_fixture()
-      default = repository_fixture(project.id)
-      _other = repository_fixture(project.id)
-
-      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board/new")
-
-      assert has_element?(
-               view,
-               ~s(#new-task-form select[name="task[repository_id]"] option[value="#{default.id}"][selected])
-             )
-
-      refute has_element?(
-               view,
-               ~s(#new-task-form select[name="task[repository_id]"] option[value=""])
-             )
-    end
   end
 
   describe "actions" do

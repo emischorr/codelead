@@ -221,21 +221,49 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 
-  # ## Configuring the mailer
+  ## Mail
   #
-  # In production you need to configure the mailer to use a different adapter.
-  # Here is an example configuration for Mailgun:
-  #
-  #     config :code_lead, CodeLead.Mailer,
-  #       adapter: Swoosh.Adapters.Mailgun,
-  #       api_key: System.get_env("MAILGUN_API_KEY"),
-  #       domain: System.get_env("MAILGUN_DOMAIN")
-  #
-  # Most non-SMTP adapters require an API client. Swoosh supports Req, Hackney,
-  # and Finch out-of-the-box. This configuration is typically done at
-  # compile-time in your config/prod.exs:
-  #
-  #     config :swoosh, :api_client, Swoosh.ApiClient.Req
-  #
-  # See https://hexdocs.pm/swoosh/Swoosh.html#module-installation for details.
+  # Email is opt-in and off unless SMTP_HOST is set. Off means no transport and
+  # no email surfaces at all: the magic-link login form and the invite flows are
+  # hidden, so the instance runs on usernames and passwords alone. Setting
+  # SMTP_HOST points the mailer at a real relay and turns those surfaces on.
+  if smtp_host = System.get_env("SMTP_HOST") do
+    smtp_username = System.get_env("SMTP_USERNAME")
+    smtp_password = System.get_env("SMTP_PASSWORD")
+
+    # `if_available` upgrades with STARTTLS when the relay offers it. Use
+    # `always` to require it, `never` for a plaintext relay on a trusted network.
+    smtp_tls =
+      case System.get_env("SMTP_TLS") || "if_available" do
+        "always" -> :always
+        "never" -> :never
+        "if_available" -> :if_available
+        other -> raise "SMTP_TLS must be always, never, or if_available — got #{inspect(other)}"
+      end
+
+    config :code_lead, CodeLead.Mailer,
+      adapter: Swoosh.Adapters.SMTP,
+      relay: smtp_host,
+      port: String.to_integer(System.get_env("SMTP_PORT") || "587"),
+      username: smtp_username,
+      password: smtp_password,
+      # Implicit TLS (usually port 465), as opposed to STARTTLS above.
+      ssl: System.get_env("SMTP_SSL") in ~w(true 1),
+      tls: smtp_tls,
+      tls_options: [
+        verify: :verify_peer,
+        cacerts: :public_key.cacerts_get(),
+        server_name_indication: String.to_charlist(smtp_host),
+        depth: 3
+      ],
+      auth: if(smtp_username, do: :always, else: :never),
+      retries: 1
+
+    config :code_lead, mail_enabled: true
+
+    config :code_lead,
+           :mail_from,
+           {System.get_env("MAIL_FROM_NAME") || "CodeLead",
+            System.get_env("MAIL_FROM") || "codelead@#{host}"}
+  end
 end

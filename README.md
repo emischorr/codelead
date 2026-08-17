@@ -176,7 +176,7 @@ Early, and honest about it. So issues are welcome. Eat your own dog food: I use 
 **Currently missing. Coming up next:**
 
 - **No authorization.** A user's role is stored and displayed but never enforced — every signed-in user can reach every settings page. Only invite people you'd trust as an admin.
-- **No outbound email.** No mail adapter is configured for production, so magic-link invites and email-change confirmations never leave the machine. Create users with a password from Settings → Users.
+- **Email is off by default.** Without `SMTP_HOST` there is no mail transport, and the flows that need one (magic-link login, magic-link invites) stay hidden — create users with a password from Settings → Users. Set `SMTP_HOST` to enable them. The self-service email-change page is the exception: it still claims to have sent a confirmation link.
 - No profile page, and no organization/instance settings (the tile is a placeholder).
 - No metrics page — the sidebar item is deactivated.
 - The in-task terminal shows the worktree path but isn't a real terminal yet.
