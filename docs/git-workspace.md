@@ -205,7 +205,9 @@ in dev, where the BEAM runs on the host — a bind of the workspace root
 at the identical path; all three keep host and container paths
 coincident. Containers are cattle: `spawn` re-ensures the container, so
 external removal costs one recreate; the harness `HOME` lives in
-`agent-homes/task-<id>` on the volume so sessions survive.
+`agent-homes/task-<id>` on the volume so sessions survive, and every
+exec also gets `TMPDIR=<agent-home>/.tmp` because the task image's
+`/tmp` may not be writable for `CONTAINER_USER`.
 `Context.exec_ref` (the container name) is not durable —
 `StageEffects.discard_context/1` rebuilds a `%Context{}` from DB rows
 before teardown, so the executor recovers identity from the task id

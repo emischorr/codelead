@@ -185,7 +185,11 @@ PREVIEW_UPSTREAM_HOST: 172.17.0.1
 ```
 
 The port binds to that gateway address only — not a public interface — and
-browsers always go through the authenticated proxy. Existing stacks need no
+browsers always go through the authenticated proxy. Containers created
+*before* the variables changed carry the old binding; the reconciler treats a
+binding on a stale publish IP like a missing one and recreates the container
+on the next terminal/preview touch (unless a run is live — then it waits so
+the agent's exec survives). Existing stacks need no
 change until an operator wants container-task previews; the websocket rules
 below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
 exactly as they do to `/live/websocket`, so a *location-scoped* proxy config

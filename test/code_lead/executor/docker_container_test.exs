@@ -140,6 +140,7 @@ defmodule CodeLead.Executor.DockerContainerTest do
       assert context.exec_ref == "codelead-task-#{task.id}"
       assert File.dir?(context.path)
       assert File.dir?(Workspace.agent_home(task.id))
+      assert File.dir?(Path.join(Workspace.agent_home(task.id), ".tmp"))
 
       lines = log_lines(log)
       create = Enum.find(lines, &String.starts_with?(&1, "create "))
@@ -293,6 +294,7 @@ defmodule CodeLead.Executor.DockerContainerTest do
       exec = Enum.find(lines, &String.starts_with?(&1, "exec -i"))
       assert exec =~ "-w #{context.path}"
       assert exec =~ "-e HOME=#{Workspace.agent_home(task.id)}"
+      assert exec =~ "-e TMPDIR=#{Path.join(Workspace.agent_home(task.id), ".tmp")}"
       assert exec =~ "-e GIT_CONFIG_KEY_0=safe.directory"
       assert exec =~ "codelead-task-#{task.id} #{binary}"
     end
@@ -464,6 +466,25 @@ defmodule CodeLead.Executor.DockerContainerTest do
 
       assert {:ok, _context} = DockerContainer.provision(task)
       refute Enum.any?(log_lines(log), &String.starts_with?(&1, "create "))
+    end
+
+    test "a binding on a stale publish ip is recreated on the current one", %{log: log} do
+      use_docker("running_published")
+      System.put_env("FAKE_DOCKER_PREVIEW_PORT", "5173")
+      Application.put_env(:code_lead, :preview_publish_ip, "172.17.0.1")
+
+      on_exit(fn ->
+        System.delete_env("FAKE_DOCKER_PREVIEW_PORT")
+        Application.delete_env(:code_lead, :preview_publish_ip)
+      end)
+
+      %{task: task} = container_task_setup(%{preview_port: 5173})
+
+      assert {:ok, _context} = DockerContainer.provision(task)
+
+      lines = log_lines(log)
+      assert Enum.any?(lines, &String.starts_with?(&1, "rm -f codelead-task-#{task.id}"))
+      assert Enum.find(lines, &String.starts_with?(&1, "create ")) =~ "-p 172.17.0.1:0:5173"
     end
 
     test "a live runner blocks the recreate — the agent's exec must survive", %{log: log} do

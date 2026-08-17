@@ -55,7 +55,7 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
 
       case Req.request(request) do
         {:ok, response} -> stream_response(conn, response, prefix)
-        {:error, _transport} -> not_running(conn, port)
+        {:error, _transport} -> not_running(conn, upstream)
       end
     else
       :error -> send_resp(conn, 405, "method not allowed")
@@ -104,10 +104,10 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
     _transport_error -> conn
   end
 
-  defp not_running(conn, port) do
+  defp not_running(conn, upstream) do
     conn
     |> put_resp_content_type("text/html")
-    |> send_resp(502, ErrorPages.not_running(port))
+    |> send_resp(502, ErrorPages.not_running(upstream))
   end
 
   defp read_full_body(conn, acc \\ []) do
