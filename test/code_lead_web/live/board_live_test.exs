@@ -80,6 +80,55 @@ defmodule CodeLeadWeb.BoardLiveTest do
     end
   end
 
+  describe "mobile column" do
+    test "opens on planning by default", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#m-board-column-planning")
+    end
+
+    test "selecting a column patches the URL and swaps the mobile pane", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      view |> element(~s(button[phx-value-column="running"])) |> render_click()
+
+      assert_patch(view, ~p"/projects/#{project.id}/board?column=running")
+      assert has_element?(view, "#m-board-column-running")
+    end
+
+    test "loading the board with a column param opens on that column", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board?column=review")
+
+      assert has_element?(view, "#m-board-column-review")
+    end
+
+    test "an unknown column param falls back to planning", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board?column=bogus")
+
+      assert has_element?(view, "#m-board-column-planning")
+    end
+
+    test "a task card links back to the column it's shown in", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board?column=planning")
+
+      assert has_element?(
+               view,
+               ~s(a[href="#{~p"/projects/#{project.id}/tasks/#{task.id}?column=planning"}"])
+             )
+    end
+  end
+
   describe "new-task modal" do
     test "creates a task and returns to the board", %{conn: conn} do
       project = project_fixture()
