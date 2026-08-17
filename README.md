@@ -179,11 +179,11 @@ Early, and honest about it. So issues are welcome. Eat your own dog food: I use 
 - **Email is off by default.** Without `SMTP_HOST` there is no mail transport, and the flows that need one (magic-link login, magic-link invites) stay hidden — create users with a password from Settings → Users. Set `SMTP_HOST` to enable them. The self-service email-change page is the exception: it still claims to have sent a confirmation link.
 - No profile page, and no organization/instance settings (the tile is a placeholder).
 - No metrics page — the sidebar item is deactivated.
-- The in-task terminal shows the worktree path but isn't a real terminal yet.
+- A container task supplies a toolchain, not a running environment: the image's own `ENTRYPOINT` never runs and execs are unprivileged, so a database packaged in the image can't be started. Previews there cover a single-process dev server.
 - You can't message an agent mid-run; ask-and-answer works, free-form chat doesn't.
 - Project-scoped agents exist in the model but aren't creatable through the UI.
 
-**Planned:** sub-tasks and epics, cost and usage dashboards, a review walkthrough that explains a diff step by step, agent memory that learns your preferences, container-based executors with resource caps, and queuing that waits for a subscription's token window to reset.
+**Planned:** sub-tasks and epics, cost and usage dashboards, a review walkthrough that explains a diff step by step, agent memory that learns your preferences, devcontainer-based environments (so a task's preview can bring up the services it needs), and queuing that waits for a subscription's token window to reset.
 
 **Out of scope on purpose:** releasing (tags, changelogs, deploy pipelines), forge-side automation (auto-merge, closing PRs, gating on required checks), and enterprise features (fine-grained RBAC, SSO, several organizations per deployment).
 

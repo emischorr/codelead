@@ -149,6 +149,75 @@ Phoenix `url: [path: System.get_env("PREVIEW_BASE_PATH")]`, Next.js
 `basePath`, etc. Framework recipes are iteration-2 material
 (`PREVIEW_ROADMAP.md`); the branded 502 page reminds the user meanwhile.
 
+### Serving a preview from a container task
+
+The base path above is what the *browser* needs. A **container** task's
+dev server carries further constraints, all consequences of the
+execution model rather than settings — a local task has none of them,
+because its server runs in the app's own process space and the proxy
+dials loopback.
+
+**Bind `0.0.0.0`, not `127.0.0.1`.** The proxy reaches a container task
+through a host port published at container create
+(`-p <PREVIEW_PUBLISH_IP>:0:<preview_port>`), and a published port cannot
+reach a socket bound to the container's own loopback. A server on
+`127.0.0.1` is invisible to the preview no matter how the deployment is
+configured:
+
+| Stack | Flag |
+|---|---|
+| Phoenix | `http: [ip: {0, 0, 0, 0}]` |
+| Vite | `--host` |
+| Next.js | `-H 0.0.0.0` |
+
+**Listen on exactly the declared `preview_port`.** The binding is created
+for the port the repository declares, so a server on any other port
+resolves to nothing. Declaring or changing `preview_port` after the
+container already exists recreates the container on the next terminal or
+preview touch — see [Container-task live previews](deployment.md#container-task-live-previews).
+
+**Expect a toolchain, not an environment.** Task containers run with
+`--entrypoint sleep`, so the image's own `ENTRYPOINT`/`CMD` never
+executes and there is no init system — a database *installed* in the
+`image_ref` is never *started*. Nor can you generally start it by hand:
+on a **deployed** instance the app image sets `CONTAINER_USER=1000:1000`
+itself, so every task container is created `--user 1000:1000` whether or
+not the operator asked. That uid usually has no `/etc/passwd` entry in
+the task image, which is why `whoami` reports a bare number — you are
+not root, `su` prompts for a password that does not exist, and you can
+chown nothing. The paths you *do* own are the ones the app created on
+the workspace volume: the worktree, the agent home, and the `TMPDIR`
+beneath it. (Dev is the opposite case — `CONTAINER_USER` is unset there,
+so containers run as the image's default user; see the variable's row
+above.)
+
+None of that is accidental. Files written to the shared volume have to
+stay owned by the service user, and the [image
+contract](adr/0004-container-executor-iteration-two.md) asks for little
+more than `sleep`, a shell and git: the container supplies the toolchain
+an agent's commands run against, not a running environment.
+
+**So the preview covers a single-process dev server** — one that needs
+no companion services. An app that wants a database beside it is waiting
+on devcontainer support, which owns the multi-service story
+(`PREVIEW_ROADMAP.md`); today the honest answer is to point the app at a
+database that already exists somewhere reachable, or to review that work
+by diff.
+
+**Background long-running processes.** The terminal session closes its
+`docker exec` after 15 minutes with no viewer; the shell sees EOF and
+takes its *foreground* children with it. A server started with
+`nohup … &` is reparented to the container's PID 1 and keeps serving —
+nothing ever stops the container.
+
+What does end it is container *removal*: cancel, Review→Planning
+(`worktree_policy: :discard`), reaching Done (finalize always releases
+the container), a changed `image_ref`, the stale-binding recreate above,
+or the boot reaper for any task not sitting in Review. Only the
+workspace mount survives that, so anything written outside it — an
+`initdb`'d data dir included — goes with the container. Durable state
+belongs under the worktree or the agent home.
+
 ## Git credentials
 
 Cloning, fetching and pushing a **private** repository over `https://`
@@ -412,6 +481,15 @@ libc is probed at run start and the matching harness flavor is used
 the workspace volume holding bun plus the adapter's package tree
 (ADR-0007), assembled in-docker on first use — so user images need no
 node, nothing harness-related.
+
+Two things the image does *not* get to decide, worth knowing before
+building one. Its `ENTRYPOINT`/`CMD` is replaced by the idle `sleep`, so
+nothing the image would normally start on boot ever runs; and on a
+deployed instance the container is created `--user 1000:1000` regardless
+of the image's own `USER`, so execs land on a uid that typically has no
+account in the image. Both follow from the container being a toolchain
+rather than an environment — see [Serving a preview from a container
+task](#serving-a-preview-from-a-container-task) for what that rules out.
 
 ### Container execution in dev
 
