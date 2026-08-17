@@ -6,18 +6,25 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   not available on proxied responses.
   """
 
-  @doc "Nothing is listening on the declared preview port; auto-retries."
-  @spec not_running(:inet.port_number() | nil) :: String.t()
-  def not_running(port) do
-    port_label = if port, do: "port #{port}", else: "the preview port"
+  @doc "Nothing answered at the dialed upstream address; auto-retries."
+  @spec not_running(%{host: String.t(), port: :inet.port_number()} | nil) :: String.t()
+  def not_running(upstream) do
+    target =
+      case upstream do
+        %{host: host, port: port} -> "at #{host}:#{port}"
+        nil -> "on the preview port"
+      end
 
     page(
-      "Nothing is listening on #{port_label}",
+      "Nothing is listening #{target}",
       """
       Start your dev server in the task's <strong>Terminal</strong> tab.
       For container tasks it must listen on <code>0.0.0.0</code>, and it
       should honor <code>PREVIEW_BASE_PATH</code> so assets resolve under
-      the preview URL. This page retries automatically.
+      the preview URL. Container tasks are dialed via their published
+      host port — if the address above looks unreachable from the app,
+      check <code>PREVIEW_PUBLISH_IP</code> /
+      <code>PREVIEW_UPSTREAM_HOST</code>. This page retries automatically.
       """,
       ~s(<meta http-equiv="refresh" content="4">)
     )

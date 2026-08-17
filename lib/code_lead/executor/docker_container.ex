@@ -134,13 +134,16 @@ defmodule CodeLead.Executor.DockerContainer do
 
   @doc """
   The `-e` exec flags for a command in the task's container: the given
-  env plus the per-task base (HOME, git safe.directory) that must win
-  over same-named project-env keys.
+  env plus the per-task base (HOME, TMPDIR, git safe.directory) that
+  must win over same-named project-env keys.
   """
   @spec exec_env_flags(pos_integer(), [{String.t(), String.t()}]) :: [String.t()]
   def exec_env_flags(task_id, env) do
     base = [
       {"HOME", Workspace.agent_home(task_id)},
+      # The image's /tmp may not be writable for CONTAINER_USER, so every
+      # exec gets a tmp dir on the workspace volume it is known to own.
+      {"TMPDIR", Path.join(Workspace.agent_home(task_id), ".tmp")},
       {"GIT_CONFIG_COUNT", "1"},
       {"GIT_CONFIG_KEY_0", "safe.directory"},
       {"GIT_CONFIG_VALUE_0", "*"}
@@ -188,7 +191,9 @@ defmodule CodeLead.Executor.DockerContainer do
   end
 
   defp ensure_agent_home(task_id) do
-    File.mkdir_p(Workspace.agent_home(task_id))
+    # `.tmp` backs the TMPDIR every exec receives; mkdir_p covers the
+    # agent home itself.
+    File.mkdir_p(Path.join(Workspace.agent_home(task_id), ".tmp"))
   end
 
   # Reviewer contexts are hand-built and never pass through provision,
@@ -251,8 +256,21 @@ defmodule CodeLead.Executor.DockerContainer do
   defp stale_preview_binding?(_bindings, nil, _task_id), do: false
 
   defp stale_preview_binding?(bindings, preview_port, task_id) do
-    not Map.has_key?(bindings, "#{preview_port}/tcp") and
+    not current_binding?(bindings, preview_port) and
       task_id not in RunSupervisor.active_task_ids()
+  end
+
+  # A binding on a previous `PREVIEW_PUBLISH_IP` is as unreachable as a
+  # missing one, so the container must be recreated to follow the
+  # config — the operator changing it is exactly the healing moment.
+  defp current_binding?(bindings, preview_port) do
+    case Map.get(bindings, "#{preview_port}/tcp") do
+      entries when is_list(entries) ->
+        Enum.any?(entries, &(Map.get(&1, "HostIp") == publish_ip()))
+
+      _missing_or_null ->
+        false
+    end
   end
 
   defp container_state(name) do
@@ -318,8 +336,11 @@ defmodule CodeLead.Executor.DockerContainer do
   defp publish_flags(nil), do: []
 
   defp publish_flags(preview_port) do
-    publish_ip = Application.get_env(:code_lead, :preview_publish_ip, "127.0.0.1")
-    ["-p", "#{publish_ip}:0:#{preview_port}"]
+    ["-p", "#{publish_ip()}:0:#{preview_port}"]
+  end
+
+  defp publish_ip do
+    Application.get_env(:code_lead, :preview_publish_ip, "127.0.0.1")
   end
 
   defp ensure_image(image_ref) do
