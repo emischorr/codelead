@@ -118,7 +118,8 @@ defmodule CodeLeadWeb.FormOptions do
     [
       {"Execute and review", "execute,review"},
       {"Execute only", "execute"},
-      {"Review only", "review"}
+      {"Review only", "review"},
+      {"Plan only", "plan"}
     ]
   end
 
@@ -128,6 +129,7 @@ defmodule CodeLeadWeb.FormOptions do
   @spec parse_roles(String.t() | nil) :: [atom()]
   def parse_roles("execute"), do: [:execute]
   def parse_roles("review"), do: [:review]
+  def parse_roles("plan"), do: [:plan]
   def parse_roles(_both), do: [:execute, :review]
 
   @doc """
@@ -138,6 +140,7 @@ defmodule CodeLeadWeb.FormOptions do
     case Enum.map(roles, &to_string/1) do
       ["execute"] -> "execute"
       ["review"] -> "review"
+      ["plan"] -> "plan"
       _both -> "execute,review"
     end
   end
