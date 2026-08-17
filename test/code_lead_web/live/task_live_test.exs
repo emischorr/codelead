@@ -70,6 +70,48 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "back to board link" do
+    test "defaults to the plain board URL when arriving without a column", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(
+               view,
+               ~s(a[aria-label="Back to board"][href="#{~p"/projects/#{project.id}/board"}"])
+             )
+    end
+
+    test "carries the originating mobile column back to the board", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/projects/#{project.id}/tasks/#{task.id}?column=running")
+
+      assert has_element?(
+               view,
+               ~s(a[aria-label="Back to board"][href="#{~p"/projects/#{project.id}/board?column=running"}"])
+             )
+    end
+
+    test "keeps the column after switching tabs, which don't carry it", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/projects/#{project.id}/tasks/#{task.id}?column=review")
+
+      view |> element("nav a", "Terminal") |> render_click()
+
+      assert has_element?(
+               view,
+               ~s(a[aria-label="Back to board"][href="#{~p"/projects/#{project.id}/board?column=review"}"])
+             )
+    end
+  end
+
   describe "start/schedule guard" do
     test "a task without an executor keeps Start/Schedule visible but disabled", %{conn: conn} do
       project = project_fixture()

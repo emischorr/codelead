@@ -45,11 +45,13 @@ defmodule CodeLeadWeb.BoardLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, %{assigns: %{live_action: :new}} = socket) do
+  def handle_params(params, _uri, %{assigns: %{live_action: :new}} = socket) do
+    socket = maybe_set_mobile_column(socket, params["column"])
     {:noreply, assign_new_task_form(socket, %{"work_type" => "code"})}
   end
 
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
+    socket = maybe_set_mobile_column(socket, params["column"])
     {:noreply, assign(socket, new_form: nil)}
   end
 
@@ -105,8 +107,11 @@ defmodule CodeLeadWeb.BoardLive do
   end
 
   def handle_event("select_column", %{"column" => column}, socket) do
-    column = Enum.find(Keyword.keys(@columns), :planning, &(Atom.to_string(&1) == column))
-    {:noreply, assign(socket, mobile_column: column)}
+    {:noreply,
+     push_patch(socket,
+       to: ~p"/projects/#{socket.assigns.project.id}/board?column=#{column}",
+       replace: true
+     )}
   end
 
   def handle_event("validate", %{"task" => params}, socket) do
@@ -135,6 +140,15 @@ defmodule CodeLeadWeb.BoardLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp close_schedule(socket), do: assign(socket, scheduling_task: nil, schedule_form: nil)
+
+  defp maybe_set_mobile_column(socket, nil), do: socket
+
+  defp maybe_set_mobile_column(socket, column) do
+    case Enum.find(Keyword.keys(@columns), &(Atom.to_string(&1) == column)) do
+      nil -> socket
+      column -> assign(socket, mobile_column: column)
+    end
+  end
 
   defp load_board(socket) do
     project = socket.assigns.project
@@ -377,7 +391,7 @@ defmodule CodeLeadWeb.BoardLive do
       tokens={@spend.tokens}
       duration_ms={@spend.duration_ms}
       cost_mode={@cost_mode}
-      navigate={~p"/projects/#{@ctx.project.id}/tasks/#{@task.id}"}
+      navigate={~p"/projects/#{@ctx.project.id}/tasks/#{@task.id}?column=#{@column}"}
       warn={@task.attention != nil}
       muted={@column == :done}
     >
