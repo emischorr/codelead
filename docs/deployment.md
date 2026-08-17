@@ -1,4 +1,4 @@
-# Deployment (last updated: 2026-08-16)
+# Deployment (last updated: 2026-08-17)
 
 How to run CodeLead on a server. For the five-minute version see the
 README's *Getting started*; for the full environment variable reference see
@@ -33,10 +33,10 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 | Platforms | `linux/amd64`, `linux/arm64` |
 | Base | Alpine; Elixir 1.20.3 / Erlang 28.5.0.5 in the build stage |
 | User | `elixir`, uid/gid 1000 — **not root**, so it cannot bind ports below 1024 |
-| Bundled harness | `@agentclientprotocol/claude-agent-acp` at `/opt/harness` (on `PATH`) for **local** execution. The container-execution harness is not baked in — a runtime directory is staged onto the data volume over the docker socket on the first container run per libc flavor (ADR-0007). Codex is bring-your-own, local-only |
+| Bundled harness | `@agentclientprotocol/claude-agent-acp` at `/opt/harness` (on `PATH`) for **local** execution. The container-execution harness is not baked in — a runtime directory is staged into the workspace over the docker socket on the first container run per libc flavor (ADR-0007). Codex is bring-your-own, local-only |
 | Docker CLI | `docker-cli` (no daemon) — drives sibling task containers through the mounted socket |
 | Entrypoints | `/app/bin/server` (default `CMD`) and `/app/bin/migrate` |
-| Mutable state | `/data/home` (`HOME`) and `/data/workspace` (`WORKSPACE_ROOT`) |
+| Mutable state | `$DATA_ROOT/home` (`HOME`) and `$DATA_ROOT/workspace` (`WORKSPACE_ROOT`); the image defaults to `/data/*`, which the compose stack overrides to follow the `DATA_ROOT` bind |
 
 `/app/bin/migrate` evals `CodeLead.Release.migrate/0`
 (`lib/code_lead/release.ex`), which runs every pending migration for each repo
@@ -87,31 +87,49 @@ deploy instead of starting an app against a half-migrated schema.
 Because `migrate` runs on every `docker compose up`, upgrades need no extra
 step.
 
-### The data volume
+### The data directory
 
-The `app` service mounts the **named volume** `codelead-data` at `/data`. It
-holds the agent harness's configuration and session state (`/data/home`) and
-every base clone, task worktree, and task folder (`/data/workspace`) —
-including work that hasn't been merged yet. Without the mount, `docker
-compose down` would discard all of that.
+The `app` service bind-mounts the host directory `DATA_ROOT` (set in `.env`)
+into the container **at the identical path**. It holds the agent harness's
+configuration and session state (`$DATA_ROOT/home`, the container's `HOME`)
+and every base clone, task worktree, and task folder
+(`$DATA_ROOT/workspace`, `WORKSPACE_ROOT`) — including work that hasn't been
+merged yet. Create it before the first `up`; the app runs as uid 1000 and
+cannot create or chown it itself:
 
-Keep it a *named* volume rather than a bind mount. The container executor
-creates sibling containers through the host docker socket and hands them the
-workspace **by volume name** (`WORKSPACE_VOLUME`) — a bind path from inside
-the app container would be resolved by the host daemon in the *host's* mount
-namespace and point at the wrong place, or nowhere
-([ADR-0003](adr/0003-container-execution-model.md)). `HOST_DATA_ROOT` is the
-escape hatch for operators who insist on a bind mount.
+```bash
+sudo mkdir -p /srv/codelead/data && sudo chown -R 1000:1000 /srv/codelead/data
+```
 
-The compose file pins the volume's name (`name: codelead-data`) so
-`WORKSPACE_VOLUME` stays correct regardless of the compose project name.
-**Upgrade note:** a stack created before this pin holds its data in a volume
-compose named `deployment_codelead-data`. Pinning on such a stack makes
-compose create a *new, empty* `codelead-data` — either keep the old name (drop
-the `name:` line and set `WORKSPACE_VOLUME: deployment_codelead-data`), or
-migrate the data once
-(`docker run --rm -v deployment_codelead-data:/from -v codelead-data:/to
-alpine cp -a /from/. /to/`) with the stack down.
+The identical-path rule is load-bearing, not cosmetic
+([ADR-0009](adr/0009-devcontainer-execution.md)): task devcontainers are
+provisioned by the devcontainer CLI *inside* the app container, but every
+bind source it emits — the repo's own compose file paths, the CLI's
+workspace mount — is resolved by the **host** daemon in the host's mount
+namespace. Only when the host path and the in-container path coincide does
+the daemon find the worktree; anything else makes it silently create an
+empty directory and mount that, and the devcontainer fails on its first
+lifecycle hook ("no mix.exs was found", missing `package.json`, …).
+
+This *reverses* the earlier advice. Stacks deployed before ADR-0009 used a
+named volume (`codelead-data` at `/data`, announced via `WORKSPACE_VOLUME`),
+which worked for the old image-based executor because CodeLead authored every
+mount by volume name — but a volume's data has no stable host path, so
+devcontainer execution under it is impossible and such tasks now refuse to
+start with a message pointing here. **Migrating an existing stack** (with the
+stack down, after setting `DATA_ROOT` in `.env` and creating the directory):
+
+```bash
+docker run --rm -v codelead-data:/from -v /srv/codelead/data:/to alpine cp -a /from/. /to/
+sudo chown -R 1000:1000 /srv/codelead/data
+```
+
+(Stacks older than the `name: codelead-data` pin hold their data in
+`deployment_codelead-data` — substitute that name.) Afterwards `docker volume
+rm codelead-data` reclaims the space. Also check the host for phantom
+directories a failed pre-migration devcontainer attempt left behind — the
+daemon auto-creates the missing bind source, so an empty host-side
+`/data/workspace/…` tree may exist; remove it.
 
 ### The docker socket
 
@@ -123,9 +141,9 @@ controls the CodeLead process can start privileged containers. That trade is
 accepted, and stated here rather than discovered, under the single-tenant,
 self-hosted assumption ([ADR-0003](adr/0003-container-execution-model.md),
 [ADR-0009](adr/0009-devcontainer-execution.md)). To run without
-container execution, remove the socket mount, `group_add`, and the
-`WORKSPACE_VOLUME` env — container-selecting tasks then refuse to start with a
-clear message.
+container execution, remove the socket mount and `group_add` —
+container-selecting tasks then refuse to start with a clear message. (The
+`DATA_ROOT` bind stays either way; it is where all mutable state lives.)
 
 **Mounting is only half of it.** The app runs as uid 1000 while the socket is
 `root:docker 0660` on the host, so the container also needs that group:
@@ -382,16 +400,17 @@ socket mount and `group_add` were added after the first stacks went out — reac
 the running container only when it is recreated, which `up -d` does once the
 file on disk actually differs. Take the current
 [`deployment/docker-compose.yml`](../deployment/docker-compose.yml) over yours,
-and read [The data volume](#the-data-volume) before you do: a stack older than
-the `name: codelead-data` pin keeps its workspace in `deployment_codelead-data`,
-and adopting the pin as-is starts you on a new, empty volume.
+and read [The data directory](#the-data-directory) before you do: a stack
+that predates the `DATA_ROOT` bind keeps its workspace in a named volume, and
+adopting the new file without the one-time copy starts you on an empty
+directory.
 
 ## Backups
 
 Three things, and all three are needed to restore:
 
 1. **The database.** `docker compose exec db pg_dump -U codelead codelead > backup.sql`
-2. **The `/data` volume**, if you have in-flight work — unmerged task
+2. **The `DATA_ROOT` directory**, if you have in-flight work — unmerged task
    branches live in worktrees there, not in the database.
 3. **`ENCRYPTION_KEY`.** Provider credentials and project secrets are
    encrypted at rest with it. A database restored without the matching key

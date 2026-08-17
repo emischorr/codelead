@@ -43,10 +43,11 @@ services:
       # Extra addresses this instance may be reached at, on top of PHX_HOST.
       # Bare host = any scheme/port; full origin = exact match; "*" = allow all.
       # ALLOWED_HOSTS: "192.168.1.50, codelead.local"
-      # The name the *host* docker daemon knows the data volume by — sibling
-      # task containers mount it by this name for container execution. Must
-      # match the pinned volume name below.
-      WORKSPACE_VOLUME: codelead-data
+      # The data root is bind-mounted at the identical path (see volumes:
+      # below), so the image's /data defaults must follow it — anything left
+      # at /data would be container-local and lost on recreation.
+      WORKSPACE_ROOT: ${DATA_ROOT:?set DATA_ROOT in .env — see .env.example}/workspace
+      HOME: ${DATA_ROOT}/home
       # Signed license key. Optional — without one the instance runs the
       # community tier, which today grants everything. See docs/licensing.md.
       # LICENSE_KEY: ${LICENSE_KEY}
@@ -66,12 +67,18 @@ services:
       # PREVIEW_IDLE_MINUTES: "30"
       # PREVIEW_START_TIMEOUT_SECONDS: "120"
     volumes:
-      - codelead-data:/data
+      # Host path == container path, on purpose: the devcontainer CLI runs in
+      # this container but the host daemon resolves every workspace bind, so
+      # container execution only works when both see the workspace at the
+      # same path. A named volume CANNOT satisfy this (its data has no stable
+      # host path) — stacks migrating from the old codelead-data volume: see
+      # "The data directory" in docs/deployment.md for the one-time copy.
+      - ${DATA_ROOT}:${DATA_ROOT}
       # Container task execution provisions each task's devcontainer through
       # the host docker daemon. Mounting the socket is root-equivalent on the
       # host — an accepted trade under the single-tenant model (ADR-0003/0009).
-      # Remove this line, group_add below, and WORKSPACE_VOLUME above to
-      # disable it. Mounting alone is not enough — see group_add.
+      # Remove this line and group_add below to disable it. Mounting alone is
+      # not enough — see group_add.
       - /var/run/docker.sock:/var/run/docker.sock
     # The socket is root:docker 0660 on the host while CodeLead runs as uid
     # 1000, so the app container also needs the host's docker group id:
@@ -91,6 +98,3 @@ services:
 
 volumes:
   pg:
-  # Pinned so WORKSPACE_VOLUME above stays correct regardless of the compose project name.
-  codelead-data:
-    name: codelead-data

@@ -4,8 +4,10 @@
 //    execution, and tasks run in here (preview: any free port, e.g. 4001,
 //    command `PORT="$PREVIEW_PORT" mix phx.server`).
 // Running the full app *inside* this container with container execution
-// enabled additionally needs HOST_DATA_ROOT (the coincident-path rule
-// breaks against the host daemon); agents running `mix test` /
+// enabled additionally needs the workspace root host-coincident — bind
+// the same host directory at the identical path and point WORKSPACE_ROOT
+// at it (docs/deployment.md, "The data directory"); otherwise container
+// tasks refuse to start. Agents running `mix test` /
 // `mix phx.server` need nothing extra — docker-dependent tests are
 // excluded by default.
 {

@@ -322,6 +322,12 @@ defmodule CodeLead.RuntimeContainerTest do
       assert message =~ ".devcontainer/devcontainer.json"
     end
 
+    test "routes a non-coincident workspace mount to the deployment docs" do
+      message = TaskRunner.dispatch_error({:provision, :workspace_not_host_coincident})
+      assert message =~ "DATA_ROOT"
+      assert message =~ "docs/deployment.md"
+    end
+
     test "renders a failed up with its log tail" do
       message =
         TaskRunner.dispatch_error({:provision, {:devcontainer_up_failed, "boom", "the tail"}})

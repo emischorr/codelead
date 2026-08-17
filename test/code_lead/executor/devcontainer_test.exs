@@ -123,6 +123,20 @@ defmodule CodeLead.Executor.DevcontainerTest do
       refute File.dir?(Workspace.worktree_path(task.id))
     end
 
+    test "refuses under a legacy non-coincident workspace mount before touching the CLI",
+         %{devcontainer_log: devcontainer_log} do
+      use_docker("running")
+      use_devcontainer("success")
+      %{task: task} = container_task_setup()
+
+      original = Application.get_env(:code_lead, :workspace_volume)
+      Application.put_env(:code_lead, :workspace_volume, "codelead-data")
+      on_exit(fn -> Application.put_env(:code_lead, :workspace_volume, original) end)
+
+      assert {:error, :workspace_not_host_coincident} = Devcontainer.provision(task)
+      assert log_lines(devcontainer_log) == []
+    end
+
     test "refuses when the cloned worktree carries no devcontainer config",
          %{devcontainer_log: devcontainer_log} do
       use_docker("running")

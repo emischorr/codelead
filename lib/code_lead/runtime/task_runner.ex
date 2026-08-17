@@ -132,6 +132,13 @@ defmodule CodeLead.Runtime.TaskRunner do
       "(or fix the declared config path), or switch the task's execution back to Local"
   end
 
+  def dispatch_error({:provision, :workspace_not_host_coincident}) do
+    "container execution needs the data root bind-mounted from the host at the " <>
+      "identical path (DATA_ROOT) — a named workspace volume (WORKSPACE_VOLUME) or a " <>
+      "HOST_DATA_ROOT bind cannot work with devcontainers, because the host daemon " <>
+      "resolves the repo's own workspace mounts host-side; see docs/deployment.md"
+  end
+
   def dispatch_error({:provision, {:devcontainer_up_failed, message, tail}}) do
     "could not bring the task's devcontainer up: #{Git.redact(message)}" <>
       if(tail == "", do: "", else: " — log tail: #{Git.redact(tail)}")
