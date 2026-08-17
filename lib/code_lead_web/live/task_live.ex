@@ -1061,6 +1061,11 @@ defmodule CodeLeadWeb.TaskLive do
     ~H"""
     <Layouts.app flash={@flash} nav={@nav} current_scope={@current_scope} sidebar={:closed}>
       <header class="shrink-0 border-b border-border bg-surface">
+        <div
+          class="h-[3px]"
+          style={"background-color: var(--proj-#{@project.color})"}
+          title={@project.name}
+        />
         <div class="flex items-center gap-2.5 px-4 pt-3.5 sm:gap-3.5 sm:px-6">
           <Layouts.sidebar_toggle />
           <.link

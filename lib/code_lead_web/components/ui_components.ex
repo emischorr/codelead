@@ -114,8 +114,9 @@ defmodule CodeLeadWeb.UIComponents do
   @doc """
   Renders a project's identity dot in its chosen color. `pulse` is set
   by the caller when the project has a task in Running — the dot then
-  animates in its own color rather than borrowing `--run`, so it stays
-  legible against whatever color the project was given.
+  fades in its own color rather than borrowing `--run`, and gains a thin
+  static ring so the fade reads clearly against the ring instead of just
+  shrinking against the page background.
   """
   attr :color, :atom, required: true
   attr :pulse, :boolean, default: false
@@ -123,12 +124,18 @@ defmodule CodeLeadWeb.UIComponents do
 
   def project_dot(assigns) do
     ~H"""
-    <span class={[
-      "size-2 shrink-0 rounded-[3px]",
-      project_color_class(@color),
-      @pulse && "animate-pulse",
-      @class
-    ]} />
+    <span class={["relative inline-flex size-2 shrink-0 items-center justify-center", @class]}>
+      <span
+        :if={@pulse}
+        class="absolute -inset-[3px] rounded-full border"
+        style={"border-color: var(--proj-#{@color})"}
+      />
+      <span class={[
+        "size-2 shrink-0 rounded-[3px]",
+        project_color_class(@color),
+        @pulse && "animate-pulse"
+      ]} />
+    </span>
     """
   end
 
