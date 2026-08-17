@@ -32,7 +32,7 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 |---|---|
 | Platforms | `linux/amd64`, `linux/arm64` |
 | Base | Alpine; Elixir 1.20.3 / Erlang 28.5.0.5 in the build stage |
-| User | `elixir`, uid/gid 1000 — **not root**, so it cannot bind ports below 1024 |
+| User | Starts as **root**: the entrypoint (`docker-entrypoint.sh`) owns the `DATA_ROOT` roots and grants itself the docker socket's group — the two things that would otherwise need host preparation — then drops to `elixir` (uid/gid 1000) via `su-exec` before starting the release. The app itself never runs as root (and cannot bind ports below 1024); `user: "1000:1000"` skips the entrypoint's setup for hardened deployments |
 | Bundled harness | `@agentclientprotocol/claude-agent-acp` at `/opt/harness` (on `PATH`) for **local** execution. The container-execution harness is not baked in — a runtime directory is staged into the workspace over the docker socket on the first container run per libc flavor (ADR-0007). Codex is bring-your-own, local-only |
 | Docker CLI | `docker-cli` (no daemon) — drives sibling task containers through the mounted socket |
 | Entrypoints | `/app/bin/server` (default `CMD`) and `/app/bin/migrate` |
@@ -94,12 +94,11 @@ into the container **at the identical path**. It holds the agent harness's
 configuration and session state (`$DATA_ROOT/home`, the container's `HOME`)
 and every base clone, task worktree, and task folder
 (`$DATA_ROOT/workspace`, `WORKSPACE_ROOT`) — including work that hasn't been
-merged yet. Create it before the first `up`; the app runs as uid 1000 and
-cannot create or chown it itself:
-
-```bash
-sudo mkdir -p /srv/codelead/data && sudo chown -R 1000:1000 /srv/codelead/data
-```
+merged yet. No preparation needed: a missing bind source is auto-created by
+the daemon, and the image's entrypoint hands the directory to the app user
+(uid 1000) before dropping privileges — see [The image](#the-image). What
+lands on disk is owned by uid 1000, which on a typical single-admin host is
+the operator's own account.
 
 The identical-path rule is load-bearing, not cosmetic
 ([ADR-0009](adr/0009-devcontainer-execution.md)): task devcontainers are
@@ -117,12 +116,14 @@ which worked for the old image-based executor because CodeLead authored every
 mount by volume name — but a volume's data has no stable host path, so
 devcontainer execution under it is impossible and such tasks now refuse to
 start with a message pointing here. **Migrating an existing stack** (with the
-stack down, after setting `DATA_ROOT` in `.env` and creating the directory):
+stack down, after setting `DATA_ROOT` in `.env`):
 
 ```bash
 docker run --rm -v codelead-data:/from -v /srv/codelead/data:/to alpine cp -a /from/. /to/
-sudo chown -R 1000:1000 /srv/codelead/data
 ```
+
+(`cp -a` preserves the volume's uid-1000 ownership, and the entrypoint owns
+the directory roots on the next start — no chown needed.)
 
 (Stacks older than the `name: codelead-data` pin hold their data in
 `deployment_codelead-data` — substitute that name.) Afterwards `docker volume
@@ -141,29 +142,32 @@ controls the CodeLead process can start privileged containers. That trade is
 accepted, and stated here rather than discovered, under the single-tenant,
 self-hosted assumption ([ADR-0003](adr/0003-container-execution-model.md),
 [ADR-0009](adr/0009-devcontainer-execution.md)). To run without
-container execution, remove the socket mount and `group_add` —
-container-selecting tasks then refuse to start with a clear message. (The
-`DATA_ROOT` bind stays either way; it is where all mutable state lives.)
+container execution, remove the socket mount — container-selecting tasks
+then refuse to start with a clear message. (The `DATA_ROOT` bind stays
+either way; it is where all mutable state lives.)
 
-**Mounting is only half of it.** The app runs as uid 1000 while the socket is
-`root:docker 0660` on the host, so the container also needs that group:
+**Socket permissions are handled by the entrypoint.** On a Linux host the
+socket is `root:docker 0660` while the app runs as uid 1000 — the entrypoint,
+still root at that point, reads the socket's owning gid, grants the service
+user that group, and only then drops privileges. Nothing to configure. Two
+consequences worth knowing:
 
-```bash
-stat -c '%g' /var/run/docker.sock     # on the host -> DOCKER_GID in .env
-```
-
-The compose file passes it through as `group_add: ["${DOCKER_GID:-0}"]`. It has
-to be the numeric id — the image has no `docker` group to resolve a name
-against — and the `0` fallback is right only where the socket is root-owned
-(Docker Desktop). With an unset `DOCKER_GID` on a Linux host, every docker call
-comes back `permission denied` and container tasks refuse to start with a
-message saying so.
+- The gid is read **once, at container start**. If the socket is mounted or
+  its group changed afterwards, restart the stack.
+- A **hardened deployment** that sets `user: "1000:1000"` on the `app`
+  service skips the root entrypoint entirely — and takes the host
+  preparation back: create and `chown -R 1000:1000` the `DATA_ROOT`
+  directory yourself, and pass the socket's group id via
+  `group_add: ["<gid>"]` (`stat -c '%g' /var/run/docker.sock` on the host;
+  numeric — the image has no `docker` group to resolve a name against).
+  Getting it wrong surfaces as `permission denied` on every docker call,
+  with container tasks refusing to start with a message saying so.
 
 Under **rootless Docker** there is no `/var/run/docker.sock`; the socket lives
 at `$XDG_RUNTIME_DIR/docker.sock`. Mount that path instead and set `DOCKER_HOST`
 on the `app` service — the CLI honours it ([`configuration.md`](configuration.md)).
 
-Verify both halves from inside the container:
+Verify mount and permissions from inside the container:
 
 ```bash
 docker compose exec app ls -l /var/run/docker.sock
@@ -395,15 +399,15 @@ apply themselves. Watch it if you want the reassurance:
 docker compose logs migrate
 ```
 
-`pull` only refreshes the image. Changes to the compose file itself — the docker
-socket mount and `group_add` were added after the first stacks went out — reach
-the running container only when it is recreated, which `up -d` does once the
-file on disk actually differs. Take the current
+`pull` only refreshes the image. Changes to the compose file itself reach the
+running container only when it is recreated, which `up -d` does once the file
+on disk actually differs. Take the current
 [`deployment/docker-compose.yml`](../deployment/docker-compose.yml) over yours,
 and read [The data directory](#the-data-directory) before you do: a stack
 that predates the `DATA_ROOT` bind keeps its workspace in a named volume, and
 adopting the new file without the one-time copy starts you on an empty
-directory.
+directory. A stack from the `group_add`/`DOCKER_GID` era simply drops both —
+the entrypoint took that job over — and can delete `DOCKER_GID` from `.env`.
 
 ## Backups
 

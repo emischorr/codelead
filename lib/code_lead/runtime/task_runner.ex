@@ -159,9 +159,10 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   def dispatch_error({:docker_permission_denied, _output}) do
-    "CodeLead cannot use the mounted docker socket — it runs as uid 1000 while the " <>
-      "socket is group-owned by `docker` on the host; add that group's id to the app " <>
-      "container (`group_add`, see docs/deployment.md)"
+    "CodeLead cannot use the mounted docker socket — the entrypoint normally grants " <>
+      "socket access at start, so either the socket appeared after boot (restart the " <>
+      "stack) or the container runs with a `user:` override, which takes that back: " <>
+      "add the host docker group's id via `group_add` (see docs/deployment.md)"
   end
 
   def dispatch_error(:docker_cli_not_found) do

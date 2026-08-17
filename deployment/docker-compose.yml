@@ -77,17 +77,12 @@ services:
       # Container task execution provisions each task's devcontainer through
       # the host docker daemon. Mounting the socket is root-equivalent on the
       # host — an accepted trade under the single-tenant model (ADR-0003/0009).
-      # Remove this line and group_add below to disable it. Mounting alone is
-      # not enough — see group_add.
+      # Remove this line to disable it. The image's entrypoint (root, before
+      # dropping to uid 1000) grants itself the socket's group and owns the
+      # DATA_ROOT roots — no DOCKER_GID or manual chown needed. Hardened
+      # deployments can add `user: "1000:1000"` to skip the root entrypoint,
+      # taking that host preparation back on themselves (docs/deployment.md).
       - /var/run/docker.sock:/var/run/docker.sock
-    # The socket is root:docker 0660 on the host while CodeLead runs as uid
-    # 1000, so the app container also needs the host's docker group id:
-    # `stat -c '%g' /var/run/docker.sock` on the host, into DOCKER_GID in .env.
-    # Numeric only — the image has no `docker` group to resolve a name against.
-    # The 0 fallback keeps the stack bootable (and is right on Docker Desktop),
-    # but on a Linux host an unset DOCKER_GID means permission denied.
-    group_add:
-      - "${DOCKER_GID:-0}"
     ports:
       - "4000:4000"
     depends_on:

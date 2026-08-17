@@ -137,7 +137,7 @@ ARG MIX_ENV
 # the same guard the harness stage puts on node.
 RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates git nodejs \
   bash coreutils findutils grep sed diffutils curl jq ripgrep openssh-client \
-  docker-cli docker-cli-compose docker-cli-buildx \
+  docker-cli docker-cli-compose docker-cli-buildx su-exec \
   && bash --version
 
 ENV USER="elixir"
@@ -200,10 +200,15 @@ ENV WORKSPACE_ROOT=/data/workspace
 # container inherits none. Naming it here beats letting it fall back.
 ENV SHELL=/bin/bash
 
-# run as user
-USER "${USER}"
-
 # copy release executables
 COPY --from=builder --chown="${USER}":"${USER}" /app/_build/"${MIX_ENV}"/rel/"${RELEASE_NAME}" ./
+
+# The image starts as root on purpose: the entrypoint owns the DATA_ROOT
+# bind's roots and grants itself the docker socket's group — the two things
+# an unprivileged container would need host preparation for — then drops to
+# the service user via su-exec before starting the release. A compose
+# `user: "1000:1000"` override skips all of it (hardened mode).
+COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 CMD ["/app/bin/server"]
