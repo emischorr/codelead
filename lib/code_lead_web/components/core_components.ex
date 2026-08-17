@@ -57,8 +57,9 @@ defmodule CodeLeadWeb.CoreComponents do
     <div
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
-      phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
-      phx-hook={@auto_dismiss && ".AutoDismissFlash"}
+      data-kind={@kind}
+      data-auto-dismiss={to_string(@auto_dismiss)}
+      phx-hook=".DismissFlash"
       role="alert"
       class="fixed top-4 right-4 z-50"
       {@rest}
@@ -80,14 +81,44 @@ defmodule CodeLeadWeb.CoreComponents do
         </button>
       </div>
     </div>
-    <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoDismissFlash">
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".DismissFlash">
       export default {
-        mounted() { this.schedule() },
+        mounted() {
+          this.el.addEventListener("click", () => this.dismiss())
+          this.schedule()
+        },
         updated() { this.schedule() },
-        destroyed() { clearTimeout(this.timer) },
+        destroyed() {
+          clearTimeout(this.timer)
+          clearTimeout(this.hideTimer)
+        },
         schedule() {
           clearTimeout(this.timer)
-          this.timer = setTimeout(() => this.el.click(), 5000)
+          clearTimeout(this.hideTimer)
+          if (this.el.dataset.autoDismiss === "true") {
+            this.timer = setTimeout(() => this.dismiss(), 5000)
+          }
+        },
+        // Runs the fade out itself, then clears the server-side flash once it
+        // has finished — for both the auto-dismiss timer and a manual click.
+        // Letting a server round trip (a `phx-click` push) drive the DOM
+        // removal raced it against the 200ms CSS transition, and the patch
+        // almost always won, so the message vanished instead of fading.
+        dismiss() {
+          clearTimeout(this.timer)
+          const time = 200
+          this.js().hide(this.el, {
+            time,
+            transition: [
+              "transition-all ease-in duration-200",
+              "opacity-100 translate-y-0 sm:scale-100",
+              "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+            ]
+          })
+          this.hideTimer = setTimeout(
+            () => this.pushEvent("lv:clear-flash", {key: this.el.dataset.kind}),
+            time
+          )
         }
       }
     </script>
