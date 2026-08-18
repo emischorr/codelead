@@ -30,20 +30,24 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
 
   @doc """
   Forwards the request to `upstream` and streams the response into
-  `conn`. `prefix` is the external `/preview/<task_id>` mount, used
-  for header rewriting; `upstream_path` must carry the original
-  (still percent-encoded) path and query.
+  `conn`. `mount` is the external `/preview/<task_id>` mount, used for
+  header rewriting; `upstream_path` must carry the original (still
+  percent-encoded) path and query.
   """
-  @spec forward(Plug.Conn.t(), CodeLead.PreviewGateway.upstream(), String.t(), String.t()) ::
-          Plug.Conn.t()
-  def forward(conn, %{host: host, port: port} = upstream, prefix, upstream_path) do
+  @spec forward(
+          Plug.Conn.t(),
+          CodeLead.PreviewGateway.upstream(),
+          Headers.mount(),
+          String.t()
+        ) :: Plug.Conn.t()
+  def forward(conn, %{host: host, port: port} = upstream, mount, upstream_path) do
     with {:ok, method} <- Map.fetch(@methods, conn.method),
          {:ok, body, conn} <- read_full_body(conn) do
       request =
         Req.new(
           method: method,
           url: "http://#{host}:#{port}#{upstream_path}",
-          headers: Headers.request_headers(conn, upstream, prefix),
+          headers: Headers.request_headers(conn, upstream, mount),
           # nil, not "" — Req silently turns a GET with a body into a POST.
           body: if(body == "", do: nil, else: body),
           raw: true,
@@ -57,7 +61,7 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
 
       case Req.request(request) do
         {:ok, response} ->
-          stream_response(conn, response, prefix)
+          stream_response(conn, response, mount)
 
         {:error, transport} ->
           # Debug, not warning: the error page reloads every few seconds
@@ -72,28 +76,50 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
     end
   end
 
-  defp stream_response(conn, response, prefix) do
-    headers = Headers.response_headers(flatten_headers(response.headers), prefix)
+  defp stream_response(conn, response, mount) do
+    headers =
+      Headers.response_headers(flatten_headers(response.headers), mount, origin_scheme(conn))
 
     cond do
       response.status in @bodiless_statuses ->
         Req.cancel_async_response(response)
 
         conn
-        |> merge_resp_headers(headers)
+        |> put_headers(headers)
         |> send_resp(response.status, "")
 
       match?(%Req.Response.Async{}, response.body) ->
         conn
-        |> merge_resp_headers(headers)
+        |> put_headers(headers)
         |> send_chunked(response.status)
         |> stream_body(response)
 
       true ->
         conn
-        |> merge_resp_headers(headers)
+        |> put_headers(headers)
         |> send_resp(response.status, response.body)
     end
+  end
+
+  # `merge_resp_headers/2` keys by name, so several `set-cookie`s would
+  # collapse into the last one; they go in via `prepend_resp_headers/2`,
+  # which appends blindly. Everything else keeps merging, so upstream
+  # values still win over Plug's adapter defaults (`cache-control`).
+  defp put_headers(conn, headers) do
+    {cookies, rest} = Enum.split_with(headers, &match?({"set-cookie", _value}, &1))
+
+    conn
+    |> merge_resp_headers(rest)
+    |> prepend_resp_headers(cookies)
+  end
+
+  # What the browser sees, not what the socket is: behind a
+  # TLS-terminating proxy `conn.scheme` is `:http` while the origin the
+  # cookie lands on is https.
+  defp origin_scheme(conn) do
+    if conn.scheme == :https or "https" in get_req_header(conn, "x-forwarded-proto"),
+      do: :https,
+      else: :http
   end
 
   # A dead upstream mid-stream just truncates the body — the status is

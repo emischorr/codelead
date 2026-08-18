@@ -48,9 +48,24 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     page("Task not found", "This preview URL does not match any task.")
   end
 
-  @doc "No authenticated session."
-  @spec unauthorized() :: String.t()
-  def unauthorized do
+  @doc """
+  No authenticated session. `retry?` marks the case where the 401 came
+  from a stale cookie the response itself just evicted — that one heals
+  on the next request, so it reloads; a genuinely expired session must
+  not, or it loops.
+  """
+  @spec unauthorized(boolean()) :: String.t()
+  def unauthorized(retry? \\ false)
+
+  def unauthorized(true) do
+    page(
+      "Restoring your session",
+      ~s(A stale preview cookie was cleared. This page reloads itself.),
+      ~s(<meta http-equiv="refresh" content="1">)
+    )
+  end
+
+  def unauthorized(false) do
     page(
       "Session expired",
       ~s(Log in to CodeLead again, then reload this preview.)

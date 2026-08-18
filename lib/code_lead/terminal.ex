@@ -7,9 +7,10 @@ defmodule CodeLead.Terminal do
   `{:terminal_data, task_id, chunk}` / `{:terminal_exit, task_id,
   status}`).
 
-  Local tasks get a host shell in the worktree; container tasks a
-  `docker exec` shell into the task's devcontainer (self-healing via
-  `Devcontainer.ensure_for_task/1`, licensed like every container
+  Local tasks get a host shell in their execution context — the
+  worktree for repo targets, the task folder for folder ones; container
+  tasks a `docker exec` shell into the task's devcontainer (self-healing
+  via `Devcontainer.ensure_for_task/1`, licensed like every container
   exec). PTY where `script(1)` exists, plain pipe otherwise
   (`CodeLead.Terminal.Command`).
   """
@@ -22,6 +23,7 @@ defmodule CodeLead.Terminal do
   alias CodeLead.Terminal.Command
   alias CodeLead.Terminal.Session
   alias CodeLead.Tasks.Task
+  alias CodeLead.Workspace
 
   @registry CodeLead.Terminal.Registry
   @supervisor CodeLead.Terminal.SessionSupervisor
@@ -29,18 +31,32 @@ defmodule CodeLead.Terminal do
 
   @doc """
   The task's live session, starting one if needed. `opts`: `:cols` /
-  `:rows` (initial size, exported as COLUMNS/LINES) and `:extra_env`
-  (pre-computed pairs such as PREVIEW_BASE_PATH — the caller owns any
-  cross-domain lookups).
+  `:rows` (initial size — exported as COLUMNS/LINES and applied to the
+  PTY by the spawn payload) and `:extra_env` (pre-computed pairs such as
+  PREVIEW_BASE_PATH — the caller owns any cross-domain lookups).
   """
   @spec ensure_session(Task.t(), keyword()) ::
-          {:ok, pid()} | {:error, :no_worktree | :container_unlicensed | term()}
+          {:ok, pid()} | {:error, :no_context | :container_unlicensed | term()}
   def ensure_session(%Task{} = task, opts \\ []) do
     case whereis(task.id) do
       pid when is_pid(pid) -> {:ok, pid}
       nil -> start_session(task, opts)
     end
   end
+
+  @doc """
+  The directory a terminal opens in, or nil when the task has no
+  execution context yet. Repo targets get the provisioned worktree;
+  folder targets the task folder, which is derived from the id rather
+  than persisted — but only once a run has actually created it.
+  """
+  @spec context_path(Task.t()) :: String.t() | nil
+  def context_path(%Task{target: :folder, id: id}) do
+    path = Workspace.task_folder(id)
+    if File.dir?(path), do: path
+  end
+
+  def context_path(%Task{worktree_path: worktree_path}), do: worktree_path
 
   @doc """
   Attaches the calling process as a viewer (monitored; a crashed viewer
@@ -68,6 +84,19 @@ defmodule CodeLead.Terminal do
     case whereis(task_id) do
       nil -> :ok
       pid -> GenServer.cast(pid, {:input, data})
+    end
+  end
+
+  @doc """
+  Applies a new window size to the session's PTY. Best-effort: sessions
+  without a PTY, or contexts where the device path was never recorded,
+  ignore it silently (`CodeLead.Terminal.Command`).
+  """
+  @spec resize(pos_integer(), pos_integer(), pos_integer()) :: :ok
+  def resize(task_id, cols, rows) when cols > 0 and rows > 0 do
+    case whereis(task_id) do
+      nil -> :ok
+      pid -> GenServer.cast(pid, {:resize, cols, rows})
     end
   end
 
@@ -119,12 +148,15 @@ defmodule CodeLead.Terminal do
     end
   end
 
-  defp start_session(%Task{worktree_path: nil}, _opts), do: {:error, :no_worktree}
-
   defp start_session(task, opts) do
-    env = session_env(task, opts)
+    case context_path(task) do
+      nil -> {:error, :no_context}
+      path -> start_session(task, path, opts)
+    end
+  end
 
-    with {:ok, spec} <- spawn_spec(task, env) do
+  defp start_session(task, path, opts) do
+    with {:ok, spec} <- spawn_spec(task, path, opts) do
       case DynamicSupervisor.start_child(@supervisor, {Session, spec}) do
         {:ok, pid} -> {:ok, pid}
         {:error, {:already_started, pid}} -> {:ok, pid}
@@ -133,37 +165,49 @@ defmodule CodeLead.Terminal do
     end
   end
 
-  defp session_env(task, opts) do
+  # `tty_file` is where the session records the PTY device it was given,
+  # so a later resize can reach it from outside (ADR-0010). It must be
+  # writable *inside* the execution context: the host temp dir for local
+  # tasks, the per-task TMPDIR `Devcontainer.exec_flags/3` guarantees for
+  # container ones.
+  defp session_env(task, tty_file, opts) do
     Projects.env_vars(task.project_id) ++
       Keyword.get(opts, :extra_env, []) ++
       [
         {"TERM", "xterm-256color"},
         {"COLUMNS", to_string(Keyword.get(opts, :cols, 80))},
-        {"LINES", to_string(Keyword.get(opts, :rows, 24))}
+        {"LINES", to_string(Keyword.get(opts, :rows, 24))},
+        {"CODELEAD_TTY_FILE", tty_file}
       ]
   end
 
-  defp spawn_spec(%Task{target: :repo, execution_env: :container} = task, env) do
+  defp spawn_spec(%Task{target: :repo, execution_env: :container} = task, path, opts) do
+    tty_file = Path.join([Workspace.agent_home(task.id), ".tmp", "codelead-tty"])
+    env = session_env(task, tty_file, opts)
+
     with :ok <- check_container_license(),
          {:ok, container_id} <- Devcontainer.ensure_for_task(task.id),
          {:ok, {cli_path, prefix}} <- DockerCli.cli() do
       script? = container_has_script?(container_id)
       exec_flags = Devcontainer.exec_flags(task.id, container_id, env)
-
-      args =
-        Command.docker(prefix, container_id, task.worktree_path, exec_flags, shell(), script?)
+      args = Command.docker(prefix, container_id, path, exec_flags, shell(), script?)
 
       {:ok,
        %{
          task_id: task.id,
          pty?: script?,
-         port_opener: fn -> open_port(cli_path, args, []) end
+         port_opener: fn -> open_port(cli_path, args, []) end,
+         resizer: fn cols, rows ->
+           script = Command.resize_script(tty_file, cols, rows)
+           DockerCli.run(["exec", container_id, "sh", "-c", script])
+         end
        }}
     end
   end
 
-  defp spawn_spec(%Task{} = task, env) do
-    port_env = EnvScrub.port_env(env)
+  defp spawn_spec(%Task{} = task, path, opts) do
+    tty_file = Path.join(System.tmp_dir!(), "codelead-tty-#{task.id}")
+    port_env = EnvScrub.port_env(session_env(task, tty_file, opts))
 
     with {:ok, {exe, args, pty?}} <- local_command() do
       {:ok,
@@ -171,7 +215,16 @@ defmodule CodeLead.Terminal do
          task_id: task.id,
          pty?: pty?,
          port_opener: fn ->
-           open_port(exe, args, cd: task.worktree_path, env: port_env)
+           # Clear a previous session's device before this one records
+           # its own: host pts numbers are reused, so a resize landing in
+           # the gap could otherwise reach an unrelated terminal.
+           File.rm(tty_file)
+           open_port(exe, args, cd: path, env: port_env)
+         end,
+         resizer: fn cols, rows ->
+           System.cmd("sh", ["-c", Command.resize_script(tty_file, cols, rows)],
+             stderr_to_stdout: true
+           )
          end
        }}
     end

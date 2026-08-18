@@ -89,7 +89,8 @@ Reviewers are deliberately **not** a separate abstraction — they are ordinary 
 
 ## Further instructions
 
-Do NOT commit yourself.
+- Do NOT commit yourself.
+- When I ask architecture or design questions, engage in discussion only. Do not propose implementation plans, do not write code, do not create todo lists. Treat these as a conversation between two senior engineers exploring trade-offs. Ask me questions. Disagree with me when warranted. Only move toward implementation when I explicitly say so.
 
 @AGENTS.md
 @CODING_GUIDE.md

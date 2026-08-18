@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-15)
+# Architecture overview (last updated: 2026-08-18)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -60,7 +60,11 @@ note is the "how it works today" map.
   Developer-terminal shell (DynamicSupervisor + Registry under
   `CodeLead.Terminal`): owns the shell Port so the session survives
   page refreshes, keeps a bounded scrollback, broadcasts on
-  `terminal:<id>`, idles out viewer-less (ADR-0008).
+  `terminal:<id>`, idles out viewer-less (ADR-0008). Resizes go to the
+  PTY device the session recorded at spawn, applied by an `stty` run
+  from outside it (ADR-0010). The shell's directory comes from
+  `Terminal.context_path/1` — worktree or task folder — so folder-target
+  tasks get a terminal too.
 - `CodeLead.Preview.Session` — one GenServer per task running the
   repository's `preview_command` (same supervision shape as the
   terminal): owns the server's Port, probes the preview upstream until

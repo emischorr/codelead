@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-16)
+# Web UI (last updated: 2026-08-18)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -12,7 +12,7 @@ what exists today.
 | `/projects/:project_id/board` | `CodeLeadWeb.BoardLive` (`:index`) | the Kanban board |
 | `/projects/:project_id/board/new` | `CodeLeadWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
 | `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
-| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers |
+| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing |
 | `/settings` | `CodeLeadWeb.SettingsLive` (`:index`) | overview tiles with live counts |
 | `/settings/users` | `CodeLeadWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
@@ -522,13 +522,36 @@ above the bar instead of underneath it.
   devtools escape hatch. Pages that leave the origin are shown as
   `(external page)` and skipped by back/forward. Reviewer findings
   render in both modes (a collapsible strip above the frame in
-  preview mode). Known accepted quirks: plain full-page link clicks
+  preview mode). Known accepted quirk: plain full-page link clicks
   *inside* the frame still add joint-history entries (the host back
   button may step a classic multi-page app before leaving the task
-  page — intercepting those clicks would break SPA routing), and the
-  previewed app's cookies land on the CodeLead origin (the proxy
-  strips CodeLead's own session cookie from the *forwarded*
-  direction; `SubdomainProxy` is the real fix — ADR-0008).
+  page — intercepting those clicks would break SPA routing).
+
+  **Cookie namespacing.** The previewed app shares CodeLead's origin, so
+  `PreviewProxy.Headers` gives it its own jar: every upstream
+  `Set-Cookie` is renamed to `_clp<task_id>_<name>` and re-pathed under
+  `/preview/<task_id>` (`Domain` dropped so it stays host-only;
+  `Secure`/`Partitioned`/`SameSite=None` dropped over plain http, where a
+  browser would void the whole cookie), and only this task's prefixed
+  cookies are forwarded upstream, with the prefix peeled off. So a
+  previewed CodeLead can no longer overwrite `_code_lead_key` and log the
+  operator out of their own instance, sibling previews cannot read each
+  other's jar, and CodeLead's session and remember-me cookies never reach
+  an agent's container. Renaming also defuses `__Host-`/`__Secure-`
+  names, whose rules are purely name-based — they would otherwise be
+  rejected outright once re-pathed. Residual limitations, all
+  client-side: JS inside the preview sees the prefixed names, so the
+  double-submit CSRF pattern breaks (Django/Laravel/Angular read
+  `csrftoken`/`XSRF-TOKEN` from `document.cookie` and echo them in a
+  header — server-rendered form posts and Phoenix are unaffected, since
+  the proxy restores the original name upstream; see
+  `configuration.md`, *Cookies in the preview*); cookies written by JS
+  are not forwarded upstream; and JS can still write raw cookies on the
+  shared origin. `SubdomainProxy` is the real fix (ADR-0008, whose
+  "same-origin cookie hygiene" bullet this supersedes) — `ROADMAP.md`
+  carries its prerequisites. `Plugs.RequirePreviewAccess` clears a shadow
+  `_code_lead_key`/remember-me left at the mount by older builds when it
+  denies, and serves a self-reloading page in that one case.
 
   **Diff view** — for repo targets with a worktree: `Git.diff/2` parsed
   by `CodeLead.Git.Diff` in `start_async`; collapsible reviewer
@@ -578,7 +601,11 @@ above the bar instead of underneath it.
   drags — that one is guarded by a 1s window so our own smooth scroll
   doesn't self-cancel. A `released` latch keeps one gesture to one push.
 - **Terminal tab** — a real shell into the task's execution context
-  once a worktree exists (placeholder copy otherwise). xterm.js
+  once one exists (placeholder copy otherwise). The LiveView resolves
+  the directory with `Terminal.context_path/1` — the worktree for repo
+  targets, `Workspace.task_folder/1` for folder ones — and passes it,
+  the task id, and the empty-state copy as plain values, so the
+  component knows nothing about targets or task states. xterm.js
   (vendored in `assets/vendor/xterm/`, imported by the colocated
   `.Terminal` hook via esbuild's `@` alias) talks to
   `CodeLead.Terminal` over the LiveView socket: the hook pushes
@@ -592,8 +619,17 @@ above the bar instead of underneath it.
   in the target (host or container image), plain-pipe `sh -i` fallback
   flagged in the status line; container sessions are license-gated and
   self-heal the container (`ensure_for_task/1`). Sessions export
-  `TERM`/`COLUMNS`/`LINES`, the project env, and
+  `TERM`/`COLUMNS`/`LINES`, `CODELEAD_TTY_FILE`, the project env, and
   `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN` (see ADR-0008).
+- **Terminal resize** — xterm's `onResize` pushes `terminal_resize`
+  (debounced 150 ms, since a window drag fires it continuously) and the
+  session applies it to the PTY *device* it recorded in
+  `$CODELEAD_TTY_FILE` at spawn — the spawning side never holds the
+  PTY, so `stty` from outside the session is the only way in
+  (ADR-0010). Best-effort by design: a plain-pipe session, or a target
+  without `stty`, ignores it silently. The resize runs detached from the
+  `Terminal.Session` process so a container's `docker exec` never stalls
+  the output stream.
 
 ## Demo data
 

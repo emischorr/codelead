@@ -286,6 +286,11 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
+  def handle_event("terminal_resize", %{"cols" => cols, "rows" => rows}, socket) do
+    Terminal.resize(socket.assigns.task.id, cols, rows)
+    {:noreply, socket}
+  end
+
   def handle_event("terminal_input", %{"data" => encoded}, socket) do
     case Base.decode64(encoded) do
       {:ok, data} -> Terminal.send_input(socket.assigns.task.id, data)
@@ -767,8 +772,17 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp preview_error(reason), do: "The preview could not start: #{inspect(reason)}"
 
-  defp terminal_error(:no_worktree),
-    do: "No execution context yet — the terminal opens once a run has provisioned a worktree."
+  defp terminal_empty_message(%Task{state: :done}),
+    do: "The execution context was pruned when this task was finalized."
+
+  defp terminal_empty_message(%Task{target: :folder}),
+    do: "A task folder is provisioned when the first run starts."
+
+  defp terminal_empty_message(%Task{}),
+    do: "A worktree is provisioned when a repo-targeted run starts."
+
+  defp terminal_error(:no_context),
+    do: "No execution context yet — the terminal opens once a run has provisioned one."
 
   defp terminal_error(:container_unlicensed),
     do: "Container execution is not enabled by the instance license."
@@ -1248,7 +1262,12 @@ defmodule CodeLeadWeb.TaskLive do
           preview_command?={@preview_command?}
           preview_run={@preview_run}
         />
-        <TerminalTab.terminal_tab :if={@tab == :terminal} task={@task} />
+        <TerminalTab.terminal_tab
+          :if={@tab == :terminal}
+          task_id={@task.id}
+          path={Terminal.context_path(@task)}
+          empty_message={terminal_empty_message(@task)}
+        />
       </div>
 
       <%!-- In flow, not `fixed`: it shortens the scroll pane above it, so a tab

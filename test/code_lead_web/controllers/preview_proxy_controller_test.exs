@@ -25,6 +25,14 @@ defmodule CodeLeadWeb.PreviewProxyControllerTest do
     task_fixture(project.id, %{target: :repo, repository_id: repository.id})
   end
 
+  # The conn also carries the harness's own login cookie; only the
+  # namespaced ones came out of the proxy.
+  defp proxied_cookies(conn, task) do
+    conn
+    |> Plug.Conn.get_resp_header("set-cookie")
+    |> Enum.filter(&String.starts_with?(&1, "_clp#{task.id}_"))
+  end
+
   # A port that was just free — nothing listens on it.
   defp dead_port do
     {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
@@ -43,6 +51,22 @@ defmodule CodeLeadWeb.PreviewProxyControllerTest do
 
       assert conn.status == 401
       assert conn.resp_body =~ "Session expired"
+    end
+
+    test "evicts a shadow session cookie planted under the mount", %{conn: conn} do
+      task = repo_task(4321)
+
+      conn =
+        conn
+        |> put_req_header("cookie", "_code_lead_key=real; _code_lead_key=shadow")
+        |> get("/preview/#{task.id}/")
+
+      assert conn.status == 401
+      assert conn.resp_body =~ "Restoring your session"
+
+      assert [eviction] = get_resp_header(conn, "set-cookie")
+      assert eviction =~ "_code_lead_key=;"
+      assert eviction =~ "path=/preview/#{task.id}"
     end
   end
 
@@ -67,14 +91,53 @@ defmodule CodeLeadWeb.PreviewProxyControllerTest do
       refute conn.resp_body =~ "connection: keep-alive"
     end
 
-    test "keeps the app session cookie out of the upstream", %{conn: conn, task: task} do
+    test "forwards only this task's namespaced cookies", %{conn: conn, task: task} do
       conn =
         conn
-        |> put_req_header("cookie", "_code_lead_key=secret; devtool=1")
+        |> put_req_header(
+          "cookie",
+          "_code_lead_key=secret; _code_lead_web_user_remember_me=tok; " <>
+            "devtool=1; _clp#{task.id}_devtool=2"
+        )
         |> get("/preview/#{task.id}/info")
 
-      assert conn.resp_body =~ "cookie: devtool=1"
+      assert conn.resp_body =~ "cookie: devtool=2"
       refute conn.resp_body =~ "_code_lead_key"
+      refute conn.resp_body =~ "_code_lead_web_user_remember_me"
+      refute conn.resp_body =~ "devtool=1"
+    end
+
+    test "namespaces upstream cookies onto the mount", %{conn: conn, task: task} do
+      conn = get(conn, "/preview/#{task.id}/setcookie")
+
+      cookies = proxied_cookies(conn, task)
+
+      # Two upstream cookies must survive as two headers — merging by
+      # name would collapse them into the last one.
+      assert length(cookies) == 2
+
+      assert "_clp#{task.id}_sid=abc; Path=/preview/#{task.id}; HttpOnly" in cookies
+      assert "_clp#{task.id}_theme=dark; Path=/preview/#{task.id}/admin; HttpOnly" in cookies
+    end
+
+    test "a previewed app cannot clobber the host session cookie", %{conn: conn, task: task} do
+      conn = get(conn, "/preview/#{task.id}/clobber")
+
+      assert proxied_cookies(conn, task) == [
+               "_clp#{task.id}__code_lead_key=junk; Path=/preview/#{task.id}; HttpOnly"
+             ]
+
+      # Nothing landed on the host's own session cookie — the only
+      # `_code_lead_key=` the browser sees is the harness's real login.
+      refute Enum.any?(get_resp_header(conn, "set-cookie"), &(&1 =~ ~r/^_code_lead_key=junk/))
+    end
+
+    test "drops Domain and http-void attributes from upstream cookies", %{conn: conn, task: task} do
+      conn = get(conn, "/preview/#{task.id}/fancycookie")
+
+      assert proxied_cookies(conn, task) == [
+               "_clp#{task.id}_sid=abc; Path=/preview/#{task.id}; HttpOnly"
+             ]
     end
 
     test "forwards a POST body byte-for-byte despite Plug.Parsers", %{conn: conn, task: task} do
