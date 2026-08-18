@@ -102,6 +102,9 @@ case "$1" in
       *) echo "fake docker: unhandled inspect $*" && exit 64 ;;
     esac
     ;;
+  network) # network inspect bridge -f <format> — the bridge gateway probe
+    echo "${FAKE_DOCKER_BRIDGE_GATEWAY:-172.17.0.1}"
+    ;;
   port) # port <relay name> <port>/tcp
     echo "${FAKE_DOCKER_PUBLISH_IP:-127.0.0.1}:${FAKE_DOCKER_HOST_PORT:-55001}"
     ;;

@@ -33,55 +33,22 @@ services:
       DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # The instance's canonical address — see "URLs" in docs/deployment.md.
       PHX_HOST: localhost
       SCHEME: http
-      # The port the app listens on inside the container.
       PORT: "4000"
-      # The port in generated links. Set here because this stack is reached
-      # directly on 4000; behind a proxy on 443, drop it and set SCHEME: https.
       URL_PORT: "4000"
-      # Extra addresses this instance may be reached at, on top of PHX_HOST.
-      # Bare host = any scheme/port; full origin = exact match; "*" = allow all.
+      # Extra addresses browsers may use — see "The origin check" in docs/deployment.md.
       # ALLOWED_HOSTS: "192.168.1.50, codelead.local"
-      # The data root is bind-mounted at the identical path (see volumes:
-      # below), so the image's /data defaults must follow it — anything left
-      # at /data would be container-local and lost on recreation.
+      # Must live under the bind mount below — see "The data directory" in docs/deployment.md.
       WORKSPACE_ROOT: ${DATA_ROOT:?set DATA_ROOT in .env — see .env.example}/workspace
       HOME: ${DATA_ROOT}/home
-      # Signed license key. Optional — without one the instance runs the
-      # community tier, which today grants everything. See docs/licensing.md.
+      # Optional; without it the community tier runs — see docs/licensing.md.
       # LICENSE_KEY: ${LICENSE_KEY}
-      # Live preview of container tasks: a per-task relay sidecar
-      # (codelead-preview-<id>, image PREVIEW_RELAY_IMAGE, pulled on first
-      # use) joins the task container's network and publishes the
-      # repository's declared preview port on this host IP; the app dials it
-      # at PREVIEW_UPSTREAM_HOST. On a Linux host set both to the docker
-      # bridge gateway (usually 172.17.0.1) — off public interfaces,
-      # reachable from this container. Unset, container-task previews stay
-      # disabled (local-task previews need no config). See docs/deployment.md.
-      # PREVIEW_PUBLISH_IP: 172.17.0.1
-      # PREVIEW_UPSTREAM_HOST: 172.17.0.1
-      # PREVIEW_RELAY_IMAGE: alpine/socat
-      # One-click preview: how long a started server may keep a viewer-less
-      # session, and how long it gets to answer on its port before failing.
-      # PREVIEW_IDLE_MINUTES: "30"
-      # PREVIEW_START_TIMEOUT_SECONDS: "120"
     volumes:
-      # Host path == container path, on purpose: the devcontainer CLI runs in
-      # this container but the host daemon resolves every workspace bind, so
-      # container execution only works when both see the workspace at the
-      # same path. A named volume CANNOT satisfy this (its data has no stable
-      # host path) — stacks migrating from the old codelead-data volume: see
-      # "The data directory" in docs/deployment.md for the one-time copy.
+      # Host path == container path, on purpose — see "The data directory" in docs/deployment.md.
       - ${DATA_ROOT}:${DATA_ROOT}
-      # Container task execution provisions each task's devcontainer through
-      # the host docker daemon. Mounting the socket is root-equivalent on the
-      # host — an accepted trade under the single-tenant model (ADR-0003/0009).
-      # Remove this line to disable it. The image's entrypoint (root, before
-      # dropping to uid 1000) grants itself the socket's group and owns the
-      # DATA_ROOT roots — no DOCKER_GID or manual chown needed. Hardened
-      # deployments can add `user: "1000:1000"` to skip the root entrypoint,
-      # taking that host preparation back on themselves (docs/deployment.md).
+      # Enables container task execution; root-equivalent on the host — see docs/deployment.md.
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "4000:4000"

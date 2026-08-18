@@ -199,27 +199,25 @@ own process space and the proxy dials loopback. For **container** tasks a
 relay sidecar (`codelead-preview-<task_id>`, image `PREVIEW_RELAY_IMAGE`,
 default `alpine/socat` — pulled on first use) joins the task container's
 network and publishes the declared `preview_port` on the host, and the app
-container must be able to reach that published port. The app container and
-sibling task containers sit on *different* docker networks, so loopback
-publishing (the default) is unreachable from the app — set both variables to
-the docker bridge gateway instead:
+dials that published port. This also works with zero configuration: the
+address is auto-detected (`CodeLead.PreviewGateway.Address`) — loopback when
+the BEAM runs directly on the docker host, the docker bridge gateway (asked
+from the daemon itself, so custom subnets resolve too) when the app runs in
+a container, as in this stack. The port binds to that address only — never a
+public interface — and browsers always go through the authenticated proxy.
 
-```bash
-docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'   # usually 172.17.0.1
-```
+Only setups the detection cannot cover — a remote docker daemon, Docker
+Desktop, a bridge whose gateway is not reachable from the app container —
+need the manual override, on the app service:
 
 ```yaml
-# on the app service
-PREVIEW_PUBLISH_IP: 172.17.0.1
-PREVIEW_UPSTREAM_HOST: 172.17.0.1
+PREVIEW_PUBLISH_IP: <address the app container can reach>   # e.g. 172.17.0.1
+PREVIEW_UPSTREAM_HOST: <the same address>
 ```
 
-The port binds to that gateway address only — not a public interface — and
-browsers always go through the authenticated proxy. A relay created *before*
-the variables changed carries the old binding; the next preview touch
-recreates it on the current one — always safe, because no agent exec runs
-inside a relay. Existing stacks need no
-change until an operator wants container-task previews; the websocket rules
+A relay created *before* the address changed carries the old binding; the
+next preview touch recreates it on the current one — always safe, because no
+agent exec runs inside a relay. The websocket rules
 below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
 exactly as they do to `/live/websocket`, so a *location-scoped* proxy config
 must cover this path too.
@@ -228,6 +226,24 @@ That is the operator's half. What the server *inside* the environment has to
 do — bind `0.0.0.0`, listen on exactly the declared port — and where its
 companion services come from is in
 [`configuration.md`](configuration.md#serving-a-preview-from-a-container-task).
+
+**Troubleshooting "Nothing is listening at 127.0.0.1:\<high port\>".** For a
+container task, *loopback plus an ephemeral port* on this page means the
+relay exists and published a host port (that's where the number comes from),
+but the app is dialing its *own* container's loopback — either the
+auto-detection fell back (its one-time warning, `could not auto-detect the
+docker bridge gateway`, is in the app log) or an explicit
+`PREVIEW_UPSTREAM_HOST` override points at loopback. Nothing done inside the
+task container — restarting the dev server, changing ports — can fix it.
+Confirm it in one step from the deploy host:
+
+```bash
+curl -m 3 http://127.0.0.1:<high port>/                          # host → relay: works
+docker compose exec app curl -m 3 http://127.0.0.1:<high port>/  # app → its own loopback: refused
+```
+
+Relay and docker failures also log with the underlying docker error; check
+`docker compose logs app` before digging deeper.
 
 ### What you must add
 

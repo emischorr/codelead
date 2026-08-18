@@ -10,6 +10,8 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
 
   import Plug.Conn
 
+  require Logger
+
   alias CodeLeadWeb.PreviewProxy.ErrorPages
   alias CodeLeadWeb.PreviewProxy.Headers
 
@@ -54,8 +56,15 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
         )
 
       case Req.request(request) do
-        {:ok, response} -> stream_response(conn, response, prefix)
-        {:error, _transport} -> not_running(conn, upstream)
+        {:ok, response} ->
+          stream_response(conn, response, prefix)
+
+        {:error, transport} ->
+          # Debug, not warning: the error page reloads every few seconds
+          # while an upstream is down, so this fires in a steady loop.
+          Logger.debug("preview proxy: connect to #{host}:#{port} failed: #{inspect(transport)}")
+
+          not_running(conn, upstream)
       end
     else
       :error -> send_resp(conn, 405, "method not allowed")
