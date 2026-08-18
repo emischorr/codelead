@@ -44,14 +44,14 @@ defmodule CodeLeadWeb.PreviewProxyController do
   defp dispatch(conn, task, _path), do: forward_upstream(conn, task)
 
   defp forward_upstream(conn, task) do
-    prefix = "/preview/#{task.id}"
+    mount = Headers.mount(task.id)
 
     case PreviewGateway.impl().upstream_for(task) do
       {:ok, upstream} ->
         if websocket_upgrade?(conn) do
-          upgrade_websocket(conn, upstream, prefix)
+          upgrade_websocket(conn, upstream, mount)
         else
-          HTTP.forward(conn, upstream, prefix, upstream_path(conn, prefix))
+          HTTP.forward(conn, upstream, mount, upstream_path(conn, mount.path))
         end
 
       {:error, _not_running} ->
@@ -59,7 +59,7 @@ defmodule CodeLeadWeb.PreviewProxyController do
     end
   end
 
-  defp upgrade_websocket(conn, upstream, prefix) do
+  defp upgrade_websocket(conn, upstream, mount) do
     if origin_allowed?(conn) do
       conn
       |> echo_subprotocol()
@@ -67,8 +67,8 @@ defmodule CodeLeadWeb.PreviewProxyController do
         WebSocketRelay,
         %{
           upstream: upstream,
-          path: upstream_path(conn, prefix),
-          headers: Headers.ws_request_headers(conn, upstream, prefix)
+          path: upstream_path(conn, mount.path),
+          headers: Headers.ws_request_headers(conn, upstream, mount)
         },
         timeout: 120_000,
         compress: false

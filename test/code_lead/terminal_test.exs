@@ -7,6 +7,8 @@ defmodule CodeLead.TerminalTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.Terminal
+  alias CodeLead.Terminal.Session
+  alias CodeLead.Workspace
 
   @fake_shell Path.expand("../support/fake_shell.sh", __DIR__)
 
@@ -149,10 +151,92 @@ defmodule CodeLead.TerminalTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
   end
 
-  test "a task without a worktree has no terminal" do
+  test "a task without an execution context has no terminal" do
     project = project_fixture()
     task = task_fixture(project.id, %{})
 
-    assert Terminal.ensure_session(task) == {:error, :no_worktree}
+    assert Terminal.context_path(task) == nil
+    assert Terminal.ensure_session(task) == {:error, :no_context}
+  end
+
+  describe "folder-target tasks" do
+    setup do
+      project = project_fixture()
+      task = task_fixture(project.id, %{target: :folder})
+      folder = Workspace.task_folder(task.id)
+
+      on_exit(fn -> File.rm_rf(folder) end)
+
+      %{task: task, folder: folder}
+    end
+
+    test "have no context until a run provisions the folder", %{task: task} do
+      assert Terminal.context_path(task) == nil
+      assert Terminal.ensure_session(task) == {:error, :no_context}
+    end
+
+    test "get a shell in the task folder once it exists", %{task: task, folder: folder} do
+      File.mkdir_p!(folder)
+
+      assert Terminal.context_path(task) == folder
+
+      :ok = Terminal.subscribe(task.id)
+      assert {:ok, _pid} = Terminal.ensure_session(task)
+
+      task_id = task.id
+      assert_receive {:terminal_data, ^task_id, chunk}, 2_000
+      assert chunk =~ "FAKE SHELL READY"
+
+      stop_session(task.id)
+    end
+  end
+
+  describe "resize/3" do
+    test "forwards the new size to the session's resizer" do
+      test_pid = self()
+      task_id = System.unique_integer([:positive])
+
+      start_resizable_session(task_id, true, fn cols, rows ->
+        send(test_pid, {:resized, cols, rows})
+      end)
+
+      assert Terminal.resize(task_id, 132, 45) == :ok
+      assert_receive {:resized, 132, 45}, 2_000
+    end
+
+    test "is ignored by a session without a PTY, where there is no device to resize" do
+      test_pid = self()
+      task_id = System.unique_integer([:positive])
+
+      pid =
+        start_resizable_session(task_id, false, fn cols, rows ->
+          send(test_pid, {:resized, cols, rows})
+        end)
+
+      assert Terminal.resize(task_id, 132, 45) == :ok
+      _ = :sys.get_state(pid)
+      refute_received {:resized, _cols, _rows}
+    end
+
+    test "is a no-op for a task with no live session" do
+      assert Terminal.resize(System.unique_integer([:positive]), 132, 45) == :ok
+    end
+  end
+
+  defp start_resizable_session(task_id, pty?, resizer) do
+    start_supervised!(
+      {Session,
+       %{
+         task_id: task_id,
+         pty?: pty?,
+         port_opener: fn ->
+           Port.open(
+             {:spawn_executable, "/bin/sh"},
+             [:binary, :exit_status, :hide, :stderr_to_stdout, args: [@fake_shell]]
+           )
+         end,
+         resizer: resizer
+       }}
+    )
   end
 end

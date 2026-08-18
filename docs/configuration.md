@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-16)
+# Configuration (last updated: 2026-08-18)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -148,7 +148,10 @@ an app that emits absolute asset paths must be told its base path.
 Terminal and one-click preview sessions export `PREVIEW_BASE_PATH`
 (e.g. `/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the
 repository's declared port — unique per repository across the
-instance, so serve commands should bind it rather than hardcode one):
+instance, so serve commands should bind it rather than hardcode one).
+Terminal sessions additionally export `CODELEAD_TTY_FILE`, which is
+CodeLead's own resize channel and not something to set or rely on
+(ADR-0010):
 
 | Stack | Recipe |
 |---|---|
@@ -160,6 +163,29 @@ instance, so serve commands should bind it rather than hardcode one):
 
 An app that cannot be path-prefix-hosted waits for the `SubdomainProxy`
 gateway; the branded 502 page reminds the user meanwhile.
+
+### Cookies in the preview
+
+The preview shares CodeLead's own origin, so the proxy gives each task
+its own cookie jar: an upstream `Set-Cookie: sid=abc; Path=/` reaches
+the browser as `_clp<task_id>_sid=abc; Path=/preview/<task_id>`, and the
+prefix is peeled off again on the way upstream. The previewed app sees
+exactly the cookies it set, and a previewed CodeLead can no longer
+overwrite your session cookie and log you out of your own instance.
+
+One consequence is worth knowing before you preview a Django, Laravel,
+or Angular app. Those frameworks use **double-submit CSRF**: the server
+sets a *readable* cookie (`csrftoken`, `XSRF-TOKEN`), and client-side JS
+reads it out of `document.cookie` and echoes the value in an
+`X-CSRFToken` / `X-XSRF-TOKEN` header. Inside a preview that JS finds
+the prefixed name instead and sends no header, so **AJAX writes get
+403** — while everything server-side is unaffected, because the proxy
+restores the original name upstream. Server-rendered form posts (a
+`{% csrf_token %}` hidden field, Laravel's `_token`) keep working, and
+Phoenix is unaffected entirely: its token comes from a server-rendered
+`<meta>` tag and its session cookie is `HttpOnly`, so nothing reads
+cookies by name in the browser. `SubdomainProxy` is the fix — see
+`ROADMAP.md` for what it is waiting on.
 
 ### Serving a preview from a container task
 

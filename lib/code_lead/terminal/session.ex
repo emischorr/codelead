@@ -2,10 +2,11 @@ defmodule CodeLead.Terminal.Session do
   @moduledoc """
   One shell per task: owns the Port (so a page refresh kills only the
   LiveView, never the shell), keeps a bounded scrollback for repainting
-  reconnecting viewers, and broadcasts output over the task's terminal
-  topic. Stops itself when the shell exits or after sitting viewer-less
-  past the idle timeout; `restart: :temporary` — a dead shell is
-  restarted by the UI on demand, not by the supervisor.
+  reconnecting viewers, broadcasts output over the task's terminal
+  topic, and forwards window resizes to the injected `resizer` (a no-op
+  without a PTY). Stops itself when the shell exits or after sitting
+  viewer-less past the idle timeout; `restart: :temporary` — a dead
+  shell is restarted by the UI on demand, not by the supervisor.
   """
 
   use GenServer, restart: :temporary
@@ -17,7 +18,8 @@ defmodule CodeLead.Terminal.Session do
   @type start_arg :: %{
           task_id: pos_integer(),
           pty?: boolean(),
-          port_opener: (-> port())
+          port_opener: (-> port()),
+          resizer: (pos_integer(), pos_integer() -> any())
         }
 
   @spec start_link(start_arg()) :: GenServer.on_start()
@@ -26,7 +28,7 @@ defmodule CodeLead.Terminal.Session do
   end
 
   @impl true
-  def init(%{task_id: task_id, pty?: pty?, port_opener: port_opener}) do
+  def init(%{task_id: task_id, pty?: pty?, port_opener: port_opener, resizer: resizer}) do
     port = port_opener.()
 
     {:ok,
@@ -34,6 +36,7 @@ defmodule CodeLead.Terminal.Session do
        task_id: task_id,
        port: port,
        pty?: pty?,
+       resizer: resizer,
        scrollback: <<>>,
        viewers: %{},
        idle_timer: schedule_idle(nil)
@@ -54,6 +57,16 @@ defmodule CodeLead.Terminal.Session do
   @impl true
   def handle_cast({:input, data}, state) do
     Port.command(state.port, data)
+    {:noreply, state}
+  end
+
+  def handle_cast({:resize, _cols, _rows}, %{pty?: false} = state), do: {:noreply, state}
+
+  def handle_cast({:resize, cols, rows}, state) do
+    # Resizing shells out — a `docker exec` for container tasks — so it
+    # runs detached: this process must keep broadcasting output meanwhile,
+    # and a failed resize must not take the shell down with it.
+    spawn(fn -> state.resizer.(cols, rows) end)
     {:noreply, state}
   end
 

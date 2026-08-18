@@ -52,6 +52,30 @@ defmodule CodeLead.PreviewUpstreamPlug do
     |> send_resp(200, "hop")
   end
 
+  def call(%Plug.Conn{path_info: ["setcookie"]} = conn, _opts) do
+    conn
+    |> put_resp_cookie("sid", "abc", path: "/", http_only: true)
+    |> put_resp_cookie("theme", "dark", path: "/admin")
+    |> send_resp(200, "cookies")
+  end
+
+  # The reported bug: an upstream CodeLead setting the host's own
+  # session cookie name on the shared origin.
+  def call(%Plug.Conn{path_info: ["clobber"]} = conn, _opts) do
+    conn
+    |> put_resp_cookie("_code_lead_key", "junk", path: "/")
+    |> send_resp(200, "clobber")
+  end
+
+  def call(%Plug.Conn{path_info: ["fancycookie"]} = conn, _opts) do
+    conn
+    |> put_resp_header(
+      "set-cookie",
+      "sid=abc; Path=/; Domain=example.com; Secure; SameSite=None; HttpOnly"
+    )
+    |> send_resp(200, "fancy")
+  end
+
   def call(conn, _opts) do
     send_resp(conn, 200, "fallback #{conn.request_path}")
   end

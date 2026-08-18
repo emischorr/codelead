@@ -1254,6 +1254,28 @@ defmodule CodeLeadWeb.TaskLiveTest do
       refute has_element?(view, "#terminal")
       assert render(view) =~ "worktree is provisioned"
     end
+
+    test "renders for a folder-target task once its task folder exists", ctx do
+      %{conn: conn, project: project} = ctx
+      task = task_fixture(project.id, %{target: :folder})
+      folder = CodeLead.Workspace.task_folder(task.id)
+      File.mkdir_p!(folder)
+      on_exit(fn -> File.rm_rf(folder) end)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "terminal"))
+
+      assert has_element?(view, "#terminal")
+    end
+
+    test "tells a folder-target task what it is waiting for", ctx do
+      %{conn: conn, project: project} = ctx
+      task = task_fixture(project.id, %{target: :folder})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "terminal"))
+
+      refute has_element?(view, "#terminal")
+      assert render(view) =~ "task folder is provisioned"
+    end
   end
 
   describe "diff tab" do

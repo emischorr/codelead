@@ -1,27 +1,33 @@
 defmodule CodeLeadWeb.TaskLive.TerminalTab do
   @moduledoc """
   The Terminal tab: an xterm.js terminal into the task's execution
-  context (host worktree or task container), backed by
+  context (host worktree, task folder, or task container), backed by
   `CodeLead.Terminal`. The session outlives the page — the hook
   reattaches by task id and repaints from scrollback.
+
+  The caller resolves the context (`Terminal.context_path/1`) and the
+  copy for its absence, so this component needs no knowledge of targets
+  or task states.
   """
   use CodeLeadWeb, :html
 
-  attr :task, :map, required: true
+  attr :task_id, :integer, required: true
+  attr :path, :string, default: nil
+  attr :empty_message, :string, required: true
 
   def terminal_tab(assigns) do
     ~H"""
     <div class="flex h-full flex-col">
       <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2.5 sm:px-6">
-        <span class={["size-[7px] rounded-full", (@task.worktree_path && "bg-ok") || "bg-text3"]} />
-        <span class="font-mono text-[11px] text-text2">task-{@task.id}</span>
+        <span class={["size-[7px] rounded-full", (@path && "bg-ok") || "bg-text3"]} />
+        <span class="font-mono text-[11px] text-text2">task-{@task_id}</span>
         <span class="ml-auto truncate font-mono text-[10.5px] text-text3">
-          {@task.worktree_path || "no worktree provisioned"}
+          {@path || "no execution context provisioned"}
         </span>
       </div>
 
       <div
-        :if={@task.worktree_path}
+        :if={@path}
         id="terminal"
         phx-hook=".Terminal"
         phx-update="ignore"
@@ -45,13 +51,9 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
         <div data-role="xterm" class="min-h-0 flex-1 px-2 py-1.5"></div>
       </div>
 
-      <div :if={!@task.worktree_path} class="min-h-0 flex-1 bg-term-bg p-4 sm:p-5">
+      <div :if={!@path} class="min-h-0 flex-1 bg-term-bg p-4 sm:p-5">
         <div class="font-mono text-[11.5px] leading-loose text-term-text">
-          <p class="text-term-text/60">
-            {if @task.state == :done,
-              do: "The worktree was pruned when this task was finalized.",
-              else: "A worktree is provisioned when a repo-targeted run starts."}
-          </p>
+          <p class="text-term-text/60">{@empty_message}</p>
         </div>
       </div>
     </div>
@@ -87,6 +89,17 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
 
           this.resizer = new ResizeObserver(() => this.fit.fit())
           this.resizer.observe(this.el)
+
+          // xterm has already re-laid out by the time onResize fires; the
+          // shell's pty is resized out-of-band, so debounce the round trip
+          // rather than firing one per pixel of a window drag.
+          this.term.onResize(({ cols, rows }) => {
+            clearTimeout(this.resizeTimer)
+            this.resizeTimer = setTimeout(
+              () => this.pushEvent("terminal_resize", { cols, rows }),
+              150
+            )
+          })
 
           this.term.onData((data) => this.pushEvent("terminal_input", { data: toB64(data) }))
 
@@ -135,6 +148,7 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
         },
 
         destroyed() {
+          clearTimeout(this.resizeTimer)
           this.resizer?.disconnect()
           this.term?.dispose()
         }
