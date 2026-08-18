@@ -3,6 +3,9 @@ defmodule CodeLead.PreviewGateway.RelayTest do
   # vars the fake docker script reads.
   use ExUnit.Case, async: false
 
+  # Failure scenarios log warnings by design; keep them out of the output.
+  @moduletag :capture_log
+
   alias CodeLead.PreviewGateway.Relay
 
   @fake_docker Path.expand("../../support/fake_docker.sh", __DIR__)

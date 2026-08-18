@@ -48,6 +48,17 @@ Note that `docker-compose.yml` only declares `code_lead_dev`; the test database 
 
 Toolchain is pinned in `.tool-versions` (Erlang 27.3.4.14, Elixir 1.18.4-otp-27). Secrets for local dev live in `.envrc` (gitignored, direnv).
 
+## Design principles
+
+**Convention over configuration.** Defaults must make the standard deployment — the
+docker-compose stack on a Linux host — work with zero configuration; detect at runtime
+where feasible rather than making the operator supply a value (the preview address
+resolution in `CodeLead.PreviewGateway.Address` is the worked example). Env vars exist
+as overrides for the minority of exotic setups, never as required setup steps.
+Operator-facing files (`deployment/*`) stay minimal: one-line comments with doc
+pointers, no architecture explanations — first-time operators haven't read the
+architecture and shouldn't need to. Technical depth belongs in `docs/`.
+
 ## Architecture to build toward
 
 CodeLead is a self-hosted, human-in-the-loop platform where a product owner directs a team of AI agents. The organizing principle: **humans own every handoff between workflow states.** Automation that bypasses a human decision point is a design failure. The single exception is Running→Review on success, which is a completion signal rather than a decision.

@@ -14,7 +14,10 @@ defmodule CodeLead.PreviewGateway.Relay do
   is safe at any moment because no agent exec runs inside it.
   """
 
+  require Logger
+
   alias CodeLead.Executor.DockerCli
+  alias CodeLead.PreviewGateway.Address
 
   @doc """
   Ensures a relay forwarding to `task_container`'s preview port and
@@ -75,7 +78,11 @@ defmodule CodeLead.PreviewGateway.Relay do
           _absent_or_no_ip -> {:error, :not_running}
         end
 
-      {:error, _docker_or_missing_cli} ->
+      {:error, reason} ->
+        Logger.warning(
+          "preview relay: inspecting task container #{task_container} failed: #{inspect(reason)}"
+        )
+
         {:error, :not_running}
     end
   end
@@ -130,7 +137,9 @@ defmodule CodeLead.PreviewGateway.Relay do
          {:ok, host_port} <- published_result(name, preview_port) do
       {:ok, host_port}
     else
-      {:error, _reason} = error -> error
+      {:error, reason} = error ->
+        Logger.warning("preview relay #{name}: start failed: #{inspect(reason)}")
+        error
     end
   end
 
@@ -155,7 +164,8 @@ defmodule CodeLead.PreviewGateway.Relay do
           host_port -> {:ok, host_port}
         end
 
-      {:error, _docker_or_missing_cli} ->
+      {:error, reason} ->
+        Logger.warning("preview relay #{name}: port lookup failed: #{inspect(reason)}")
         :none
     end
   end
@@ -174,9 +184,7 @@ defmodule CodeLead.PreviewGateway.Relay do
     end)
   end
 
-  defp publish_ip do
-    Application.get_env(:code_lead, :preview_publish_ip, "127.0.0.1")
-  end
+  defp publish_ip, do: Address.publish_ip()
 
   defp relay_image do
     Application.get_env(:code_lead, :preview_relay_image, "alpine/socat")

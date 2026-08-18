@@ -110,14 +110,14 @@ config :code_lead,
 # a socat image) joins the task container's network and publishes the
 # declared `preview_port` on PREVIEW_PUBLISH_IP with an ephemeral host
 # port; the in-app proxy dials PREVIEW_UPSTREAM_HOST on that port.
-# Loopback works when the BEAM runs on the docker host (dev). In the
-# deployed stack — app in a container, task containers as siblings on
-# the default bridge — set both to the docker bridge gateway (usually
-# 172.17.0.1) so the port stays off public interfaces but reachable
-# from the app container.
+# Unset (the convention), both auto-resolve at runtime: loopback when
+# the BEAM runs on the docker host (dev), the docker bridge gateway —
+# asked from the daemon — when the app itself runs in a container (the
+# deployed stack). Set them only for setups the detection cannot cover;
+# see CodeLead.PreviewGateway.Address.
 config :code_lead,
-  preview_publish_ip: System.get_env("PREVIEW_PUBLISH_IP", "127.0.0.1"),
-  preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST", "127.0.0.1"),
+  preview_publish_ip: System.get_env("PREVIEW_PUBLISH_IP"),
+  preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST"),
   preview_relay_image: System.get_env("PREVIEW_RELAY_IMAGE", "alpine/socat"),
   preview_idle_ms: String.to_integer(System.get_env("PREVIEW_IDLE_MINUTES", "30")) * 60_000,
   preview_start_timeout_ms:

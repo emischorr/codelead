@@ -11,15 +11,18 @@ defmodule CodeLead.PreviewGateway.PathProxy do
       "this node" is the app container, which is still correct).
     * `:container` — a relay sidecar (`CodeLead.PreviewGateway.Relay`)
       joins the task container's network and publishes `preview_port`
-      to an ephemeral host port; we dial `:preview_upstream_host`
-      (loopback in dev, the docker bridge gateway in a deployed stack)
-      at that port.
+      to an ephemeral host port; we dial that port at the upstream
+      address `CodeLead.PreviewGateway.Address` resolves (loopback on a
+      host BEAM, the docker bridge gateway in a deployed stack).
   """
 
   @behaviour CodeLead.PreviewGateway
 
+  require Logger
+
   alias CodeLead.Executor.Devcontainer
   alias CodeLead.PreviewGateway
+  alias CodeLead.PreviewGateway.Address
   alias CodeLead.PreviewGateway.Relay
   alias CodeLead.Tasks.Task
 
@@ -43,18 +46,36 @@ defmodule CodeLead.PreviewGateway.PathProxy do
          {:ok, host_port} <- Relay.ensure(task.id, container_id, port) do
       {:ok, %{host: upstream_host(), port: host_port}}
     else
-      {:error, :no_preview_port} = error -> error
-      {:error, :unsupported} = error -> error
+      {:error, :no_preview_port} = error ->
+        error
+
+      {:error, :unsupported} = error ->
+        error
+
       # Whatever went wrong (environment gone or stopped, daemon down,
       # relay image unpullable), the honest answer to the proxy is the
-      # same branded "not running" page.
-      _stopped_absent_or_error -> {:error, :not_running}
+      # same branded "not running" page — but the log names the reason.
+      stopped_absent_or_error ->
+        log_unavailable(task.id, stopped_absent_or_error)
+        {:error, :not_running}
     end
   end
 
   defp preview_port(%Task{} = task), do: PreviewGateway.preview_port(task)
 
-  defp upstream_host do
-    Application.get_env(:code_lead, :preview_upstream_host, "127.0.0.1")
+  defp upstream_host, do: Address.upstream_host()
+
+  # `:absent`/`{:stopped, _}` are ordinary lifecycle states (the task
+  # container was torn down or exited) and this path runs on every
+  # proxied request, so they stay at debug; anything else is a docker or
+  # relay failure worth a warning.
+  defp log_unavailable(task_id, reason) do
+    message = "preview upstream unavailable for task #{task_id}: #{inspect(reason)}"
+
+    case reason do
+      :absent -> Logger.debug(message)
+      {:stopped, _container} -> Logger.debug(message)
+      _docker_or_relay_error -> Logger.warning(message)
+    end
   end
 end

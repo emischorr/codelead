@@ -3,6 +3,9 @@ defmodule CodeLead.PreviewGateway.PathProxyContainerTest do
   # vars the fake docker script reads.
   use CodeLead.DataCase, async: false
 
+  # Failure scenarios log by design; keep them out of the output.
+  @moduletag :capture_log
+
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
