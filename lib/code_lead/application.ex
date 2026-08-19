@@ -11,6 +11,10 @@ defmodule CodeLead.Application do
     # unusable key resolves to the community tier.
     CodeLead.License.load()
 
+    # Warns (never raises) when PREVIEW_DOMAIN is not same-site with
+    # PHX_HOST — that setup breaks preview cookies and is unsupported.
+    CodeLead.PreviewGateway.DomainCheck.warn_on_cross_site()
+
     children =
       [
         CodeLeadWeb.Telemetry,

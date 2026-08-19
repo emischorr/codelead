@@ -4,10 +4,12 @@ defmodule CodeLead.PreviewGateway do
   reaches it.
 
   The review contract is a URL: something in the task's execution
-  context serves HTTP, and the Review tab renders it. Implementations
-  decide how that URL is routed — `PathProxy` (the only one today)
-  proxies `/preview/:task_id/*` through the app itself; a future
-  `SubdomainProxy` would hand out per-task subdomains instead.
+  context serves HTTP, and the Review tab links to it (previews open in
+  their own browser tab). Implementations decide how that URL is routed
+  — `PathProxy` (the zero-config default) proxies `/preview/:task_id/*`
+  through the app itself; `SubdomainProxy` hands out per-task
+  subdomains instead and takes over instance-wide when `PREVIEW_DOMAIN`
+  is set. Exactly one gateway is active at a time.
   """
 
   alias CodeLead.Projects
@@ -17,7 +19,9 @@ defmodule CodeLead.PreviewGateway do
   @type upstream :: %{host: String.t(), port: :inet.port_number()}
 
   @doc """
-  Browser-facing URL (path or absolute) the Review tab should frame.
+  Browser-facing URL the preview opens at — a path under the app's own
+  origin (`PathProxy`) or an absolute URL (`SubdomainProxy`). Callers
+  must not assume a path.
   """
   @callback url_for(task :: Task.t()) ::
               {:ok, String.t()} | {:error, :no_preview_port | :unsupported}
@@ -55,12 +59,23 @@ defmodule CodeLead.PreviewGateway do
   Env vars injected into terminal and preview execs so serve commands
   can configure themselves: the base path and allowed origin, plus the
   declared port to bind (unique per repository across the instance).
-  The external origin is pre-computed by the web-layer caller.
+
+  `app_origin` is the app's own external origin, pre-computed by the
+  web-layer caller. It is the preview origin only under a path-mounted
+  gateway; when `url_for/1` is absolute (subdomain gateway) the origin
+  and base derive from that URL instead — the base path collapses to
+  `""` because the preview owns its origin's root.
   """
   @spec preview_env(Task.t(), String.t()) :: [{String.t(), String.t()}]
-  def preview_env(%Task{} = task, origin) do
-    with {:ok, base} <- impl().url_for(task),
+  def preview_env(%Task{} = task, app_origin) do
+    with {:ok, url} <- impl().url_for(task),
          {:ok, port} <- preview_port(task) do
+      {origin, base} =
+        case URI.parse(url) do
+          %URI{host: nil} -> {app_origin, url}
+          %URI{path: path} = uri -> {recompose_origin(uri), path || "/"}
+        end
+
       [
         {"PREVIEW_BASE_PATH", String.trim_trailing(base, "/")},
         {"PREVIEW_ORIGIN", origin},
@@ -68,6 +83,14 @@ defmodule CodeLead.PreviewGateway do
       ]
     else
       {:error, _reason} -> []
+    end
+  end
+
+  defp recompose_origin(%URI{scheme: scheme, host: host, port: port}) do
+    if port == URI.default_port(scheme) do
+      "#{scheme}://#{host}"
+    else
+      "#{scheme}://#{host}:#{port}"
     end
   end
 end

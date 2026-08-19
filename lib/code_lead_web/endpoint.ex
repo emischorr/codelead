@@ -15,6 +15,27 @@ defmodule CodeLeadWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # Preview subdomains (task-<id>.<PREVIEW_DOMAIN>, subdomain gateway
+  # only) divert here before anything else in the pipeline — sockets,
+  # Plug.Static, and the parsers must not see proxied traffic: the
+  # previewed app's own /live socket or /assets/* would otherwise be
+  # answered by CodeLead instead of forwarded. Phoenix's generated
+  # wrapper still runs outside this override, so `secret_key_base` and
+  # error rendering are already in place. No-op (nil match) unless
+  # PREVIEW_DOMAIN is configured.
+  def call(conn, opts) do
+    case CodeLeadWeb.PreviewHost.match(conn.host) do
+      nil -> super(conn, opts)
+      task_id -> CodeLeadWeb.PreviewHost.call(conn, task_id)
+    end
+  end
+
+  @doc """
+  The session cookie configuration, for the preview host's session
+  (same store and salts, its own cookie name).
+  """
+  def session_options, do: @session_options
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

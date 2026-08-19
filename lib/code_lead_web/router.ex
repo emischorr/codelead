@@ -136,12 +136,18 @@ defmodule CodeLeadWeb.Router do
 
   ## Preview proxy
   #
-  # All verbs, any subpath — the previewed app's own links, forms,
-  # assets, and websocket upgrades all land here.
+  # `/launch/:task_id` is the Open-preview target: it resolves the
+  # active gateway's URL for the task (minting the subdomain auth token
+  # when that gateway is active) and redirects. The catch-all takes all
+  # verbs and any subpath — the previewed app's own links, forms,
+  # assets, and websocket upgrades all land there. Subdomain-gateway
+  # traffic never reaches this scope; it is diverted by host in
+  # `CodeLeadWeb.Endpoint.call/2` before the router.
 
   scope "/preview", CodeLeadWeb do
     pipe_through :preview
 
+    get "/launch/:task_id", PreviewLaunchController, :launch
     match :*, "/:task_id/*path", PreviewProxyController, :proxy
   end
 

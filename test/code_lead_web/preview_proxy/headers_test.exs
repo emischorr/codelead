@@ -5,23 +5,24 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
   import Plug.Test
 
   alias CodeLeadWeb.PreviewProxy.Headers
+  alias CodeLeadWeb.PreviewProxy.Policy
 
   @upstream %{host: "127.0.0.1", port: 4000}
 
-  defp mount, do: Headers.mount(7)
+  defp policy, do: Policy.path(7)
 
-  defp forwarded(cookie_headers) do
+  defp forwarded(cookie_headers, policy \\ policy(), path \\ "/preview/7/") do
     cookie_headers
-    |> Enum.reduce(conn(:get, "/preview/7/"), fn value, conn ->
+    |> Enum.reduce(conn(:get, path), fn value, conn ->
       %{conn | req_headers: conn.req_headers ++ [{"cookie", value}]}
     end)
-    |> Headers.request_headers(@upstream, mount())
+    |> Headers.request_headers(@upstream, policy)
     |> Enum.filter(&match?({"cookie", _value}, &1))
   end
 
   defp namespaced(set_cookie, scheme \\ :http) do
     [{"set-cookie", set_cookie}]
-    |> Headers.response_headers(mount(), scheme)
+    |> Headers.response_headers(policy(), scheme)
     |> Enum.map(fn {"set-cookie", value} -> value end)
   end
 
@@ -29,12 +30,13 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
     set_cookie |> String.split(";") |> Enum.map(&String.trim/1) |> tl()
   end
 
-  describe "mount/1" do
-    test "derives the path and a prefix-free cookie namespace" do
-      assert %{path: "/preview/7", cookie_prefix: "_clp7_"} = Headers.mount(7)
+  describe "Policy.path/1" do
+    test "derives the mount path and a prefix-free cookie namespace" do
+      assert %Policy{mount_path: "/preview/7", cookie_prefix: "_clp7_", rewrite_location?: true} =
+               Policy.path(7)
 
       # The trailing underscore is what keeps task 4 from prefixing 42.
-      refute String.starts_with?(Headers.mount(42).cookie_prefix, Headers.mount(4).cookie_prefix)
+      refute String.starts_with?(Policy.path(42).cookie_prefix, Policy.path(4).cookie_prefix)
     end
   end
 
@@ -82,7 +84,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
         |> put_req_header("cookie", "_clp7_sid=abc; _code_lead_key=secret")
         |> put_req_header("sec-websocket-key", "key")
         |> put_req_header("sec-websocket-version", "13")
-        |> Headers.ws_request_headers(@upstream, mount())
+        |> Headers.ws_request_headers(@upstream, policy())
 
       assert {"cookie", "sid=abc"} in headers
       refute List.keyfind(headers, "sec-websocket-key", 0)
@@ -108,7 +110,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
       headers =
         Headers.response_headers(
           [{"set-cookie", "a=1; Path=/"}, {"set-cookie", "b=2; Path=/"}],
-          mount(),
+          policy(),
           :http
         )
 
@@ -195,7 +197,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
             {"keep-alive", "timeout=5"},
             {"content-length", "3"}
           ],
-          mount(),
+          policy(),
           :http
         )
 
@@ -204,6 +206,52 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
                {"location", "https://elsewhere.test/x"},
                {"x-upstream", "yes"}
              ]
+    end
+  end
+
+  describe "subdomain policy" do
+    defp subdomain_forwarded(cookie_headers) do
+      forwarded(cookie_headers, Policy.subdomain(), "/")
+    end
+
+    test "forwards the cookie jar verbatim, minus the preview session cookie" do
+      assert subdomain_forwarded(["sid=abc; theme=dark"]) == [{"cookie", "sid=abc; theme=dark"}]
+
+      assert subdomain_forwarded(["_clp_session=secret; sid=abc"]) == [{"cookie", "sid=abc"}]
+      assert subdomain_forwarded(["_clp_session=secret"]) == []
+    end
+
+    test "does not stamp x-forwarded-prefix" do
+      headers =
+        conn(:get, "/")
+        |> Headers.request_headers(@upstream, Policy.subdomain())
+
+      refute List.keyfind(headers, "x-forwarded-prefix", 0)
+      assert {"x-forwarded-proto", "http"} = List.keyfind(headers, "x-forwarded-proto", 0)
+    end
+
+    test "passes set-cookie through untouched" do
+      headers =
+        Headers.response_headers(
+          [{"set-cookie", "sid=abc; Path=/admin; Domain=example.com; Secure; SameSite=None"}],
+          Policy.subdomain(),
+          :http
+        )
+
+      assert headers == [
+               {"set-cookie", "sid=abc; Path=/admin; Domain=example.com; Secure; SameSite=None"}
+             ]
+    end
+
+    test "leaves root-relative locations alone" do
+      headers =
+        Headers.response_headers(
+          [{"location", "/after"}, {"keep-alive", "timeout=5"}],
+          Policy.subdomain(),
+          :http
+        )
+
+      assert headers == [{"location", "/after"}]
     end
   end
 end

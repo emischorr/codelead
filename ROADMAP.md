@@ -18,51 +18,31 @@ An item graduates off this list the moment someone plans it properly.
 
 ## Preview & terminal
 
-The Review-tab preview and the Terminal tab shipped in two iterations
-(ADR-0008, extended by ADR-0009 and ADR-0010). What is left:
+The Review-tab preview and the Terminal tab shipped across ADR-0008,
+ADR-0009, ADR-0010, and ADR-0011 (which removed the embedded iframe —
+previews open in a new tab — and built `SubdomainProxy` as the
+`PREVIEW_DOMAIN` opt-in). Of the three prerequisites this list used to
+carry for `SubdomainProxy`, the foreign-origin auth handshake and the
+wildcard-DNS/TLS story shipped with ADR-0011, and the `postMessage`
+toolbar channel became moot when the iframe went away. What is left:
 
-- **`SubdomainProxy` gateway implementation** — wildcard
-  `task-<id>.preview.<host>` instead of the `/preview/:task_id/*` path
-  proxy. Separates cookie origins, unlocks apps that cannot be
-  path-prefix-hosted (no `PREVIEW_BASE_PATH` to honor), and is the
-  prerequisite for managed hosting. It also retires the whole
-  same-origin cookie apparatus — the per-task namespacing in
-  `PreviewProxy.Headers`, its double-submit-CSRF limitation
-  (`docs/configuration.md`, "Cookies in the preview"), the `location`
-  rewrite, and the shadow-cookie eviction in `RequirePreviewAccess`.
-
-  The `CodeLead.PreviewGateway` behaviour seam exists for exactly this
-  and nothing may grow a direct dependency on `PathProxy` — but **it is
-  a swap on the gateway side only.** ADR-0008 and ADR-0009 both call it
-  a pure gateway swap; that is wrong, and three prerequisites have to
-  land with it:
-
-  1. **Preview auth on a foreign origin.** `RequirePreviewAccess` reads
-     `current_scope` from the shared-origin session cookie, which
-     `endpoint.ex` sets host-only (no `:domain`) — it is simply absent
-     on `task-42.preview.<host>`. Widening it to a wildcard domain
-     re-opens the clobbering hazard the namespacing closed, so this
-     needs a signed-token or per-subdomain handshake. Nothing in the
-     tree anticipates it.
-  2. **A `postMessage` channel for the preview toolbar.** Every read in
-     the `.PreviewFrame` hook (`task_live/preview_pane.ex`) goes through
-     `contentWindow`, and all of it is blocked cross-origin — silently,
-     behind empty `catch` blocks. The toolbar would look intact and do
-     nothing: path field stuck on `(external page)`, back/forward
-     disabled, refresh dead, and the path field navigating to the host
-     origin instead of the preview. There is no `postMessage` anywhere
-     in the repo today, and injecting the reporting side of it into
-     previewed pages collides with ADR-0008's no-body-rewriting call.
-  3. **Wildcard DNS and a wildcard TLS cert** (DNS-01 — HTTP-01 cannot
-     do wildcards), against a zero-config default of plain HTTP behind
-     the operator's own proxy. `ALLOWED_HOSTS` already accepts
-     `*.example.com`, but `origin_allowed?/1` in the proxy controller
-     hard-codes host equality and would need relaxing and careful
-     re-tightening. This is the reason it cannot simply replace
-     `PathProxy` as the default.
-
-- **Viewport presets** — mobile/tablet/desktop widths on the preview
-  iframe. Cheap, and it matches the mobile-first positioning.
+- **`ExternalPreview` gateway** — for operators who already have a
+  branch-deploy pipeline (Coolify PR environments, Vercel/Netlify,
+  Heroku-style review apps): the repository declares a URL template
+  (`https://task-{id}.preview.example.com`,
+  `https://{branch}--app.netlify.app`) or a webhook that returns a URL
+  after the agent pushes the branch; CodeLead's contribution is URL
+  construction plus a readiness poll — no proxying at all. Honest
+  limits: every iteration pays the pipeline's build-and-deploy latency,
+  and the repo must be branch-deployable. It is also the correct home
+  for stable-URL needs an ephemeral preview can never satisfy —
+  registered OAuth callback URLs, webhook receivers under test.
+- **Static HTML snapshot** — an enhancement *of* the live preview, not
+  a rival to it: automatically capture a static render of declared URLs
+  when a run ends, and show it instantly as a "preview image" when the
+  task opens, before (or without) starting the live server. Kept future
+  by its prerequisites: a per-task/per-repo URL list, seed fixtures for
+  meaningful pages, and a bootstrapped session for auth-gated ones.
 - **Preview config auto-detection** — pre-fill a repository's
   `preview_port`/`preview_command` from `package.json` or `mix.exs`.
   Explicit config stays the truth; detection only seeds the form.
@@ -94,13 +74,37 @@ and ADR-0009 instead.)
   pushes a branch or PR, so Vercel/Netlify-style previews come free
   downstream. But judging the work has to be possible *inside* the
   Review gate, or the gate is theater.
+- **The embedded preview iframe + toolbar.** Shipped in ADR-0008's
+  iteration, removed in ADR-0011: the browser tab's own URL bar,
+  history, and devtools are strictly better tooling than a slim
+  toolbar could ever be, mobile UX is better in a tab, and deleting the
+  frame deleted the entire cross-origin problem class — the
+  `contentWindow` guards, the history-stack juggling, and the
+  `postMessage` channel a cross-origin toolbar would have needed. Do
+  not reintroduce an embedded frame; anything it could show, a tab
+  shows better. This also settles two ideas that only made sense inside
+  a frame: *viewport presets* (device emulation in the tab's devtools
+  is strictly better) and the *shim-page `postMessage` design* (moot
+  with no frame to shim).
 - **Capture-phase click interception in the preview frame.** Would give
   full host-history isolation for classic multi-page apps, but
   `preventDefault` on a document-level capture listener downgrades
-  SPA-router and LiveView links to full page reloads. Residual cost of
-  not doing it: plain full-page link clicks inside the frame still add
-  joint-history entries, so the host back button may step an MPA
-  preview before it leaves the task page.
+  SPA-router and LiveView links to full page reloads. Moot since
+  ADR-0011 — a separate tab has its own history, so the isolation now
+  comes free. Kept for the reasoning should an embedded surface ever be
+  re-proposed.
+- **A `DirectPort` gateway** (exposing each preview's host port to the
+  browser directly, no proxy). Only serves LAN/bare-IP installs — which
+  `PathProxy` already serves with auth and zero exposed ports — and
+  publishes unauthenticated ports everywhere else. No niche left
+  between the two shipped gateways.
+- **Review-artifact types as preview substitutes** — interaction
+  traces, screen recordings, route-diffs captured during the run and
+  attached to the review. Each needs per-repo conventions (what to
+  record, which routes, what fixtures) that cost more than "start the
+  server and look", and all of them cap out below a live preview.
+  Snapshots may still land as a *supplement* (see the roadmap entry
+  above); the others stay out.
 - **Softening the preview cookie namespacing to make double-submit CSRF
   work.** Two variants were weighed when the namespacing shipped, both
   aimed at letting Django/Laravel/Angular JS find `csrftoken` /
@@ -117,8 +121,8 @@ and ADR-0009 instead.)
   injected into HTML responses is stronger still and invisible to the
   previewed app, but it breaks the no-body-rewriting decision and has to
   survive gzip, streaming, and the previewed app's own CSP. Both were
-  declined in favour of waiting for `SubdomainProxy`, which removes the
-  problem instead of managing it.
+  declined in favour of `SubdomainProxy`, which since ADR-0011 removes
+  the problem instead of managing it (set `PREVIEW_DOMAIN`).
 - **An npm/node-pty toolchain.** xterm.js is vendored like topbar;
   node-pty would drag a native build chain into the project for the
   sake of one ioctl — and ADR-0010 got the resize without it.

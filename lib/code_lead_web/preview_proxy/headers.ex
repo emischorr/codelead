@@ -1,51 +1,42 @@
 defmodule CodeLeadWeb.PreviewProxy.Headers do
   @moduledoc """
   Header hygiene for the preview proxy. Strips hop-by-hop headers both
-  directions, rewrites `host`, stamps `x-forwarded-*`, rewrites
-  root-relative `location` redirects back onto the preview prefix, and
-  gives the previewed app its own cookie jar on CodeLead's origin by
-  namespacing every cookie per task (see `mount/1`). Bodies are never
-  touched — base paths are the dev server's job via `PREVIEW_BASE_PATH`.
+  directions, rewrites `host`, and stamps `x-forwarded-*` for every
+  gateway. What else happens is decided by the task's
+  `CodeLeadWeb.PreviewProxy.Policy`: under the path gateway,
+  root-relative `location` redirects are rewritten back onto the preview
+  prefix and the previewed app gets its own cookie jar on CodeLead's
+  origin by namespacing every cookie per task; under the subdomain
+  gateway the preview owns a real origin and both rewrites retire.
+  Bodies are never touched — base paths are the dev server's job via
+  `PREVIEW_BASE_PATH`.
   """
+
+  alias CodeLeadWeb.PreviewProxy.Policy
 
   @hop_by_hop ~w(connection keep-alive proxy-authenticate proxy-authorization te trailer transfer-encoding upgrade)
-  @cookie_namespace "_clp"
 
   @type headers :: [{String.t(), String.t()}]
-
-  @typedoc "Per-task mount: the external path prefix and the cookie-name prefix."
-  @type mount :: %{path: String.t(), cookie_prefix: String.t()}
-
-  @doc """
-  The proxy mount for a task: the path everything is served under, and
-  the cookie-name prefix that keeps the previewed app's cookies apart
-  from CodeLead's own and from sibling previews.
-  """
-  @spec mount(integer() | String.t()) :: mount()
-  def mount(task_id) do
-    %{path: "/preview/#{task_id}", cookie_prefix: "#{@cookie_namespace}#{task_id}_"}
-  end
 
   @doc """
   Request headers to send upstream, derived from the incoming conn.
   """
-  @spec request_headers(Plug.Conn.t(), CodeLead.PreviewGateway.upstream(), mount()) :: headers()
-  def request_headers(conn, %{host: host, port: port}, %{
-        path: path,
-        cookie_prefix: cookie_prefix
-      }) do
+  @spec request_headers(Plug.Conn.t(), CodeLead.PreviewGateway.upstream(), Policy.t()) ::
+          headers()
+  def request_headers(conn, %{host: host, port: port}, %Policy{} = policy) do
     conn.req_headers
     |> strip_hop_by_hop()
     |> List.keydelete("host", 0)
     |> List.keydelete("content-length", 0)
-    |> rewrite_cookies(cookie_prefix)
-    |> Kernel.++([
-      {"host", "#{host}:#{port}"},
-      {"x-forwarded-for", peer_ip(conn)},
-      {"x-forwarded-proto", Atom.to_string(conn.scheme)},
-      {"x-forwarded-host", conn.host},
-      {"x-forwarded-prefix", path}
-    ])
+    |> rewrite_cookies(policy)
+    |> Kernel.++(
+      [
+        {"host", "#{host}:#{port}"},
+        {"x-forwarded-for", peer_ip(conn)},
+        {"x-forwarded-proto", Atom.to_string(conn.scheme)},
+        {"x-forwarded-host", conn.host}
+      ] ++ forwarded_prefix(policy)
+    )
   end
 
   @doc """
@@ -54,23 +45,23 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
   `scheme` is the browser's view of the origin — `Secure` cookies are
   void when it is `:http`.
   """
-  @spec response_headers(headers(), mount(), :http | :https) :: headers()
-  def response_headers(headers, %{path: path, cookie_prefix: cookie_prefix}, scheme) do
+  @spec response_headers(headers(), Policy.t(), :http | :https) :: headers()
+  def response_headers(headers, %Policy{} = policy, scheme) do
     headers
     |> strip_hop_by_hop()
     |> List.keydelete("content-length", 0)
-    |> Enum.flat_map(&rewrite_response_header(&1, path, cookie_prefix, scheme == :https))
+    |> Enum.flat_map(&rewrite_response_header(&1, policy, scheme == :https))
   end
 
   @doc """
   Websocket handshake headers to send upstream: the request headers
   minus the handshake fields the upstream client re-negotiates itself.
   """
-  @spec ws_request_headers(Plug.Conn.t(), CodeLead.PreviewGateway.upstream(), mount()) ::
+  @spec ws_request_headers(Plug.Conn.t(), CodeLead.PreviewGateway.upstream(), Policy.t()) ::
           headers()
-  def ws_request_headers(conn, upstream, mount) do
+  def ws_request_headers(conn, upstream, policy) do
     conn
-    |> request_headers(upstream, mount)
+    |> request_headers(upstream, policy)
     |> Enum.reject(fn {name, _value} ->
       name in ~w(host sec-websocket-key sec-websocket-version sec-websocket-extensions)
     end)
@@ -80,14 +71,26 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
     Enum.reject(headers, fn {name, _value} -> name in @hop_by_hop end)
   end
 
+  defp forwarded_prefix(%Policy{mount_path: ""}), do: []
+  defp forwarded_prefix(%Policy{mount_path: path}), do: [{"x-forwarded-prefix", path}]
+
   # Mint canonicalizes response header names to lowercase.
-  defp rewrite_response_header({"location", "/" <> _rest = location}, path, _prefix, _secure?),
-    do: [{"location", path <> location}]
+  defp rewrite_response_header(
+         {"location", "/" <> _rest = location},
+         %Policy{rewrite_location?: true, mount_path: path},
+         _secure?
+       ),
+       do: [{"location", path <> location}]
 
-  defp rewrite_response_header({"set-cookie", value}, path, cookie_prefix, secure?),
-    do: namespace_cookie(value, cookie_prefix, path, secure?)
+  defp rewrite_response_header(
+         {"set-cookie", value},
+         %Policy{cookie_prefix: prefix, mount_path: path},
+         secure?
+       )
+       when is_binary(prefix),
+       do: namespace_cookie(value, prefix, path, secure?)
 
-  defp rewrite_response_header(header, _path, _cookie_prefix, _secure?), do: [header]
+  defp rewrite_response_header(header, _policy, _secure?), do: [header]
 
   # The previewed app shares CodeLead's origin, so its cookies get their
   # own namespace: the name is prefixed (a previewed CodeLead can no
@@ -148,15 +151,25 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
     end
   end
 
-  # Only this task's cookies go upstream, with the namespace peeled off,
-  # so the previewed app sees exactly the jar it wrote. Everything else
-  # on the shared origin stays in the browser — CodeLead's session and
-  # remember-me cookies have no business inside an agent's container, and
-  # another task's preview has no business seeing this one's.
-  defp rewrite_cookies(headers, cookie_prefix) do
+  # Path gateway: only this task's cookies go upstream, with the
+  # namespace peeled off, so the previewed app sees exactly the jar it
+  # wrote. Everything else on the shared origin stays in the browser —
+  # CodeLead's session and remember-me cookies have no business inside an
+  # agent's container, and another task's preview has no business seeing
+  # this one's. Subdomain gateway: the preview owns its origin, so the
+  # jar passes verbatim minus the preview host's own session cookie.
+  defp rewrite_cookies(headers, %Policy{cookie_prefix: nil, strip_request_cookies: strip}) do
+    map_cookie_header(headers, &drop_cookies(&1, strip))
+  end
+
+  defp rewrite_cookies(headers, %Policy{cookie_prefix: cookie_prefix}) do
+    map_cookie_header(headers, &task_cookies(&1, cookie_prefix))
+  end
+
+  defp map_cookie_header(headers, fun) do
     Enum.flat_map(headers, fn
       {"cookie", value} ->
-        case task_cookies(value, cookie_prefix) do
+        case fun.(value) do
           "" -> []
           forwarded -> [{"cookie", forwarded}]
         end
@@ -164,6 +177,19 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
       other ->
         [other]
     end)
+  end
+
+  defp drop_cookies(cookie_value, strip_names) do
+    cookie_value
+    |> String.split(";")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(fn pair ->
+      case String.split(pair, "=", parts: 2) do
+        [name, _value] -> name in strip_names
+        [_unnamed] -> true
+      end
+    end)
+    |> Enum.join("; ")
   end
 
   defp task_cookies(cookie_value, cookie_prefix) do
