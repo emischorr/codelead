@@ -1,9 +1,9 @@
 defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   @moduledoc """
   Self-contained branded pages the preview proxy serves instead of raw
-  Bandit errors. Rendered inside the Review tab's iframe (or a direct
-  browser tab), so they carry their own inline styling — app.css is
-  not available on proxied responses.
+  Bandit errors. Previews open in their own browser tab, so these pages
+  carry their own inline styling — app.css is not available on proxied
+  responses.
   """
 
   @doc "Nothing answered at the dialed upstream address; auto-retries."
@@ -18,13 +18,14 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     page(
       "Nothing is listening #{target}",
       """
-      Start your dev server in the task's <strong>Terminal</strong> tab.
-      For container tasks it must listen on <code>0.0.0.0</code>, and it
-      should honor <code>PREVIEW_BASE_PATH</code> so assets resolve under
-      the preview URL. Container tasks are dialed via a relay sidecar's
-      published host port — if the address above looks unreachable from
-      the app, check <code>PREVIEW_PUBLISH_IP</code> /
-      <code>PREVIEW_UPSTREAM_HOST</code>. This page retries automatically.
+      Start your dev server from the task's Review tab
+      (<strong>Start preview</strong>) or its <strong>Terminal</strong>
+      tab. For container tasks it must listen on <code>0.0.0.0</code>,
+      and it should honor <code>PREVIEW_BASE_PATH</code> so assets
+      resolve under the preview URL. Container tasks are dialed via a
+      relay sidecar's published host port — if the address above looks
+      unreachable from the app, check <code>PREVIEW_PUBLISH_IP</code> /
+      <code>PREVIEW_UPSTREAM_HOST</code>. This tab retries automatically.
       """,
       ~s(<meta http-equiv="refresh" content="4">)
     )
@@ -60,7 +61,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   def unauthorized(true) do
     page(
       "Restoring your session",
-      ~s(A stale preview cookie was cleared. This page reloads itself.),
+      ~s(A stale preview cookie was cleared. This tab reloads itself.),
       ~s(<meta http-equiv="refresh" content="1">)
     )
   end
@@ -68,7 +69,43 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   def unauthorized(false) do
     page(
       "Session expired",
-      ~s(Log in to CodeLead again, then reload this preview.)
+      ~s(Log in to CodeLead in its own tab, then reload this one.)
+    )
+  end
+
+  @doc """
+  A preview subdomain was visited without a session or a valid launch
+  token. Deliberately no auto-refresh — reloading cannot fix it; only a
+  fresh Open-preview click can.
+  """
+  @spec handshake_required() :: String.t()
+  def handshake_required do
+    page(
+      "Open this preview from CodeLead",
+      """
+      This preview must be opened from CodeLead — go to the task's
+      <strong>Review</strong> tab and click <strong>Open preview</strong>.
+      (Preview links carry a short-lived token; this visit had none, or
+      an expired one.)
+      """
+    )
+  end
+
+  @doc """
+  A `/preview/…` path URL was visited while the instance serves
+  previews on per-task subdomains — a stale bookmark. Points at the
+  launch route, which redirects onto the right origin.
+  """
+  @spec wrong_gateway(integer() | String.t()) :: String.t()
+  def wrong_gateway(task_id) do
+    page(
+      "This instance uses subdomain previews",
+      """
+      Previews are served on per-task subdomains here, not under
+      <code>/preview/…</code> paths — this looks like a stale link.
+      <a href="/preview/launch/#{task_id}">Open this task's preview</a>
+      at its current address.
+      """
     )
   end
 

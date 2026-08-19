@@ -1,11 +1,12 @@
 defmodule CodeLeadWeb.Plugs.RequirePreviewAccess do
   @moduledoc """
-  Auth gate for the preview proxy: same session, same requirements as
-  the app routes (instance set up + user logged in), but failure is a
-  minimal 401 page instead of a login redirect — these requests come
-  from an iframe or asset context where a redirect renders garbage.
-  The page hosting the iframe sits behind the full auth stack, so a
-  401 here only ever means an expired session.
+  Auth gate for the path-gateway preview proxy: same session, same
+  requirements as the app routes (instance set up + user logged in),
+  but failure is a minimal 401 page instead of a login redirect — most
+  of these requests are the previewed app's own asset and XHR fetches,
+  where a redirect renders garbage. Subdomain-gateway traffic never
+  passes through here (it is diverted by host before the router); its
+  gate is `CodeLeadWeb.PreviewHost.Auth`.
   """
 
   @behaviour Plug

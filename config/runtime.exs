@@ -123,6 +123,37 @@ config :code_lead,
   preview_start_timeout_ms:
     String.to_integer(System.get_env("PREVIEW_START_TIMEOUT_SECONDS", "120")) * 1_000
 
+# Preview gateway selection. Unset (the convention), previews are served
+# by the path gateway at /preview/<id>/ with zero configuration. Setting
+# PREVIEW_DOMAIN (e.g. preview.example.com, wildcard-DNS'd at the same
+# instance) switches the whole instance to per-task subdomain previews —
+# task-<id>.<PREVIEW_DOMAIN> — for apps that break under path-prefix
+# hosting. Exactly one gateway is active at a time. The recommended
+# domain shares its registrable domain with PHX_HOST (same-site cookies);
+# see docs/configuration.md. The test env ignores a dev shell's
+# PREVIEW_DOMAIN, like WORKSPACE_ROOT above — tests pick their gateway
+# via app env directly.
+preview_domain = System.get_env("PREVIEW_DOMAIN")
+
+if preview_domain not in [nil, ""] and config_env() != :test do
+  preview_scheme = System.get_env("SCHEME", "http")
+
+  # The port in generated preview URLs: URL_PORT when set, else the
+  # scheme default in prod (proxy-fronted) and the listen port in dev
+  # (task-42.preview.localhost:4000 works out of the box).
+  preview_url_port =
+    case {System.get_env("URL_PORT"), config_env()} do
+      {nil, :prod} -> if preview_scheme == "https", do: 443, else: 80
+      {nil, _dev} -> String.to_integer(System.get_env("PORT", "4000"))
+      {value, _env} -> String.to_integer(value)
+    end
+
+  config :code_lead,
+    preview_gateway: CodeLead.PreviewGateway.SubdomainProxy,
+    preview_domain: preview_domain,
+    preview_url: [scheme: preview_scheme, port: preview_url_port]
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

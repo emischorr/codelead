@@ -1177,42 +1177,40 @@ defmodule CodeLeadWeb.TaskLiveTest do
       })
     end
 
-    test "a design task with a declared port opens on the preview", ctx do
+    test "a task with a declared port gets the strip with an Open-preview link", ctx do
       %{conn: conn, project: project} = ctx
       task = preview_task(project, :design, %{preview_port: 5173})
 
       {:ok, view, _html} = live(conn, task_path(project, task, "review"))
 
-      assert has_element?(view, "#review-mode-toggle")
-      assert has_element?(view, ~s(#preview-pane iframe[src="/preview/#{task.id}/"]))
-      assert has_element?(view, "input#preview-path")
+      assert has_element?(
+               view,
+               ~s(a#preview-open[href="/preview/launch/#{task.id}"][target="_blank"][rel="noopener"])
+             )
+
+      # The iframe world is gone — no embedded frame, no toolbar.
+      refute has_element?(view, "#preview-pane")
+      refute has_element?(view, "input#preview-path")
+      refute has_element?(view, "#review-mode-toggle")
     end
 
-    test "a code task with a declared port opens on the diff, preview a toggle away", ctx do
+    test "the diff renders alongside the strip, not behind a toggle", ctx do
       %{conn: conn, project: project} = ctx
       task = preview_task(project, :code, %{preview_port: 5173})
 
       {:ok, view, _html} = live(conn, task_path(project, task, "review"))
 
-      assert has_element?(view, "#review-mode-toggle")
-      refute has_element?(view, "#preview-pane")
-
-      view |> element("#review-mode-preview") |> render_click()
-
-      assert has_element?(view, "#preview-pane")
-
-      view |> element("#review-mode-diff") |> render_click()
-
-      refute has_element?(view, "#preview-pane")
+      assert has_element?(view, "#preview-open")
+      assert has_element?(view, "#diff-pane")
     end
 
-    test "a repo task without a port gets the enablement hint and no toggle", ctx do
+    test "a repo task without a port gets the enablement hint and no strip", ctx do
       %{conn: conn, project: project} = ctx
       task = preview_task(project, :code, %{})
 
       {:ok, view, _html} = live(conn, task_path(project, task, "review"))
 
-      refute has_element?(view, "#review-mode-toggle")
+      refute has_element?(view, "#preview-open")
       assert has_element?(view, "#preview-hint")
     end
 

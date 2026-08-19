@@ -1,4 +1,4 @@
-# Deployment (last updated: 2026-08-17)
+# Deployment (last updated: 2026-08-19)
 
 How to run CodeLead on a server. For the five-minute version see the
 README's *Getting started*; for the full environment variable reference see
@@ -220,7 +220,8 @@ next preview touch recreates it on the current one — always safe, because no
 agent exec runs inside a relay. The websocket rules
 below (`Upgrade`/`Connection` pass-through, no buffering) apply to `/preview/*`
 exactly as they do to `/live/websocket`, so a *location-scoped* proxy config
-must cover this path too.
+must cover this path too — and, when subdomain previews are enabled, the
+[wildcard vhost](#wildcard-vhost-for-subdomain-previews) as well.
 
 That is the operator's half. What the server *inside* the environment has to
 do — bind `0.0.0.0`, listen on exactly the declared port — and where its
@@ -400,6 +401,61 @@ server {
 ```
 
 `Host $host` is what keeps `PHX_HOST` and the browser's hostname agreeing.
+
+### Wildcard vhost for subdomain previews
+
+Only needed when the instance opts into subdomain previews
+([`PREVIEW_DOMAIN`](configuration.md#subdomain-previews-preview_domain)):
+the per-task hosts `task-<id>.preview.example.com` must reach the same
+app, so the proxy grows one wildcard vhost with the same websocket and
+buffering rules as the main one.
+
+**Caddy** — one extra site block. The catch is the certificate: a
+wildcard cert can only be issued through a **DNS-01** challenge, so
+Caddy needs credentials for your DNS provider (via the provider's DNS
+plugin — the `dns` directive below):
+
+```caddyfile
+*.preview.example.com {
+	tls {
+		dns <provider> <credentials>
+	}
+	reverse_proxy localhost:4000
+}
+```
+
+**nginx** — a second `server` block; the wildcard certificate has to be
+obtained the same way (e.g. certbot with a DNS plugin):
+
+```nginx
+server {
+	listen 443 ssl http2;
+	server_name *.preview.example.com;
+
+	ssl_certificate     /etc/letsencrypt/live/preview.example.com/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/preview.example.com/privkey.pem;
+
+	location / {
+		proxy_pass http://127.0.0.1:4000;
+		proxy_http_version 1.1;
+
+		proxy_set_header Upgrade    $http_upgrade;
+		proxy_set_header Connection "upgrade";
+		proxy_set_header Host       $host;
+		proxy_set_header X-Real-IP  $remote_addr;
+		proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+		proxy_set_header X-Forwarded-Proto $scheme;
+
+		proxy_read_timeout 3600s;
+		proxy_buffering off;
+	}
+}
+```
+
+Plus a wildcard DNS record `*.preview.example.com` pointing at the same
+host, and `PREVIEW_DOMAIN=preview.example.com` in the app's `.env`.
+`Host $host` is load-bearing here too — it is how the app tells the
+tasks apart.
 
 ## Upgrading
 

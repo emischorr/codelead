@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-18)
+# Architecture overview (last updated: 2026-08-19)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -26,7 +26,7 @@ note is the "how it works today" map.
 | `CodeLead.AgentDriver` | `Acp` (harness over ACP, ADR-0001), `LlmApi` (one completion) | — (driver-independent of executor) |
 | `CodeLead.Executor` | `LocalSubprocess` (default) and `Devcontainer` (per-task opt-in, `Executor.for_task/1` on `tasks.execution_env`; provisions via the devcontainer CLI, execs via docker); `spawn/3` runs the agent *inside* the provisioned context ([ADR-0003](adr/0003-container-execution-model.md), [ADR-0009](adr/0009-devcontainer-execution.md)) | container execution for `:folder` targets |
 | `CodeLead.Scheduler` | `PassThrough` — an ordered `CodeLead.Scheduler.Gate` list (schedule → budget → capacity) | a `WindowGate` in the same list |
-| `CodeLead.PreviewGateway` | `PathProxy` — the Review tab frames `/preview/:task_id/` and `CodeLeadWeb.PreviewProxyController` reverse-proxies it (HTTP + websockets) to the task's dev server, resolved per execution env: loopback for local tasks, a relay sidecar's published port for container tasks ([ADR-0008](adr/0008-preview-and-terminal.md), [ADR-0009](adr/0009-devcontainer-execution.md)) | `SubdomainProxy` (per-task subdomains) |
+| `CodeLead.PreviewGateway` | `PathProxy` (default: previews open in a new tab at `/preview/:task_id/`, reverse-proxied by `CodeLeadWeb.PreviewProxyController`) and `SubdomainProxy` (opt-in via `PREVIEW_DOMAIN`: per-task origins `task-<id>.<domain>`, host-matched in `Endpoint.call/2` → `CodeLeadWeb.PreviewHost`) — exactly one active per instance; both share the `PreviewProxy.Forwarder` plumbing (HTTP + websockets) and `PreviewGateway.Upstream` resolution: loopback for local tasks, a relay sidecar's published port for container tasks ([ADR-0008](adr/0008-preview-and-terminal.md), [ADR-0009](adr/0009-devcontainer-execution.md), [ADR-0011](adr/0011-new-tab-preview-and-subdomain-gateway.md)) | `ExternalPreview` (branch-deploy pipelines, see `ROADMAP.md`) |
 
 ## Runtime (processes)
 

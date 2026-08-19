@@ -1,17 +1,20 @@
 defmodule CodeLeadWeb.TaskLive.ReviewTab do
   @moduledoc """
-  The Review tab: reviewer findings plus the artifact to judge — a
-  live preview of the running app (when the repository declares a
-  `preview_port`), the worktree diff for repo targets, or the artifact
-  preview for folder targets. Preview and diff sit behind a toggle;
-  which one is primary is decided by the LiveView (`work_type`-keyed).
+  The Review tab: reviewer findings plus the artifact to judge — the
+  worktree diff for repo targets or the artifact preview for folder
+  targets, always on screen. When the repository declares a
+  `preview_port` a preview strip sits above the diff: run status,
+  Start/Stop for the one-click preview, and an Open-preview link that
+  opens the running app in a new browser tab (there is no embedded
+  frame — the tab's own URL bar, history, and devtools are the
+  toolbar). The link goes through `/preview/launch/:task_id`, the only
+  web surface that turns a task into a preview URL.
   """
   use CodeLeadWeb, :html
 
   import CodeLeadWeb.DiffComponents
 
   alias CodeLead.Git.DiffFile
-  alias CodeLeadWeb.TaskLive.PreviewPane
 
   attr :task, :map, required: true
   attr :reviews, :list, required: true
@@ -23,18 +26,16 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :following?, :boolean, default: false
   attr :executing?, :boolean, default: false
   attr :folder_artifact, :map, default: nil
-  attr :review_mode, :atom, default: :diff, values: [:preview, :diff]
   attr :preview_available?, :boolean, default: false
-  attr :preview_src, :string, default: nil
   attr :preview_command?, :boolean, default: false
   attr :preview_run, :any, default: :stopped
 
   def review_tab(assigns) do
     ~H"""
     <div class="flex h-full min-h-0 flex-col">
-      <.mode_toggle
+      <.preview_strip
         :if={@preview_available?}
-        review_mode={@review_mode}
+        task_id={@task.id}
         preview_command?={@preview_command?}
         preview_run={@preview_run}
       />
@@ -54,24 +55,18 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         to enable live preview.
       </div>
 
-      <div :if={@review_mode == :preview && @preview_available?} class="flex min-h-0 flex-1 flex-col">
-        <div :if={@reviews != []} class="max-h-48 shrink-0 overflow-y-auto px-4 py-3 sm:px-6">
-          <.findings_section reviews={@reviews} />
-        </div>
-        <div
-          :if={match?({:failed, _tail}, @preview_run)}
-          id="preview-failure"
-          class="shrink-0 border-b border-border bg-surface px-4 py-3 sm:px-6"
-        >
-          <p class="mb-2 text-[12px] font-semibold text-warn">
-            The preview command failed to start — its output:
-          </p>
-          <pre class="max-h-40 overflow-auto rounded-[9px] border border-border bg-surface2 p-3 font-mono text-[11px] leading-relaxed text-text2 whitespace-pre-wrap">{failure_tail(@preview_run)}</pre>
-        </div>
-        <PreviewPane.preview_pane src={@preview_src} task_id={@task.id} />
+      <div
+        :if={match?({:failed, _tail}, @preview_run)}
+        id="preview-failure"
+        class="shrink-0 border-b border-border bg-surface px-4 py-3 sm:px-6"
+      >
+        <p class="mb-2 text-[12px] font-semibold text-warn">
+          The preview command failed to start — its output:
+        </p>
+        <pre class="max-h-40 overflow-auto rounded-[9px] border border-border bg-surface2 p-3 font-mono text-[11px] leading-relaxed text-text2 whitespace-pre-wrap">{failure_tail(@preview_run)}</pre>
       </div>
 
-      <div :if={@review_mode != :preview || !@preview_available?} class="min-h-0 flex-1">
+      <div class="min-h-0 flex-1">
         <.diff_view
           task={@task}
           reviews={@reviews}
@@ -89,26 +84,20 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
     """
   end
 
-  attr :review_mode, :atom, required: true
+  attr :task_id, :integer, required: true
   attr :preview_command?, :boolean, default: false
   attr :preview_run, :any, default: :stopped
 
-  defp mode_toggle(assigns) do
+  defp preview_strip(assigns) do
     ~H"""
     <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5 sm:px-6">
-      <div
-        id="review-mode-toggle"
-        class="inline-flex rounded-[9px] border border-border bg-surface2 p-0.5"
-        role="tablist"
-        aria-label="Review view"
-      >
-        <.mode_button mode={:preview} active?={@review_mode == :preview} label="Preview" />
-        <.mode_button mode={:diff} active?={@review_mode == :diff} label="Diff" />
-      </div>
+      <span class="text-[11px] font-semibold uppercase tracking-wider text-text3">
+        Live preview
+      </span>
 
-      <div :if={@preview_command?} class="ml-auto flex items-center gap-2">
+      <div class="ml-auto flex items-center gap-2">
         <span
-          :if={@preview_run != :stopped}
+          :if={@preview_command? && @preview_run != :stopped}
           id="preview-run-status"
           class={[
             "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
@@ -119,7 +108,9 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
           {run_status_label(@preview_run)}
         </span>
         <button
-          :if={@preview_run in [:stopped] or match?({:failed, _tail}, @preview_run)}
+          :if={
+            @preview_command? && (@preview_run == :stopped or match?({:failed, _tail}, @preview_run))
+          }
           id="preview-server-start"
           type="button"
           phx-click="preview_start"
@@ -128,7 +119,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
           Start preview
         </button>
         <button
-          :if={@preview_run in [:starting, :ready]}
+          :if={@preview_command? && @preview_run in [:starting, :ready]}
           id="preview-server-stop"
           type="button"
           phx-click="preview_stop"
@@ -136,6 +127,15 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         >
           Stop
         </button>
+        <a
+          id="preview-open"
+          href={~p"/preview/launch/#{@task_id}"}
+          target="_blank"
+          rel="noopener"
+          class="inline-flex items-center gap-1.5 rounded-[9px] bg-accent px-3 py-1 text-[11.5px] font-semibold text-white transition-opacity hover:opacity-90"
+        >
+          Open preview <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
+        </a>
       </div>
     </div>
     """
@@ -156,30 +156,6 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
 
   defp failure_tail({:failed, tail}) when is_binary(tail) and tail != "", do: tail
   defp failure_tail(_other), do: "(no output)"
-
-  attr :mode, :atom, required: true
-  attr :active?, :boolean, required: true
-  attr :label, :string, required: true
-
-  defp mode_button(assigns) do
-    ~H"""
-    <button
-      id={"review-mode-#{@mode}"}
-      type="button"
-      role="tab"
-      aria-selected={to_string(@active?)}
-      phx-click="set_review_mode"
-      phx-value-mode={@mode}
-      class={[
-        "rounded-[7px] px-3 py-1 text-[11.5px] font-semibold transition-colors",
-        @active? && "bg-surface text-text shadow-sm",
-        !@active? && "text-text3 hover:text-text2"
-      ]}
-    >
-      {@label}
-    </button>
-    """
-  end
 
   attr :task, :map, required: true
   attr :reviews, :list, required: true

@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-18)
+# Web UI (last updated: 2026-08-19)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -12,7 +12,8 @@ what exists today.
 | `/projects/:project_id/board` | `CodeLeadWeb.BoardLive` (`:index`) | the Kanban board |
 | `/projects/:project_id/board/new` | `CodeLeadWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
 | `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
-| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing |
+| `/preview/launch/:task_id` | `CodeLeadWeb.PreviewLaunchController` | Open-preview target: redirects the new tab onto the active gateway's preview URL (minting the subdomain auth token when that gateway is active) |
+| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets, path gateway); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing. Subdomain-gateway traffic bypasses the router entirely (host match in `Endpoint.call/2` → `CodeLeadWeb.PreviewHost`) |
 | `/settings` | `CodeLeadWeb.SettingsLive` (`:index`) | overview tiles with live counts |
 | `/settings/users` | `CodeLeadWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
 | `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
@@ -484,19 +485,24 @@ above the bar instead of underneath it.
   was open would otherwise be lost. `feed_blocks` in assigns is the
   server-side copy that makes the re-stream (and collapse state)
   possible.
-- **Review tab** — two views behind a segmented toggle when the task's
+- **Review tab** — the diff is always on screen; when the task's
   repository declares a `preview_port` (nullable integer on
-  `repositories`): a **live preview** iframe on `/preview/:task_id/`
-  and the diff. `review_mode` defaults by work type on first entry —
-  `:design`/`:content` open on the preview, everything else on the
-  diff — and the user's toggle choice sticks for the LiveView's life.
-  Without a declared port the tab is exactly the old Diff tab plus a
-  one-line enablement hint (`#preview-hint`) linking to the project
-  settings. Diff loading stays lazy: nothing runs `git diff` while the
-  preview is primary and the diff view was never opened.
+  `repositories`) a **preview strip** sits above it. There is no
+  embedded preview frame: **previews always open in their own browser
+  tab** (ADR-0011) via the strip's Open-preview button
+  (`#preview-open`, `target="_blank"`), whose href is
+  `/preview/launch/:task_id` — `PreviewLaunchController`, the only web
+  surface that turns a task into a preview URL. It redirects onto
+  whatever the active gateway's `url_for/1` yields: `/preview/<id>/`
+  under the default path gateway, the task's own
+  `task-<id>.<PREVIEW_DOMAIN>` origin (with a short-lived auth token,
+  see below) under the subdomain gateway. The browser tab's own URL
+  bar, history, and devtools are the preview's toolbar. Without a
+  declared port the tab is exactly the old Diff tab plus a one-line
+  enablement hint (`#preview-hint`) linking to the project settings.
 
-  With a `preview_command` declared on the repository, the toggle row
-  also carries a **Start/Stop preview** button (`#preview-server-start`
+  With a `preview_command` declared on the repository, the strip also
+  carries a **Start/Stop preview** button (`#preview-server-start`
   / `#preview-server-stop`) and a status chip (`#preview-run-status`):
   `CodeLead.Preview` runs the command in the task's execution context
   (host shell for local tasks, `docker exec` into the devcontainer for
@@ -505,53 +511,53 @@ above the bar instead of underneath it.
   `Starting… → Running`, or a failure panel (`#preview-failure`) with
   the command's log tail. The session stops on request-changes, on the
   task leaving Review for good, and after a viewer-less idle window;
-  the branded 502 page's auto-refresh picks the frame up the moment the
+  the branded 502 page's auto-refresh picks the tab up the moment the
   server answers.
 
-  The preview pane (`PreviewPane`, hook `.PreviewFrame`) is a slim
-  toolbar over a same-origin iframe. The toolbar owns its **own
-  history stack** — an iframe shares the browser's joint session
-  history, so all toolbar navigation goes through
-  `contentWindow.location.replace`, which never adds a host-history
-  entry; back/forward walk the internal stack (disabled at either
-  end), and the hook patches the frame's `pushState` to
-  `replaceState` on each load so SPA navigations (LiveView live-nav,
-  Vite routers) stay out of the host history too and keep the path
-  field live. The path field is an editable address bar scoped to the
-  `/preview/<id>` prefix (Enter navigates); open-in-new-tab is the
-  devtools escape hatch. Pages that leave the origin are shown as
-  `(external page)` and skipped by back/forward. Reviewer findings
-  render in both modes (a collapsible strip above the frame in
-  preview mode). Known accepted quirk: plain full-page link clicks
-  *inside* the frame still add joint-history entries (the host back
-  button may step a classic multi-page app before leaving the task
-  page — intercepting those clicks would break SPA routing).
+  **The proxy behind it.** Requests reach the shared forwarding core
+  (`PreviewProxy.Forwarder` — HTTP streaming via `PreviewProxy.HTTP`,
+  websockets via `PreviewProxy.WebSocketRelay`) through one of two
+  doors, exactly one of which is active per instance: the
+  `/preview/:task_id/*` routes (`PreviewProxyController`, `:preview`
+  pipeline, path gateway) or a host match on
+  `task-<id>.<PREVIEW_DOMAIN>` in `CodeLeadWeb.Endpoint.call/2`
+  (`CodeLeadWeb.PreviewHost`, subdomain gateway) that diverts the
+  request before sockets, `Plug.Static`, and the parsers ever see it.
+  What differs per gateway is a `PreviewProxy.Policy`: the mount path,
+  and whether cookies and `Location` headers are rewritten.
 
-  **Cookie namespacing.** The previewed app shares CodeLead's origin, so
-  `PreviewProxy.Headers` gives it its own jar: every upstream
-  `Set-Cookie` is renamed to `_clp<task_id>_<name>` and re-pathed under
-  `/preview/<task_id>` (`Domain` dropped so it stays host-only;
-  `Secure`/`Partitioned`/`SameSite=None` dropped over plain http, where a
-  browser would void the whole cookie), and only this task's prefixed
-  cookies are forwarded upstream, with the prefix peeled off. So a
-  previewed CodeLead can no longer overwrite `_code_lead_key` and log the
-  operator out of their own instance, sibling previews cannot read each
-  other's jar, and CodeLead's session and remember-me cookies never reach
-  an agent's container. Renaming also defuses `__Host-`/`__Secure-`
-  names, whose rules are purely name-based — they would otherwise be
-  rejected outright once re-pathed. Residual limitations, all
-  client-side: JS inside the preview sees the prefixed names, so the
-  double-submit CSRF pattern breaks (Django/Laravel/Angular read
-  `csrftoken`/`XSRF-TOKEN` from `document.cookie` and echo them in a
-  header — server-rendered form posts and Phoenix are unaffected, since
-  the proxy restores the original name upstream; see
-  `configuration.md`, *Cookies in the preview*); cookies written by JS
-  are not forwarded upstream; and JS can still write raw cookies on the
-  shared origin. `SubdomainProxy` is the real fix (ADR-0008, whose
-  "same-origin cookie hygiene" bullet this supersedes) — `ROADMAP.md`
-  carries its prerequisites. `Plugs.RequirePreviewAccess` clears a shadow
-  `_code_lead_key`/remember-me left at the mount by older builds when it
-  denies, and serves a self-reloading page in that one case.
+  **Cookie namespacing (path gateway only).** The previewed app shares
+  CodeLead's origin there, so `PreviewProxy.Headers` gives it its own
+  jar: every upstream `Set-Cookie` is renamed to `_clp<task_id>_<name>`
+  and re-pathed under `/preview/<task_id>` (`Domain` dropped so it
+  stays host-only; `Secure`/`Partitioned`/`SameSite=None` dropped over
+  plain http, where a browser would void the whole cookie), and only
+  this task's prefixed cookies are forwarded upstream, with the prefix
+  peeled off. So a previewed CodeLead can no longer overwrite
+  `_code_lead_key` and log the operator out of their own instance,
+  sibling previews cannot read each other's jar, and CodeLead's session
+  and remember-me cookies never reach an agent's container. Renaming
+  also defuses `__Host-`/`__Secure-` names, whose rules are purely
+  name-based — they would otherwise be rejected outright once
+  re-pathed. Residual limitation: JS inside a path preview sees the
+  prefixed names, so the double-submit CSRF pattern breaks
+  (Django/Laravel/Angular — see `configuration.md`, *Cookies in the
+  preview*); subdomain previews remove the problem, since each task
+  owns a real origin and nothing is renamed. `Plugs.RequirePreviewAccess`
+  clears a shadow `_code_lead_key`/remember-me left at the mount by
+  older builds when it denies, and serves a self-reloading page in that
+  one case.
+
+  **Subdomain auth handshake.** The app's session cookie is host-only,
+  so a preview subdomain has no session of its own: the launch redirect
+  appends a 60-second task-scoped `Phoenix.Token` (`?_preview_auth=`),
+  which `PreviewHost.Auth` verifies, exchanges for the preview host's
+  own session cookie (`_clp_session`), and strips via redirect to `/`.
+  A direct visit without it gets a branded 401. Authorization is the
+  same coarse rule as the path gateway: any logged-in user may view any
+  preview. Under the subdomain gateway the `/preview/:task_id/*` routes
+  refuse with a branded "this instance uses subdomain previews" page
+  that links to the launch route.
 
   **Diff view** — for repo targets with a worktree: `Git.diff/2` parsed
   by `CodeLead.Git.Diff` in `start_async`; collapsible reviewer
@@ -577,9 +583,8 @@ above the bar instead of underneath it.
   The diff refreshes live: an `{:agent_feed, _, row}` for which
   `AgentFeed.file_changing?/2` holds sets `diff_stale?` and arms a
   single 1.5s `Process.send_after` (`@diff_refresh_ms`). The timer is
-  only armed while the Review tab is active *in diff mode* — off-tab
-  (or in preview mode), staleness just accumulates and
-  `handle_params/3` / the mode toggle picks it up on entry. `diff_stale?`
+  only armed while the Review tab is active — off-tab, staleness just
+  accumulates and `handle_params/3` picks it up on entry. `diff_stale?`
   clears when the load *starts*, so events arriving mid-diff re-arm on
   completion; a failed refresh keeps the diff already on screen and
   only logs. `#diff-refresh` forces one on demand.

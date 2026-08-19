@@ -36,8 +36,8 @@ defmodule CodeLeadWeb.TaskLive.PreviewButtonTest do
 
     {:ok, view, _html} = live(conn, review_path(project, task))
 
-    view |> element("#review-mode-preview") |> render_click()
     refute has_element?(view, "#preview-server-start")
+    assert has_element?(view, "#preview-open")
   end
 
   test "start shows the status chip, stop returns to the idle button", %{conn: conn} do
@@ -48,7 +48,6 @@ defmodule CodeLeadWeb.TaskLive.PreviewButtonTest do
     on_exit(fn -> Preview.stop(task.id) end)
 
     {:ok, view, _html} = live(conn, review_path(project, task))
-    view |> element("#review-mode-preview") |> render_click()
 
     assert has_element?(view, "#preview-server-start")
     refute has_element?(view, "#preview-server-stop")
@@ -70,7 +69,6 @@ defmodule CodeLeadWeb.TaskLive.PreviewButtonTest do
       review_task(%{preview_port: 5173, preview_command: "sleep 30"})
 
     {:ok, view, _html} = live(conn, review_path(project, task))
-    view |> element("#review-mode-preview") |> render_click()
     view |> element("#preview-server-start") |> render_click()
 
     assert render(view) =~ "no worktree yet"

@@ -55,6 +55,13 @@ docker-compose stack on a Linux host — work with zero configuration; detect at
 where feasible rather than making the operator supply a value (the preview address
 resolution in `CodeLead.PreviewGateway.Address` is the worked example). Env vars exist
 as overrides for the minority of exotic setups, never as required setup steps.
+
+**Previews (ADR-0011).** Previews always open in a **new browser tab** — there is no
+embedded iframe; do not reintroduce one. Browser-facing preview URLs come only from
+the gateway seam (`CodeLead.PreviewGateway.url_for/1`, reached via
+`/preview/launch/:task_id`) — never hand-built, and `url_for/1` may return an absolute
+URL. Setting `PREVIEW_DOMAIN` switches the whole instance from the default `PathProxy`
+to `SubdomainProxy` (per-task origins); exactly one gateway is active at a time.
 Operator-facing files (`deployment/*`) stay minimal: one-line comments with doc
 pointers, no architecture explanations — first-time operators haven't read the
 architecture and shouldn't need to. Technical depth belongs in `docs/`.

@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-18)
+# Configuration (last updated: 2026-08-19)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -42,6 +42,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `PREVIEW_RELAY_IMAGE` | `alpine/socat` | Image the preview relay sidecar runs. Pulled on the first container-task preview; override for mirrored/air-gapped registries — any image whose entrypoint is `socat` works. |
 | `PREVIEW_IDLE_MINUTES` | `30` | How long a one-click preview server keeps running with nobody on the Review tab before it stops itself. |
 | `PREVIEW_START_TIMEOUT_SECONDS` | `120` | How long a started preview command gets to answer on the preview port before the session gives up and surfaces its log tail. |
+| `PREVIEW_DOMAIN` | — | Unset (the convention), previews are served at `/preview/<task_id>/` on the app's own origin with zero configuration. Set to a wildcard-DNS'd domain (e.g. `preview.example.com`) to switch the **whole instance** to per-task subdomain previews at `task-<id>.$PREVIEW_DOMAIN` — for apps that break under path-prefix hosting. See [Subdomain previews](#subdomain-previews-preview_domain). |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
 `config/prod.exs` — no redirect, no HSTS — because TLS termination belongs to
@@ -88,8 +89,14 @@ template is not.
   executor makes, default `["docker"]`. Tests swap it for
   `test/support/fake_docker.sh` the same way `:harnesses` swaps in the
   fake ACP agent. The CLI honours `DOCKER_HOST` as usual.
-- `:preview_gateway` — the `CodeLead.PreviewGateway` implementation,
-  default `PathProxy`. A test seam first; `SubdomainProxy` later.
+- `:preview_gateway` — the `CodeLead.PreviewGateway` implementation.
+  Default `PathProxy`; `config/runtime.exs` flips it to `SubdomainProxy`
+  when `PREVIEW_DOMAIN` is set. Exactly one gateway is active at a time.
+  Tests swap it directly (the test env ignores a dev shell's
+  `PREVIEW_DOMAIN`, like `WORKSPACE_ROOT`).
+- `:preview_domain` / `:preview_url` — the subdomain gateway's domain
+  and the scheme/port stamped into generated preview URLs, both derived
+  from `PREVIEW_DOMAIN`/`SCHEME`/`URL_PORT` in `config/runtime.exs`.
 - `:preview_publish_ip` / `:preview_upstream_host` — see the env vars
   above.
 - `:terminal_shell` — the shell the Terminal tab spawns, default `"sh"`.
@@ -142,16 +149,18 @@ it never points at a route that doesn't exist.
 
 ### Preview base path
 
-The live preview serves the task's dev server under
-`/preview/<task_id>/`, and the proxy never rewrites response bodies —
-an app that emits absolute asset paths must be told its base path.
-Terminal and one-click preview sessions export `PREVIEW_BASE_PATH`
-(e.g. `/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the
-repository's declared port — unique per repository across the
-instance, so serve commands should bind it rather than hardcode one).
-Terminal sessions additionally export `CODELEAD_TTY_FILE`, which is
-CodeLead's own resize channel and not something to set or rely on
-(ADR-0010):
+Out of the box — no configuration at all — the live preview serves the
+task's dev server under `/preview/<task_id>/` on the app's own origin,
+through whatever reverse proxy already fronts it. Previews open in
+their own browser tab via the Review tab's **Open preview** button.
+The proxy never rewrites response bodies, so an app that emits
+absolute asset paths must be told its base path. Terminal and
+one-click preview sessions export `PREVIEW_BASE_PATH` (e.g.
+`/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the repository's
+declared port — unique per repository across the instance, so serve
+commands should bind it rather than hardcode one). Terminal sessions
+additionally export `CODELEAD_TTY_FILE`, which is CodeLead's own
+resize channel and not something to set or rely on (ADR-0010):
 
 | Stack | Recipe |
 |---|---|
@@ -161,31 +170,83 @@ CodeLead's own resize channel and not something to set or rely on
 | Rails | `rails server -p "$PREVIEW_PORT"` with `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]` |
 | Plain static server | serve the directory on `$PREVIEW_PORT`; relative asset paths need nothing more |
 
-An app that cannot be path-prefix-hosted waits for the `SubdomainProxy`
-gateway; the branded 502 page reminds the user meanwhile.
+These recipes matter only under the default path gateway. Under
+[subdomain previews](#subdomain-previews-preview_domain)
+`PREVIEW_BASE_PATH` is empty, so the same commands degrade gracefully
+to a plain `--port` — an app that cannot be path-prefix-hosted at all
+is exactly what that gateway exists for.
 
-### Cookies in the preview
+### Cookies in the preview (path gateway)
 
-The preview shares CodeLead's own origin, so the proxy gives each task
-its own cookie jar: an upstream `Set-Cookie: sid=abc; Path=/` reaches
-the browser as `_clp<task_id>_sid=abc; Path=/preview/<task_id>`, and the
-prefix is peeled off again on the way upstream. The previewed app sees
-exactly the cookies it set, and a previewed CodeLead can no longer
-overwrite your session cookie and log you out of your own instance.
+Under the default path gateway the preview shares CodeLead's own
+origin, so the proxy gives each task its own cookie jar: an upstream
+`Set-Cookie: sid=abc; Path=/` reaches the browser as
+`_clp<task_id>_sid=abc; Path=/preview/<task_id>`, and the prefix is
+peeled off again on the way upstream. The previewed app sees exactly
+the cookies it set, and a previewed CodeLead can no longer overwrite
+your session cookie and log you out of your own instance.
 
 One consequence is worth knowing before you preview a Django, Laravel,
 or Angular app. Those frameworks use **double-submit CSRF**: the server
 sets a *readable* cookie (`csrftoken`, `XSRF-TOKEN`), and client-side JS
 reads it out of `document.cookie` and echoes the value in an
-`X-CSRFToken` / `X-XSRF-TOKEN` header. Inside a preview that JS finds
-the prefixed name instead and sends no header, so **AJAX writes get
-403** — while everything server-side is unaffected, because the proxy
-restores the original name upstream. Server-rendered form posts (a
-`{% csrf_token %}` hidden field, Laravel's `_token`) keep working, and
-Phoenix is unaffected entirely: its token comes from a server-rendered
-`<meta>` tag and its session cookie is `HttpOnly`, so nothing reads
-cookies by name in the browser. `SubdomainProxy` is the fix — see
-`ROADMAP.md` for what it is waiting on.
+`X-CSRFToken` / `X-XSRF-TOKEN` header. Inside a path preview that JS
+finds the prefixed name instead and sends no header, so **AJAX writes
+get 403** — while everything server-side is unaffected, because the
+proxy restores the original name upstream. Server-rendered form posts
+(a `{% csrf_token %}` hidden field, Laravel's `_token`) keep working,
+and Phoenix is unaffected entirely: its token comes from a
+server-rendered `<meta>` tag and its session cookie is `HttpOnly`, so
+nothing reads cookies by name in the browser.
+[Subdomain previews](#subdomain-previews-preview_domain) are the fix —
+each task owns a real origin there, so cookies keep their names and
+none of this applies.
+
+### Subdomain previews (`PREVIEW_DOMAIN`)
+
+The escape hatch for apps the path gateway cannot serve: each task gets
+its own origin, `task-<id>.<PREVIEW_DOMAIN>`, proxied through the same
+app with **no** cookie renaming, **no** `Location` rewriting, and no
+base-path requirement. Enabling it replaces path previews
+**instance-wide** — exactly one gateway is active, and a stale
+`/preview/…` link fails with a branded page pointing at the task's
+current preview address.
+
+Setup, once:
+
+1. **Wildcard DNS**: point `*.preview.example.com` at the same host as
+   the app.
+2. **Reverse-proxy rule**: forward the wildcard vhost to the app —
+   concrete Caddy and nginx blocks (and the wildcard-certificate
+   caveat: DNS-01 challenge, DNS-provider credentials) are in
+   [`deployment.md`](deployment.md#reverse-proxy-configuration).
+3. Set `PREVIEW_DOMAIN=preview.example.com`.
+4. Restart.
+
+The recommended value is `preview.<apex of PHX_HOST>` —
+`PHX_HOST=codelead.example.com` → `PREVIEW_DOMAIN=preview.example.com`,
+previews at `task-42.preview.example.com`. Staying on the same
+registrable domain keeps app and previews same-site, so `SameSite=Lax`
+cookies (CodeLead's and the previewed app's) behave normally. A
+`PREVIEW_DOMAIN` on a *foreign* registrable domain makes every preview
+cookie third-party — browsers block those, the auth handshake breaks,
+and boot logs a prominent warning: that configuration is unsupported.
+
+Since the preview origin never sees CodeLead's (host-only) session
+cookie, the **Open preview** button carries a short-lived signed token;
+the preview origin exchanges it for its own session cookie
+(`_clp_session` — a name previewed apps should not use) and strips it
+via redirect. Visiting a preview subdomain directly without that
+handshake gets a branded 401 — open previews from the Review tab.
+Authorization is unchanged from the path gateway: any logged-in user
+may view any preview.
+
+Dev needs no DNS at all: modern browsers resolve `*.localhost` to
+loopback, so `PREVIEW_DOMAIN=preview.localhost mix phx.server` serves
+previews at `task-42.preview.localhost:4000` with zero setup.
+
+This is deliberately the feature's only knob — everything else about
+previews keeps working by default under either gateway.
 
 ### Serving a preview from a container task
 
@@ -544,11 +605,13 @@ a `.devcontainer` (app + Postgres via compose). Point your dev instance
 at the checkout, set the repository to Devcontainer with
 `preview_port: 4001` (4000 is the instance's own port, which is
 blocked) and `preview_command: PORT="$PREVIEW_PORT" mix phx.server`,
-and run a container task — the Review tab's Start preview then shows
-CodeLead itself through `/preview/<task_id>/`. The repo's
-`config/dev.exs` and `config/test.exs` read `PGHOST` (the compose `db`
-service) and `DEVCONTAINER` (bind `0.0.0.0` instead of loopback) for
-exactly this.
+and run a container task — the Review tab's Open preview then shows
+CodeLead itself through `/preview/<task_id>/` (or, with
+`PREVIEW_DOMAIN` set, on its own subdomain — where the previewed
+CodeLead's session cookie works unrenamed, so you can even log into
+it). The repo's `config/dev.exs` and `config/test.exs` read `PGHOST`
+(the compose `db` service) and `DEVCONTAINER` (bind `0.0.0.0` instead
+of loopback) for exactly this.
 
 Migrations are not automatic *inside the image*: `/app/bin/server` is the
 default command, and `/app/bin/migrate` (which evals

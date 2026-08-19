@@ -3,8 +3,11 @@
 ## Status
 
 Accepted (2026-08-16). Superseded in part by ADR-0009 (published-ports
-upstream resolution — a relay sidecar replaces `-p`-at-create) and by
-ADR-0010 (post-spawn terminal resize; terminals for folder targets).
+upstream resolution — a relay sidecar replaces `-p`-at-create), by
+ADR-0010 (post-spawn terminal resize; terminals for folder targets),
+and by ADR-0011 (the embedded preview surface — previews open in a new
+tab — and the single-gateway assumption — `SubdomainProxy` exists
+behind `PREVIEW_DOMAIN`).
 
 ## Context
 

@@ -77,7 +77,6 @@ defmodule CodeLeadWeb.TaskLive do
         follow_path: nil,
         follow_anchor: nil,
         folder_artifact: nil,
-        review_mode: nil,
         terminal_subscribed?: false,
         live_usage: nil,
         tick_timer: nil,
@@ -298,19 +297,6 @@ defmodule CodeLeadWeb.TaskLive do
     end
 
     {:noreply, socket}
-  end
-
-  def handle_event("set_review_mode", %{"mode" => mode}, socket) do
-    case mode do
-      "preview" ->
-        {:noreply, assign(socket, review_mode: :preview)}
-
-      "diff" ->
-        {:noreply, socket |> assign(review_mode: :diff) |> enter_diff(true)}
-
-      _unknown ->
-        {:noreply, socket}
-    end
   end
 
   ## Preview server
@@ -571,7 +557,6 @@ defmodule CodeLeadWeb.TaskLive do
     planning? = task.state == :planning
 
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
-    preview_src = preview_src(task)
     finalize = finalize_context(task, repository)
     agents = Map.new(Agents.list_agents(project.id), &{&1.id, &1})
     executor = task.agent_id && agents[task.agent_id]
@@ -583,8 +568,7 @@ defmodule CodeLeadWeb.TaskLive do
       task: task,
       page_title: task.title,
       repository: repository,
-      preview_available?: preview_src != nil,
-      preview_src: preview_src,
+      preview_available?: preview_available?(task),
       preview_command?: preview_command?(repository),
       preview_run: preview_run(socket),
       finalize_mode: finalize.mode,
@@ -730,11 +714,11 @@ defmodule CodeLeadWeb.TaskLive do
   defp cost_mode_hint(:free), do: "Locally hosted model — no per-token cost"
   defp cost_mode_hint(_mode), do: nil
 
-  defp preview_src(task) do
-    case PreviewGateway.impl().url_for(task) do
-      {:ok, url} -> url
-      {:error, _reason} -> nil
-    end
+  # The URL itself is never rendered here — the Open-preview link goes
+  # through `/preview/launch/:task_id`, so the gateway stays the only
+  # producer of browser-facing preview URLs.
+  defp preview_available?(task) do
+    match?({:ok, _url}, PreviewGateway.impl().url_for(task))
   end
 
   defp subscribe_terminal(%{assigns: %{terminal_subscribed?: true}} = socket), do: socket
@@ -817,9 +801,6 @@ defmodule CodeLeadWeb.TaskLive do
   defp board_path(project_id, nil), do: ~p"/projects/#{project_id}/board"
   defp board_path(project_id, column), do: ~p"/projects/#{project_id}/board?column=#{column}"
 
-  # First entry picks the primary view: work types with a visual result
-  # open on the live preview when one is available, everything else on
-  # the diff. The user's toggle choice sticks for the LiveView's life.
   defp enter_review(socket, entering?) do
     # Register as a preview viewer (no-op without a live session) and
     # pick up the session's current state.
@@ -832,28 +813,8 @@ defmodule CodeLeadWeb.TaskLive do
         do: assign(socket, :preview_run, preview_run(socket)),
         else: socket
 
-    socket =
-      case socket.assigns.review_mode do
-        nil ->
-          assign(
-            socket,
-            :review_mode,
-            default_review_mode(socket.assigns.task.work_type, socket.assigns.preview_available?)
-          )
-
-        _chosen ->
-          socket
-      end
-
-    if socket.assigns.review_mode == :diff do
-      enter_diff(socket, entering?)
-    else
-      socket
-    end
+    enter_diff(socket, entering?)
   end
-
-  defp default_review_mode(work_type, true) when work_type in [:design, :content], do: :preview
-  defp default_review_mode(_work_type, _preview_available?), do: :diff
 
   # Entering the tab always collapses back to the first file, and picks
   # up anything that went stale while another tab was on screen.
@@ -911,7 +872,6 @@ defmodule CodeLeadWeb.TaskLive do
          %{
            assigns: %{
              tab: :review,
-             review_mode: :diff,
              diff_stale?: true,
              diff_refresh_timer: nil
            }
@@ -928,7 +888,6 @@ defmodule CodeLeadWeb.TaskLive do
          %{
            assigns: %{
              tab: :review,
-             review_mode: :diff,
              diff_stale?: true,
              diff_loading?: false
            }
@@ -1256,9 +1215,7 @@ defmodule CodeLeadWeb.TaskLive do
           following?={@following?}
           executing?={@task.run_state == :executing}
           folder_artifact={@folder_artifact}
-          review_mode={@review_mode || :diff}
           preview_available?={@preview_available?}
-          preview_src={@preview_src}
           preview_command?={@preview_command?}
           preview_run={@preview_run}
         />
