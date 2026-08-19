@@ -5,7 +5,8 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
   gateway. What else happens is decided by the task's
   `CodeLeadWeb.PreviewProxy.Policy`: under the path gateway,
   root-relative `location` redirects are rewritten back onto the preview
-  prefix and the previewed app gets its own cookie jar on CodeLead's
+  prefix (unless the upstream, honoring `PREVIEW_BASE_PATH`, already
+  emitted it) and the previewed app gets its own cookie jar on CodeLead's
   origin by namespacing every cookie per task; under the subdomain
   gateway the preview owns a real origin and both rewrites retire.
   Bodies are never touched — base paths are the dev server's job via
@@ -79,8 +80,13 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
          {"location", "/" <> _rest = location},
          %Policy{rewrite_location?: true, mount_path: path},
          _secure?
-       ),
-       do: [{"location", path <> location}]
+       ) do
+    if already_prefixed?(location, path) do
+      [{"location", location}]
+    else
+      [{"location", path <> location}]
+    end
+  end
 
   defp rewrite_response_header(
          {"set-cookie", value},
@@ -91,6 +97,15 @@ defmodule CodeLeadWeb.PreviewProxy.Headers do
        do: namespace_cookie(value, prefix, path, secure?)
 
   defp rewrite_response_header(header, _policy, _secure?), do: [header]
+
+  # An upstream honoring PREVIEW_BASE_PATH emits locations already carrying
+  # the mount path; prepending again would double the prefix. The "/" and
+  # "?" boundaries keep /preview/41 from matching task 4's /preview/4.
+  defp already_prefixed?(location, path) do
+    location == path or
+      String.starts_with?(location, path <> "/") or
+      String.starts_with?(location, path <> "?")
+  end
 
   # The previewed app shares CodeLead's origin, so its cookies get their
   # own namespace: the name is prefixed (a previewed CodeLead can no

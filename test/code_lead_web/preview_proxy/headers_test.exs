@@ -207,6 +207,32 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
                {"x-upstream", "yes"}
              ]
     end
+
+    test "leaves locations the upstream already prefixed via PREVIEW_BASE_PATH alone" do
+      headers =
+        Headers.response_headers(
+          [
+            {"location", "/preview/7/users/log-in"},
+            {"location", "/preview/7"},
+            {"location", "/preview/7?x=1"}
+          ],
+          policy(),
+          :http
+        )
+
+      assert headers == [
+               {"location", "/preview/7/users/log-in"},
+               {"location", "/preview/7"},
+               {"location", "/preview/7?x=1"}
+             ]
+    end
+
+    test "still prefixes a location that only resembles the mount path" do
+      # Another task's prefix is not ours: the boundary check must not
+      # mistake /preview/71 for task 7's mount.
+      assert Headers.response_headers([{"location", "/preview/71/x"}], policy(), :http) ==
+               [{"location", "/preview/7/preview/71/x"}]
+    end
   end
 
   describe "subdomain policy" do

@@ -154,7 +154,10 @@ task's dev server under `/preview/<task_id>/` on the app's own origin,
 through whatever reverse proxy already fronts it. Previews open in
 their own browser tab via the Review tab's **Open preview** button.
 The proxy never rewrites response bodies, so an app that emits
-absolute asset paths must be told its base path. Terminal and
+absolute asset paths must be told its base path. Root-relative
+redirects are rewritten onto the prefix — unless the app, honoring
+`PREVIEW_BASE_PATH`, already emitted the prefix itself; those pass
+through untouched. Terminal and
 one-click preview sessions export `PREVIEW_BASE_PATH` (e.g.
 `/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the repository's
 declared port — unique per repository across the instance, so serve
