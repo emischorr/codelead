@@ -1,4 +1,4 @@
-# Git plumbing & workspace (last updated: 2026-08-15)
+# Git plumbing & workspace (last updated: 2026-08-20)
 
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
@@ -72,10 +72,58 @@ tasks use a task folder and skip the branch/push flow.
   (`HEAD:main`) and is never forced.
 - `teardown/2`: `keep: true` (cancel/inspection) leaves everything;
   `keep: false` (send-back-to-planning) removes the worktree and
-  deletes the local feature branch.
+  deletes the local feature branch. Removal is **verified** —
+  `Git.remove_worktree/2` reports `{:error, {:leftover, path}}` when the
+  directory survives instead of pretending — and `git worktree prune`
+  runs only on verified removal, because prune is repository-wide and
+  running it while a *sibling* worktree is unreachable would drop that
+  sibling's registration too. A teardown error never aborts the
+  transition that asked for it (already committed); it is logged,
+  recorded as a `task_steps` row, and flashed to the user, and the next
+  provisioning refuses to build on the leftover
+  (`{:workspace_blocked, path}` with a host-side remedy) rather than
+  dying on git's bare `already exists`.
+- File deletion inside the workspace goes through
+  `CodeLead.Workspace.Remover`: `rm_rf`, verify, and on `eacces` —
+  root-owned files a container-executed agent left behind; the
+  entrypoint chown is deliberately non-recursive — escalate to a
+  root-privileged `docker run --rm -v <parent>:<parent>
+  <MAINTENANCE_IMAGE> rm -rf <path>` through the already-mounted
+  socket. Installs without docker skip the escalation and surface the
+  leftover. As the safety invariant for automating a root `rm -rf`, the
+  remover refuses any path outside `Workspace.root/0`.
 - `spawn/3` opens an Erlang Port in the context directory with the
   decrypted project env injected — the stdio bridge the ACP driver
   attaches to.
+
+## Persisted paths are a cache, not the truth
+
+`repositories.base_clone_path` and `tasks.worktree_path` are absolute
+paths keyed on a `WORKSPACE_ROOT` that can move between boots (a
+deployment switching volumes). Trusting a stale one is how work gets
+lost: the image still carries a `/data` directory, so a row pointing
+there makes `ensure_clone` re-clone into the *container's ephemeral
+layer*, and everything committed against that clone dies with the next
+`docker compose up -d`
+([ADR-0012](adr/0012-workspace-path-reconciliation.md)). Two mechanisms
+keep that from happening again:
+
+- **Guarded resolvers.** Every consumer reads the base clone through
+  `Projects.base_clone_path/1`, and provisioning resolves the worktree
+  target the same way: a persisted path outside the current
+  `Workspace.root/0` (checked by `Workspace.under_root?/1`) is never
+  used — the canonical location is recomputed, an error is logged, and
+  the next provisioning re-persists the healed value.
+- **Boot reconciliation.** `CodeLead.Workspace.Reconciler` runs as a
+  blocking one-shot before Oban and the endpoint: rows pointing outside
+  the current root are rewritten to the recomputed location when the
+  files actually exist there (a volume migration), and `git worktree
+  repair` re-links every surviving worktree to its base clone — the
+  gitdir cross-pointers git itself persists are absolute too, and the
+  DB cannot see them. Genuinely lost paths are logged loudly and left
+  in place (the resolvers make them inert); nothing is ever deleted at
+  boot. Skipped in the test env
+  (`config :code_lead, reconcile_workspace_at_boot: false`).
 
 ## Reading current default-branch source
 

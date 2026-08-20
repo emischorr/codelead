@@ -119,6 +119,12 @@ defmodule CodeLead.Runtime.TaskRunner do
     end
   end
 
+  def dispatch_error({:provision, {:workspace_blocked, path}}) do
+    "could not prepare the workspace: a previous run left files at #{path} that the " <>
+      "server cannot delete (likely owned by root from a container run) — remove that " <>
+      "directory on the host, then retry"
+  end
+
   def dispatch_error({:provision, {:missing_execution_env, repo_name}}) do
     "this task is set to run in a container, but repository #{inspect(repo_name)} " <>
       "does not enable devcontainer execution — enable it in Settings → Project → " <>

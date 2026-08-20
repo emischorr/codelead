@@ -13,6 +13,8 @@ defmodule CodeLead.Projects do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodeLead.Accounts
   alias CodeLead.Git
   alias CodeLead.Projects.Project
@@ -20,6 +22,7 @@ defmodule CodeLead.Projects do
   alias CodeLead.Projects.Repository
   alias CodeLead.Repo
   alias CodeLead.Tasks.Task
+  alias CodeLead.Workspace
 
   @default_commit_path "artifacts"
 
@@ -118,6 +121,33 @@ defmodule CodeLead.Projects do
 
   @spec get_repository!(pos_integer()) :: Repository.t()
   def get_repository!(id), do: Repo.get!(Repository, id)
+
+  @doc """
+  Where the repository's managed base clone lives. The persisted path is
+  a cache keyed on a workspace root that can move between boots; one
+  recorded outside the current root is never trusted — it may point into
+  a container's ephemeral layer — and the canonical location is used
+  instead. Provisioning re-persists it on the next clone.
+  """
+  @spec base_clone_path(Repository.t()) :: String.t()
+  def base_clone_path(%Repository{base_clone_path: nil} = repository) do
+    Workspace.base_clone_path(repository.name, repository.id)
+  end
+
+  def base_clone_path(%Repository{base_clone_path: path} = repository) do
+    if Workspace.under_root?(path) do
+      path
+    else
+      recomputed = Workspace.base_clone_path(repository.name, repository.id)
+
+      Logger.error(
+        "repository #{repository.id}: recorded base clone at #{path} lies outside the " <>
+          "workspace root — using #{recomputed} instead"
+      )
+
+      recomputed
+    end
+  end
 
   @spec list_repositories(pos_integer()) :: [Repository.t()]
   def list_repositories(project_id) do

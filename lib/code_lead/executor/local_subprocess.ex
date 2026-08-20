@@ -6,6 +6,8 @@ defmodule CodeLead.Executor.LocalSubprocess do
 
   @behaviour CodeLead.Executor
 
+  require Logger
+
   alias CodeLead.Executor.Context
   alias CodeLead.Executor.EnvScrub
   alias CodeLead.Git
@@ -13,15 +15,13 @@ defmodule CodeLead.Executor.LocalSubprocess do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLead.Workspace
+  alias CodeLead.Workspace.Remover
 
   @impl CodeLead.Executor
   def provision(%Task{target: :repo, repository_id: repository_id} = task)
       when not is_nil(repository_id) do
     repository = Projects.get_repository!(repository_id)
-
-    base_path =
-      repository.base_clone_path || Workspace.base_clone_path(repository.name, repository.id)
-
+    base_path = Projects.base_clone_path(repository)
     forge = Git.forge(repository.git_url)
     token = forge_token(task.project_id, forge)
 
@@ -97,14 +97,15 @@ defmodule CodeLead.Executor.LocalSubprocess do
   end
 
   defp discard(%Context{type: :worktree} = context) do
-    Git.remove_worktree(context.base_clone_path, context.path)
+    result = Git.remove_worktree(context.base_clone_path, context.path)
+    # Independent of the removal outcome — and harmless when the branch
+    # is still pinned by a registered worktree (`branch -D` refuses).
     Git.delete_branch(context.base_clone_path, context.branch_name)
-    :ok
+    result
   end
 
   defp discard(%Context{type: :folder, path: path}) do
-    _ = File.rm_rf(path)
-    :ok
+    Remover.remove_dir(path)
   end
 
   # The base clone's own worktree registry — not the mere presence of a
@@ -115,7 +116,7 @@ defmodule CodeLead.Executor.LocalSubprocess do
   # and even a worktree of an entirely different repository. Reusing one
   # unchecked runs the agent in the wrong repo.
   defp ensure_worktree(task, repository, base_path) do
-    worktree_path = task.worktree_path || Workspace.worktree_path(task.id)
+    worktree_path = preferred_worktree_path(task)
 
     # The registry alone is not enough: it keeps listing a worktree
     # whose directory was removed until something prunes it.
@@ -139,11 +140,41 @@ defmodule CodeLead.Executor.LocalSubprocess do
   end
 
   defp provision_worktree(task, repository, base_path, worktree_path) do
-    # A no-op when the path is free; clears the orphan when it is not.
-    Git.remove_worktree(base_path, worktree_path)
-
-    with {:ok, _} <- add_worktree(task, repository, base_path, worktree_path) do
+    with :ok <- free_worktree_path(base_path, worktree_path),
+         {:ok, _} <- add_worktree(task, repository, base_path, worktree_path) do
       adopt_worktree(task, worktree_path, worktree_branch(task))
+    end
+  end
+
+  # A no-op when the path is free; clears the orphan when it is not. A
+  # leftover that survives removal must fail here, with a remedy — left
+  # alone, `git worktree add` dies on it with a bare "already exists".
+  defp free_worktree_path(base_path, worktree_path) do
+    case Git.remove_worktree(base_path, worktree_path) do
+      :ok -> :ok
+      {:error, {:leftover, _path}} -> {:error, {:workspace_blocked, worktree_path}}
+    end
+  end
+
+  # The persisted path is a cache keyed on a workspace root that can
+  # move between boots; trusting it blindly would *create* the worktree
+  # outside the volume (in a container, the ephemeral layer).
+  defp preferred_worktree_path(%Task{worktree_path: nil} = task) do
+    Workspace.worktree_path(task.id)
+  end
+
+  defp preferred_worktree_path(%Task{worktree_path: path} = task) do
+    if Workspace.under_root?(path) do
+      path
+    else
+      recomputed = Workspace.worktree_path(task.id)
+
+      Logger.error(
+        "task #{task.id}: recorded worktree at #{path} lies outside the workspace root — " <>
+          "provisioning at #{recomputed} instead"
+      )
+
+      recomputed
     end
   end
 

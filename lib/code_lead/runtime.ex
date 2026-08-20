@@ -27,10 +27,12 @@ defmodule CodeLead.Runtime do
   still veto (a failed push leaves the task in Review); only then is
   the state written, the worktree policy applied, and the stage's
   `on_enter/3` fired. Returns the reloaded task plus whatever
-  `prepare/2` produced.
+  `prepare/2` produced, plus the worktree policy's outcome — a discard
+  that leaves files behind does not undo the committed transition, but
+  the caller must be able to surface it.
   """
   @spec advance(Task.t(), {atom(), atom()}, keyword()) ::
-          {:ok, Task.t(), term()} | {:error, term()}
+          {:ok, Task.t(), term(), :ok | {:error, term()}} | {:error, term()}
   def advance(%Task{} = task, {_from, to} = edge_keys, opts) do
     workflow = Workflow.fetch!(task.workflow_key)
     target = Workflow.stage(workflow, to)
@@ -38,9 +40,9 @@ defmodule CodeLead.Runtime do
     with {:ok, edge} <- fetch_edge(workflow, task, edge_keys),
          {:ok, prepared} <- StageEffects.prepare(target.stage_type, task),
          {:ok, updated} <- Tasks.apply_transition(task, edge_keys, opts) do
-      apply_worktree_policy(task, edge.worktree_policy)
+      cleanup = apply_worktree_policy(task, edge.worktree_policy)
       StageEffects.on_enter(target.stage_type, updated, prepared)
-      {:ok, Tasks.get_task!(task.id), prepared}
+      {:ok, Tasks.get_task!(task.id), prepared, cleanup}
     end
   end
 
@@ -63,7 +65,7 @@ defmodule CodeLead.Runtime do
 
     task
     |> advance({:planning, :running}, Keyword.merge(opts, actor: :human, summary: summary))
-    |> drop_prepared()
+    |> to_result()
   end
 
   @doc """
@@ -91,7 +93,7 @@ defmodule CodeLead.Runtime do
         actor: :human,
         summary: "run cancelled — back to Planning (worktree kept)"
       )
-      |> drop_prepared()
+      |> to_result()
 
     # The worktree stays for inspection; the container is cattle and
     # goes. Restarting the task re-ensures it.
@@ -144,22 +146,30 @@ defmodule CodeLead.Runtime do
       prompt: feedback,
       summary: "changes requested: #{feedback}"
     )
-    |> drop_prepared()
+    |> to_result()
   end
 
   @doc """
   Review → Planning with a clean reset: the worktree is removed, the
   feature branch deleted, the session dropped — the spec is being
   rewritten, so prior context is discarded rather than carried forward.
+
+  A discard that leaves files behind (root-owned leftovers of a
+  container run) still transitions — the human's decision stands — but
+  comes back as `{:ok, task, {:cleanup_failed, reason}}` so the UI can
+  say so instead of flashing a clean success.
   """
-  @spec send_back_to_planning(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  @spec send_back_to_planning(Task.t()) ::
+          {:ok, Task.t()}
+          | {:ok, Task.t(), {:cleanup_failed, term()}}
+          | Tasks.transition_error()
   def send_back_to_planning(%Task{} = task) do
     task
     |> advance({:review, :planning},
       actor: :human,
       summary: "sent back to Planning — worktree, branch, and session discarded"
     )
-    |> drop_prepared()
+    |> to_result()
   end
 
   @doc """
@@ -174,7 +184,7 @@ defmodule CodeLead.Runtime do
       actor: :system,
       summary: "run completed — moved to Review"
     )
-    |> drop_prepared()
+    |> to_result()
   end
 
   @doc """
@@ -189,7 +199,13 @@ defmodule CodeLead.Runtime do
           | {:error, term()}
           | Tasks.transition_error()
   def approve(%Task{} = task) do
-    advance(task, {:review, :done}, actor: :human, summary: "approved — Done")
+    # The Review → Done edge keeps the worktree (pruning is the finalize
+    # outcome's call, applied in on_enter), so the cleanup element is
+    # structurally :ok and carries nothing worth surfacing.
+    case advance(task, {:review, :done}, actor: :human, summary: "approved — Done") do
+      {:ok, task, outcome, _cleanup} -> {:ok, task, outcome}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
@@ -218,7 +234,13 @@ defmodule CodeLead.Runtime do
   defp apply_worktree_policy(%Task{}, :keep), do: :ok
 
   # Only `approve/1` surfaces what the stage prepared; the rest keep the
-  # two-tuple their callers pattern-match on.
-  defp drop_prepared({:ok, task, _prepared}), do: {:ok, task}
-  defp drop_prepared({:error, reason}), do: {:error, reason}
+  # two-tuple their callers pattern-match on — extended by a
+  # `:cleanup_failed` element only when a discard actually left files
+  # behind, so `:keep`-edge callers never see a shape change.
+  defp to_result({:ok, task, _prepared, :ok}), do: {:ok, task}
+
+  defp to_result({:ok, task, _prepared, {:error, reason}}),
+    do: {:ok, task, {:cleanup_failed, reason}}
+
+  defp to_result({:error, reason}), do: {:error, reason}
 end

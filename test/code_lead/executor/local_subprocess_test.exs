@@ -111,6 +111,19 @@ defmodule CodeLead.Executor.LocalSubprocessTest do
       refute Projects.get_repository!(repository.id).base_clone_path == other_clone
     end
 
+    test "a recorded worktree path outside the workspace root is never trusted" do
+      %{task: task} = repo_task_setup()
+
+      # A row from a deployment whose WORKSPACE_ROOT has since moved —
+      # following it would provision outside the workspace volume.
+      {:ok, task} =
+        Tasks.set_execution_context(task, "/old-root/workspace/worktrees/task-#{task.id}", nil)
+
+      assert {:ok, context} = LocalSubprocess.provision(task)
+      assert context.path == Workspace.worktree_path(task.id)
+      assert Tasks.get_task!(task.id).worktree_path == context.path
+    end
+
     test "re-attaches a recorded branch whose worktree directory is gone" do
       %{task: task} = repo_task_setup()
       {:ok, context} = LocalSubprocess.provision(task)

@@ -20,6 +20,10 @@ defmodule CodeLead.Application do
         CodeLeadWeb.Telemetry,
         CodeLead.Repo,
         CodeLead.Vault,
+        # Blocking one-shot, before anything that can dispatch a run
+        # (Oban's dispatch queue included): heals persisted workspace
+        # paths after a WORKSPACE_ROOT move. Never fails boot.
+        CodeLead.Workspace.Reconciler,
         {Task.Supervisor, name: CodeLead.TaskSupervisor},
         {Oban, Application.fetch_env!(:code_lead, Oban)},
         {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},

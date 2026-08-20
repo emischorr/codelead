@@ -132,6 +132,39 @@ directories a failed pre-migration devcontainer attempt left behind — the
 daemon auto-creates the missing bind source, so an empty host-side
 `/data/workspace/…` tree may exist; remove it.
 
+**Paths recorded before the move heal themselves at boot.** The database
+holds absolute paths (base clones, task worktrees), and git's worktree
+metadata holds more; after the root moves the app rewrites the rows to the
+new location where the files exist, runs `git worktree repair`, and logs what
+it did — and it never follows a recorded path outside the current
+`WORKSPACE_ROOT`, so a stale row can't land a clone in the container's
+ephemeral layer again ([ADR-0012](adr/0012-workspace-path-reconciliation.md)).
+
+What it **cannot** heal: base clones that were (re)created *inside a
+container's ephemeral layer* on a stack that ran with a stale root — those
+died with the container, taking any commits that existed only there;
+worktrees checked out against such a clone hold their files but not their
+history. Recovering such a stack by hand:
+
+1. Copy anything wanted out of the affected
+   `$DATA_ROOT/workspace/worktrees/task-<n>` directories (the checked-out
+   files are intact).
+2. Clear the dead references so the next run starts fresh:
+
+   ```sql
+   UPDATE repositories SET base_clone_path = NULL WHERE base_clone_path LIKE '/data/%';
+   UPDATE tasks SET worktree_path = NULL, branch_name = NULL WHERE worktree_path LIKE '/data/%';
+   ```
+
+   (Also clear task rows whose worktree exists under the new root but whose
+   diff still errors with `not a git repository: /data/…` — their base clone
+   is gone and `git worktree repair` has nothing to repair against.)
+3. Remove the orphaned worktree directories — files a container run created
+   as root need root:
+   `docker compose exec -u 0 app rm -rf $DATA_ROOT/workspace/worktrees/task-<n>`.
+
+The next dispatch re-clones missing repositories under the bind mount.
+
 ### The docker socket
 
 The `app` service mounts `/var/run/docker.sock`, which is what lets a task

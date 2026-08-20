@@ -241,20 +241,41 @@ defmodule CodeLead.Git do
   end
 
   @doc """
-  Removes a worktree and prunes stale registrations.
+  Removes a worktree and prunes stale registrations. Removal is
+  verified: a directory that survives (root-owned files, a base clone
+  that cannot answer) is reported, not swallowed. Pruning only runs on
+  verified removal — `worktree prune` is repository-wide, and running
+  it while a sibling worktree is unreachable drops that sibling's
+  registration too.
   """
-  @spec remove_worktree(String.t(), String.t()) :: :ok
+  @spec remove_worktree(String.t(), String.t()) :: :ok | {:error, {:leftover, String.t()}}
   def remove_worktree(base_clone_path, worktree_path) do
     _ = git(base_clone_path, ["worktree", "remove", "--force", worktree_path])
-    _ = File.rm_rf(worktree_path)
-    _ = git(base_clone_path, ["worktree", "prune"])
-    :ok
+    _ = CodeLead.Workspace.Remover.remove_dir(worktree_path)
+
+    if File.exists?(worktree_path) do
+      {:error, {:leftover, worktree_path}}
+    else
+      _ = git(base_clone_path, ["worktree", "prune"])
+      :ok
+    end
   end
 
   @spec delete_branch(String.t(), String.t()) :: :ok
   def delete_branch(base_clone_path, branch) do
     _ = git(base_clone_path, ["branch", "-D", branch])
     :ok
+  end
+
+  @doc """
+  Heals the gitdir cross-pointers between a base clone and its
+  worktrees after the workspace root moved. With explicit paths git
+  repairs both link directions; the output names what was rewritten
+  (empty when everything already pointed right).
+  """
+  @spec repair_worktrees(String.t(), [String.t()]) :: {:ok, String.t()} | {:error, String.t()}
+  def repair_worktrees(base_clone_path, worktree_paths) do
+    git(base_clone_path, ["worktree", "repair" | worktree_paths])
   end
 
   @doc """

@@ -32,6 +32,8 @@ defmodule CodeLead.Finalizer do
   helper. See `CodeLead.Git` for why nothing is written to `.git/config`.
   """
 
+  require Logger
+
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Tasks.Task
@@ -98,7 +100,9 @@ defmodule CodeLead.Finalizer do
     after
       # Also on failure: a conflicted merge leaves the worktree mid-state,
       # and discarding the whole directory is simpler than `merge --abort`.
-      Git.remove_worktree(base_path, staging)
+      # A staging leftover is host-created and cosmetic — never fail Done
+      # for it.
+      remove_staging_worktree(base_path, staging)
     end
     |> case do
       {:ok, sha} ->
@@ -167,7 +171,7 @@ defmodule CodeLead.Finalizer do
          {:ok, _files} <- File.cp_r(artifact, dest),
          _commit = Git.commit_all(worktree, "CodeLead: artifact of #{task.title}"),
          {:ok, _} <- Git.push(worktree, branch, token: token) do
-      Git.remove_worktree(base_path, worktree)
+      remove_staging_worktree(base_path, worktree)
 
       {:ok,
        %{
@@ -264,10 +268,7 @@ defmodule CodeLead.Finalizer do
     end
   end
 
-  defp base_clone_path(%{base_clone_path: nil, name: name, id: id}),
-    do: Workspace.base_clone_path(name, id)
-
-  defp base_clone_path(%{base_clone_path: path}), do: path
+  defp base_clone_path(repository), do: Projects.base_clone_path(repository)
 
   defp merge_message(%Task{id: id, title: title}, :squash),
     do: "CodeLead: #{title} (task ##{id})"
@@ -398,6 +399,13 @@ defmodule CodeLead.Finalizer do
 
   defp forge_token(_project_id, :other), do: nil
   defp forge_token(project_id, {kind, _owner, _repo}), do: Projects.forge_token(project_id, kind)
+
+  defp remove_staging_worktree(base_path, staging) do
+    case Git.remove_worktree(base_path, staging) do
+      :ok -> :ok
+      {:error, {:leftover, path}} -> Logger.warning("finalizer: staging worktree left at #{path}")
+    end
+  end
 
   defp pr_body(task) do
     task.project_id
