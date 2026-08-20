@@ -35,6 +35,20 @@ defmodule CodeLeadWeb.FlashMessages do
   def transition_error(other), do: "Action failed: #{inspect(other)}"
 
   @doc """
+  Explains a teardown that could not finish. The transition itself went
+  through — this warns about what stayed behind on disk.
+  """
+  @spec cleanup_warning(term()) :: String.t()
+  def cleanup_warning({tag, path}) when tag in [:leftover, :leftover_root_files] do
+    "Sent back to Planning, but the worktree could not be removed — files at #{path} " <>
+      "were left behind (likely written as root by a container run). Remove the " <>
+      "directory manually; the next run will not reuse it."
+  end
+
+  def cleanup_warning(other),
+    do: "Sent back to Planning, but cleaning the workspace failed: #{inspect(other)}"
+
+  @doc """
   Explains why Approve → Done could not finalize the work product, in
   terms of what the operator has to change.
   """

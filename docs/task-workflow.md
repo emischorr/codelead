@@ -41,7 +41,7 @@ it transcribes spec §4 and fails if the definition drifts from it.
 | `retry_run/1` | human | running, failed | running, queued | clears attention |
 | `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process and releases the task container (`release_context/1` — recreated on the next start) |
 | `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session — and the task container, which the rework reuses; feedback stored in `next_prompt` |
-| `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch, the task container, and the agent home |
+| `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch, the task container, and the agent home. The transition commits even when file removal fails (root-owned leftovers of a container run) — the failure comes back as `{:ok, task, {:cleanup_failed, reason}}`, is flashed, and lands as a task step; the next dispatch refuses to build on the leftover with a host-side remedy |
 | `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned — the task container is removed either way (cattle) |
 | `archive/1` / `unarchive/1` | human | done | (state unchanged) | sets/clears `archived_at`; board/list exclude archived |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
@@ -245,7 +245,11 @@ real interruptions.
 
 `send_back_to_planning/1` discards the worktree, branch, and ACP
 session, but **keeps** the transcript: history the human may still want
-to read is not context the next run would inherit.
+to read is not context the next run would inherit. The discard runs
+after the DB write and cannot roll it back — a removal that leaves
+files behind surfaces (flash + task step + log) instead of failing the
+human's decision; see `docs/git-workspace.md` for the verified-removal
+mechanics.
 
 Board notifications are owned by `CodeLead.Tasks` itself: every task
 write (transitions, `update_task`, archive/unarchive, attention

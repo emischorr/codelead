@@ -16,6 +16,19 @@ defmodule CodeLead.Workspace do
     Application.fetch_env!(:code_lead, :workspace_root)
   end
 
+  @doc """
+  Whether a path lies inside the current workspace root. Persisted
+  absolute paths are a cache keyed on a root that can move between
+  boots (a `WORKSPACE_ROOT` change), so every consumer of a stored
+  path must validate it with this before trusting it.
+  """
+  @spec under_root?(String.t()) :: boolean()
+  def under_root?(path) do
+    root = Path.expand(root())
+    expanded = Path.expand(path)
+    expanded == root or String.starts_with?(expanded, root <> "/")
+  end
+
   @spec base_clone_path(String.t(), pos_integer()) :: String.t()
   def base_clone_path(repository_name, repository_id) do
     Path.join([root(), "repos", "#{sanitize(repository_name)}-#{repository_id}"])

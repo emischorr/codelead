@@ -349,6 +349,32 @@ defmodule CodeLead.Executor.DevcontainerTest do
       refute File.dir?(Workspace.agent_home(task.id))
       refute File.dir?(context.path)
     end
+
+    test "keep: false surfaces a worktree the server cannot delete" do
+      use_docker("running")
+      use_devcontainer("success")
+      %{task: task} = container_task_setup()
+      {:ok, context} = Devcontainer.provision(task)
+
+      # A subtree the app's own uid cannot delete — what the container
+      # agent leaves behind as root. The fake docker's `run` is inert,
+      # so the remover's escalation changes nothing here.
+      locked = Path.join([context.path, "blocked", "locked"])
+      File.mkdir_p!(locked)
+      File.write!(Path.join(locked, "file.txt"), "unremovable")
+      File.chmod!(locked, 0o555)
+
+      on_exit(fn ->
+        _ = File.chmod(locked, 0o755)
+        _ = File.rm_rf(context.path)
+      end)
+
+      assert {:error, {:leftover, leftover}} = Devcontainer.teardown(context, keep: false)
+      assert leftover == context.path
+
+      # The rest of the discard still ran: environment and agent home gone.
+      refute File.dir?(Workspace.agent_home(task.id))
+    end
   end
 
   describe "ensure_for_task/1" do

@@ -36,6 +36,7 @@ defmodule CodeLead.Executor.Devcontainer do
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLead.Workspace
+  alias CodeLead.Workspace.Remover
 
   @impl CodeLead.Executor
   def provision(%Task{target: :repo, repository_id: repository_id} = task)
@@ -100,8 +101,14 @@ defmodule CodeLead.Executor.Devcontainer do
     if Keyword.get(opts, :keep, true) do
       :ok
     else
-      _ = File.rm_rf(Workspace.agent_home(task_id))
-      LocalSubprocess.teardown(context, keep: false)
+      home_result = Remover.remove_dir(Workspace.agent_home(task_id))
+
+      # The worktree is the state a leftover blocks re-provisioning on,
+      # so its error outranks a lingering agent home.
+      case LocalSubprocess.teardown(context, keep: false) do
+        :ok -> home_result
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

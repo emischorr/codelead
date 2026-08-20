@@ -1105,6 +1105,12 @@ defmodule CodeLeadWeb.TaskLive do
       {:ok, _task} ->
         {:noreply, load_task(socket)}
 
+      # The transition committed, but the discard left files on disk —
+      # say so instead of flashing a clean success.
+      {:ok, _task, {:cleanup_failed, reason}} ->
+        {:noreply,
+         socket |> put_flash(:error, FlashMessages.cleanup_warning(reason)) |> load_task()}
+
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, FlashMessages.transition_error(reason))}
     end

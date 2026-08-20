@@ -55,8 +55,13 @@ defmodule CodeLead.Executor do
   Tears the context down. `keep: true` leaves everything on disk (the
   cancel/inspection path); `keep: false` removes the worktree/folder
   and deletes the feature branch (the send-back-to-planning path).
+
+  An error means durable state could not be removed — files are still
+  on disk. Callers proceed and surface it rather than abort: the
+  transition that asked for the teardown has already committed, and the
+  next provisioning refuses to build on the leftover.
   """
-  @callback teardown(context :: Context.t(), opts :: keyword()) :: :ok
+  @callback teardown(context :: Context.t(), opts :: keyword()) :: :ok | {:error, term()}
 
   @doc """
   The configured executor implementation.

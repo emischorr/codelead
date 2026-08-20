@@ -25,6 +25,8 @@ defmodule CodeLead.Planning do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodeLead.AdvisoryRun
   alias CodeLead.AgentDriver.LlmApi
   alias CodeLead.Agents
@@ -202,7 +204,10 @@ defmodule CodeLead.Planning do
             {:error, reason} -> failed("survey failed: #{inspect(reason)}")
           end
         after
-          Git.remove_worktree(base_clone_path, worktree_path)
+          case Git.remove_worktree(base_clone_path, worktree_path) do
+            :ok -> :ok
+            {:error, {:leftover, path}} -> Logger.warning("survey worktree left at #{path}")
+          end
         end
 
       {:error, reason} ->
@@ -213,9 +218,7 @@ defmodule CodeLead.Planning do
   # A disposable, detached checkout of current default-branch source:
   # no feature branch, nothing committed, removed when the run ends.
   defp provision_survey(%Task{} = task, repository) do
-    base_clone_path =
-      repository.base_clone_path || Workspace.base_clone_path(repository.name, repository.id)
-
+    base_clone_path = Projects.base_clone_path(repository)
     worktree_path = Workspace.survey_worktree_path(task.id)
     token = forge_token(task.project_id, Git.forge(repository.git_url))
 
@@ -320,11 +323,12 @@ defmodule CodeLead.Planning do
   defp repo_context(%Task{repository_id: repository_id}) do
     repository = Projects.get_repository!(repository_id)
 
+    path = Projects.base_clone_path(repository)
+
     # `ls-tree` against the fetched ref, not `ls-files` against the base
     # clone's index: `Git.ensure_clone/3` only fetches, so the clone's
     # own checkout is frozen at whatever it was first cloned at.
-    with path when is_binary(path) <- repository.base_clone_path,
-         true <- File.dir?(path),
+    with true <- File.dir?(path),
          {:ok, output} <-
            Git.git(path, ["ls-tree", "-r", "--name-only", "origin/#{repository.default_branch}"]) do
       files = output |> String.split("\n", trim: true) |> Enum.take(@file_tree_limit)

@@ -19,6 +19,8 @@ defmodule CodeLead.Runtime.StageEffects do
   rather than dangerous.
   """
 
+  require Logger
+
   alias CodeLead.Executor
   alias CodeLead.Executor.Context
   alias CodeLead.Preview
@@ -77,8 +79,12 @@ defmodule CodeLead.Runtime.StageEffects do
   Two callers, deliberately: the `:discard` worktree policy on an edge,
   and a finalize outcome asking to prune. Same teardown either way — the
   difference is only *when* it is known to be safe.
+
+  An error means files survived the teardown. The transition that asked
+  for it has already committed, so it is audited here — log plus task
+  step — and reported for the caller to surface, never to roll back.
   """
-  @spec discard_context(Task.t()) :: :ok
+  @spec discard_context(Task.t()) :: :ok | {:error, term()}
   def discard_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
   def discard_context(%Task{worktree_path: nil, target: :repo} = task) do
@@ -86,13 +92,18 @@ defmodule CodeLead.Runtime.StageEffects do
     # No worktree was ever provisioned, but ephemeral resources (a
     # container) may still exist under the task's identity.
     context = rebuilt_context(%{task | worktree_path: CodeLead.Workspace.worktree_path(task.id)})
-    context.executor.teardown(context, keep: true)
+    _ = context.executor.teardown(context, keep: true)
+    :ok
   end
 
   def discard_context(%Task{} = task) do
     Preview.stop(task.id)
     context = rebuilt_context(task)
-    context.executor.teardown(context, keep: false)
+
+    case context.executor.teardown(context, keep: false) do
+      :ok -> :ok
+      {:error, reason} -> audit_leftover(task, reason)
+    end
   end
 
   @doc """
@@ -113,7 +124,9 @@ defmodule CodeLead.Runtime.StageEffects do
         | worktree_path: task.worktree_path || CodeLead.Workspace.worktree_path(task.id)
       })
 
-    context.executor.teardown(context, keep: true)
+    # keep: true removes nothing durable, so there is nothing to report.
+    _ = context.executor.teardown(context, keep: true)
+    :ok
   end
 
   # The reconstruction the Executor moduledoc warns about: no env, no
@@ -125,7 +138,7 @@ defmodule CodeLead.Runtime.StageEffects do
       type: :worktree,
       path: task.worktree_path,
       task_id: task.id,
-      base_clone_path: repository.base_clone_path,
+      base_clone_path: Projects.base_clone_path(repository),
       branch_name: task.branch_name,
       executor: Executor.for_task(task)
     }
@@ -138,6 +151,26 @@ defmodule CodeLead.Runtime.StageEffects do
       task_id: task.id,
       executor: Executor.for_task(task)
     }
+  end
+
+  defp audit_leftover(%Task{} = task, {tag, path} = reason)
+       when tag in [:leftover, :leftover_root_files] do
+    Logger.warning("task #{task.id}: worktree could not be removed — leftover at #{path}")
+
+    Tasks.record_step(
+      task.id,
+      :transition,
+      :system,
+      "runtime",
+      "worktree could not be removed — leftover at #{path}; remove it manually"
+    )
+
+    {:error, reason}
+  end
+
+  defp audit_leftover(%Task{} = task, reason) do
+    Logger.warning("task #{task.id}: context teardown failed — #{inspect(reason)}")
+    {:error, reason}
   end
 
   @doc """
@@ -175,7 +208,9 @@ defmodule CodeLead.Runtime.StageEffects do
   defp prune_context(%Task{} = task, :keep_context), do: release_context(task)
 
   defp prune_context(%Task{} = task, :prune_context) do
-    discard_context(task)
+    # A leftover is logged and recorded inside; the path is dead to the
+    # task either way — the work already landed on the remote.
+    _ = discard_context(task)
     {:ok, _task} = Tasks.clear_worktree_path(task)
     :ok
   end

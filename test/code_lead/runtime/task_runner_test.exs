@@ -40,6 +40,14 @@ defmodule CodeLead.Runtime.TaskRunnerTest do
       assert message =~ "does not appear to be a git repository"
     end
 
+    test "names the blocked path and the host-side remedy for a stuck leftover" do
+      message =
+        TaskRunner.dispatch_error({:provision, {:workspace_blocked, "/data/worktrees/task-7"}})
+
+      assert message =~ "/data/worktrees/task-7"
+      assert message =~ "remove that directory on the host"
+    end
+
     test "falls back to inspect for unrecognized reasons" do
       assert TaskRunner.dispatch_error(:invalid_state) == ":invalid_state"
     end

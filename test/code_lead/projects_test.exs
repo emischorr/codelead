@@ -316,6 +316,30 @@ defmodule CodeLead.ProjectsTest do
     end
   end
 
+  describe "base_clone_path/1" do
+    test "trusts a persisted path under the workspace root" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      under_root = CodeLead.Workspace.base_clone_path("elsewhere", 999)
+      {:ok, repository} = Projects.update_repository(repository, %{base_clone_path: under_root})
+
+      assert Projects.base_clone_path(repository) == under_root
+    end
+
+    test "recomputes when the row is empty or points outside the root" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      canonical = CodeLead.Workspace.base_clone_path(repository.name, repository.id)
+
+      assert Projects.base_clone_path(repository) == canonical
+
+      {:ok, stale} =
+        Projects.update_repository(repository, %{base_clone_path: "/old-root/repos/gone"})
+
+      assert Projects.base_clone_path(stale) == canonical
+    end
+  end
+
   describe "change_project/2" do
     test "rejects negative budgets" do
       changeset = Projects.change_project(%Project{}, %{name: "x", budget_limit_cents: -1})

@@ -30,6 +30,7 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
   alias CodeLead.Git
   alias CodeLead.Tasks
   alias CodeLead.Workspace
+  alias CodeLead.Workspace.Remover
 
   @switches [force: :boolean]
   @live_states [:queued, :dispatched, :executing]
@@ -44,9 +45,20 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
 
     root = Workspace.root()
 
+    # Verified removal with the docker-root fallback: container runs
+    # leave root-owned files a plain rm_rf cannot delete. A surviving
+    # leftover warns instead of raising — a reset should not die halfway.
     Enum.each(
       ["worktrees", "tasks", "surveys", "merges", "agent-homes"],
-      &File.rm_rf!(Path.join(root, &1))
+      fn dir ->
+        case Remover.remove_dir(Path.join(root, dir)) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Mix.shell().error("could not fully remove #{dir}: #{inspect(reason)}")
+        end
+      end
     )
 
     Enum.each(base_clones(root), &Git.git(&1, ["worktree", "prune"]))

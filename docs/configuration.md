@@ -42,6 +42,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `PREVIEW_RELAY_IMAGE` | `alpine/socat` | Image the preview relay sidecar runs. Pulled on the first container-task preview; override for mirrored/air-gapped registries — any image whose entrypoint is `socat` works. |
 | `PREVIEW_IDLE_MINUTES` | `30` | How long a one-click preview server keeps running with nobody on the Review tab before it stops itself. |
 | `PREVIEW_START_TIMEOUT_SECONDS` | `120` | How long a started preview command gets to answer on the preview port before the session gives up and surfaces its log tail. |
+| `MAINTENANCE_IMAGE` | `alpine:3.20` | Image `CodeLead.Workspace.Remover` uses to delete root-owned leftovers of container runs (a short-lived `docker run … rm -rf` over the mounted socket). Any image with a POSIX `rm` works; override for mirrored/air-gapped registries. Installs without docker never use it — blocked deletions surface for manual cleanup instead. |
 | `PREVIEW_DOMAIN` | — | Unset (the convention), previews are served at `/preview/<task_id>/` on the app's own origin with zero configuration. Set to a wildcard-DNS'd domain (e.g. `preview.example.com`) to switch the **whole instance** to per-task subdomain previews at `task-<id>.$PREVIEW_DOMAIN` — for apps that break under path-prefix hosting. See [Subdomain previews](#subdomain-previews-preview_domain). |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
