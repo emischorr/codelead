@@ -20,9 +20,11 @@ defmodule CodeLeadWeb.DashboardLive do
   alias CodeLead.Accounts
   alias CodeLead.Agents
   alias CodeLead.Costs
+  alias CodeLead.Preview
   alias CodeLead.Projects
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
+  alias CodeLead.Terminal
 
   @window_days 14
   @refresh_ms 800
@@ -32,6 +34,11 @@ defmodule CodeLeadWeb.DashboardLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Tasks.subscribe_org()
+      # Before the snapshot below, deliberately: an event racing the
+      # registry read then sits in the mailbox and is applied on top of
+      # it. Reading first and subscribing after would drop it forever.
+      Preview.subscribe_org()
+      Terminal.subscribe_org()
       Process.send_after(self(), :periodic, @periodic_ms)
     end
 
@@ -42,7 +49,8 @@ defmodule CodeLeadWeb.DashboardLive do
        organization: Accounts.get_organization!(),
        refresh_timer: nil
      )
-     |> load_dashboard()}
+     |> load_dashboard()
+     |> assign_sessions()}
   end
 
   ## Events
@@ -61,7 +69,18 @@ defmodule CodeLeadWeb.DashboardLive do
   # rolls the page over UTC midnight.
   def handle_info(:periodic, socket) do
     Process.send_after(self(), :periodic, @periodic_ms)
-    {:noreply, load_dashboard(socket)}
+    # Also the session reconcile: a session killed without running
+    # `terminate/2` announces no close, so its id would linger in the
+    # sets until a read of the registries puts them straight.
+    {:noreply, socket |> load_dashboard() |> assign_sessions()}
+  end
+
+  def handle_info({:preview_session, lifecycle, task_id}, socket) do
+    {:noreply, put_preview_session(socket, lifecycle, task_id)}
+  end
+
+  def handle_info({:terminal_session, lifecycle, task_id}, socket) do
+    {:noreply, put_terminal_session(socket, lifecycle, task_id)}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}
@@ -284,6 +303,28 @@ defmodule CodeLeadWeb.DashboardLive do
               tone={(@stalled_count > 0 && :warn) || :ok}
             />
           </section>
+
+          <%!-- What a restart would interrupt: since ADR-0013 a graceful
+          shutdown stops every session, so these are the pre-upgrade check.
+          Tone is :run rather than :warn — someone working is not a defect. --%>
+          <section class="grid grid-cols-2 gap-3.5">
+            <.stat_tile
+              id="tile-previews"
+              icon="hero-window"
+              label="Preview servers"
+              value={to_string(MapSet.size(@preview_task_ids))}
+              detail={session_detail(@preview_task_ids, @session_titles, "None running")}
+              tone={(MapSet.size(@preview_task_ids) > 0 && :run) || :neutral}
+            />
+            <.stat_tile
+              id="tile-terminals"
+              icon="hero-command-line"
+              label="Terminal sessions"
+              value={to_string(MapSet.size(@terminal_task_ids))}
+              detail={session_detail(@terminal_task_ids, @session_titles, "None open")}
+              tone={(MapSet.size(@terminal_task_ids) > 0 && :run) || :neutral}
+            />
+          </section>
         </div>
       </div>
     </Layouts.app>
@@ -342,6 +383,50 @@ defmodule CodeLeadWeb.DashboardLive do
     do: assign(socket, refresh_timer: Process.send_after(self(), :refresh, @refresh_ms))
 
   defp schedule_refresh(socket), do: socket
+
+  # The registries are the process truth; the org-wide broadcasts keep
+  # the sets exact between reads. Deliberately outside `load_dashboard/1`
+  # — a preview starting must not cost ~17 grouped queries.
+  defp assign_sessions(socket) do
+    socket
+    |> assign(
+      preview_task_ids: MapSet.new(Preview.active_task_ids()),
+      terminal_task_ids: MapSet.new(Terminal.active_task_ids())
+    )
+    |> assign_session_titles()
+  end
+
+  defp assign_session_titles(socket) do
+    ids =
+      socket.assigns.preview_task_ids
+      |> MapSet.union(socket.assigns.terminal_task_ids)
+      |> MapSet.to_list()
+
+    assign(socket, session_titles: Tasks.titles(ids))
+  end
+
+  # A close is a delete, never a recount: the session broadcasts from
+  # `terminate/2` while it is still registered, so re-reading the
+  # registry here would count it one too many — and nothing would follow
+  # to correct it before the next tick.
+  defp put_preview_session(socket, lifecycle, task_id) do
+    socket
+    |> assign(
+      preview_task_ids: apply_lifecycle(socket.assigns.preview_task_ids, lifecycle, task_id)
+    )
+    |> assign_session_titles()
+  end
+
+  defp put_terminal_session(socket, lifecycle, task_id) do
+    socket
+    |> assign(
+      terminal_task_ids: apply_lifecycle(socket.assigns.terminal_task_ids, lifecycle, task_id)
+    )
+    |> assign_session_titles()
+  end
+
+  defp apply_lifecycle(task_ids, :opened, task_id), do: MapSet.put(task_ids, task_id)
+  defp apply_lifecycle(task_ids, :closed, task_id), do: MapSet.delete(task_ids, task_id)
 
   # The month-to-date total is only ever the budget meter's numerator,
   # so with no limit configured it is two queries nobody reads.
@@ -402,6 +487,27 @@ defmodule CodeLeadWeb.DashboardLive do
       nil -> empty_message
       task -> "Oldest #{Format.relative(task.at)}"
     end
+  end
+
+  # Two names then a tally: the detail line is one truncated row, and an
+  # operator needs to recognise whose session it is, not read a manifest.
+  # Sorted because a MapSet has no order and the line would otherwise
+  # reshuffle itself between renders.
+  defp session_detail(task_ids, titles, empty_message) do
+    case Enum.sort(task_ids) do
+      [] -> empty_message
+      ids -> ids |> Enum.map(&task_label(&1, Map.get(titles, &1))) |> summarize(2)
+    end
+  end
+
+  defp task_label(task_id, nil), do: "##{task_id}"
+  defp task_label(task_id, title), do: "##{task_id} #{title}"
+
+  defp summarize(labels, limit) when length(labels) <= limit, do: Enum.join(labels, " · ")
+
+  defp summarize(labels, limit) do
+    {shown, rest} = Enum.split(labels, limit)
+    Enum.join(shown ++ ["+#{length(rest)} more"], " · ")
   end
 
   defp project_name(projects_by_id, project_id) do

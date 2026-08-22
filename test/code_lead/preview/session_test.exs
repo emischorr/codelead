@@ -2,6 +2,7 @@ defmodule CodeLead.Preview.SessionTest do
   # async: false — overrides the preview timeout config keys.
   use ExUnit.Case, async: false
 
+  alias CodeLead.Preview
   alias CodeLead.Preview.Session
 
   setup do
@@ -144,6 +145,19 @@ defmodule CodeLead.Preview.SessionTest do
     assert_receive {:preview_state, ^task_id, :ready}, 3_000
     refute_receive {:preview_state, ^task_id, :stopped}, 300
     assert GenServer.call(pid, :status) == :ready
+  end
+
+  test "announces its open and close org-wide", %{task_id: task_id} do
+    :ok = Preview.subscribe_org()
+
+    pid = start_supervised!({Session, start_arg(task_id, %{})})
+    assert_receive {:preview_session, :opened, ^task_id}, 2_000
+
+    ref = Process.monitor(pid)
+    assert GenServer.call(pid, :stop) == :ok
+
+    assert_receive {:preview_session, :closed, ^task_id}, 2_000
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
   end
 
   test "a supervisor shutdown runs the stopper", %{task_id: task_id} do

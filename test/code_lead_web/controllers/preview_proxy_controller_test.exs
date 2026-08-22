@@ -217,4 +217,63 @@ defmodule CodeLeadWeb.PreviewProxyControllerTest do
       assert conn.resp_body =~ "Task not found"
     end
   end
+
+  # Async-safe without any config juggling: the breaker keys on
+  # {task id, hashed session token}, and both are fresh per test.
+  describe "reload loop breaker" do
+    setup [:register_and_log_in_user, :task_with_upstream]
+
+    defp navigate(conn, path, headers \\ [{"sec-fetch-dest", "document"}]) do
+      Enum.reduce(headers, conn, fn {name, value}, acc ->
+        Plug.Conn.put_req_header(acc, name, value)
+      end)
+      |> get(path)
+    end
+
+    test "breaks the loop with the diagnostic instead of proxying", %{conn: conn, task: task} do
+      for _ <- 1..4, do: navigate(conn, "/preview/#{task.id}/")
+
+      last = navigate(conn, "/preview/#{task.id}/")
+
+      assert last.status == 200
+      assert last.resp_body =~ "This preview kept reloading itself"
+      # The upstream echo is absent — it was never dialed.
+      refute last.resp_body =~ "GET /"
+    end
+
+    test "the bypass link lets it through again", %{conn: conn, task: task} do
+      for _ <- 1..5, do: navigate(conn, "/preview/#{task.id}/")
+
+      bounce = navigate(conn, "/preview/#{task.id}/?_clp_loop_bypass=1")
+
+      assert bounce.status == 302
+      assert redirected_to(bounce) == "/preview/#{task.id}/"
+
+      for _ <- 1..8 do
+        assert navigate(conn, "/preview/#{task.id}/info").status == 200
+      end
+    end
+
+    test "subresources never trip it", %{conn: conn, task: task} do
+      for _ <- 1..20 do
+        resp = navigate(conn, "/preview/#{task.id}/info", [{"sec-fetch-dest", "empty"}])
+        assert resp.status == 200
+        assert resp.resp_body =~ "GET /info"
+      end
+    end
+
+    test "an explicit browser refresh never trips it", %{conn: conn, task: task} do
+      headers = [{"sec-fetch-dest", "document"}, {"cache-control", "max-age=0"}]
+
+      for _ <- 1..20 do
+        assert navigate(conn, "/preview/#{task.id}/info", headers).status == 200
+      end
+    end
+
+    test "the bare-path redirect leg is not counted", %{conn: conn, task: task} do
+      for _ <- 1..20 do
+        assert navigate(conn, "/preview/#{task.id}").status == 302
+      end
+    end
+  end
 end

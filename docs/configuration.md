@@ -173,7 +173,7 @@ resize channel and not something to set or rely on (ADR-0010):
 | Stack | Recipe |
 |---|---|
 | Vite | `vite --port "$PREVIEW_PORT" --base "$PREVIEW_BASE_PATH/"` |
-| Phoenix | `PORT="$PREVIEW_PORT" mix phx.server` with `url: [path: System.get_env("PREVIEW_BASE_PATH", "/")]` in the endpoint config (read the env in `dev.exs` at boot, or in `config/runtime.exs`) |
+| Phoenix | `PORT="$PREVIEW_PORT" mix phx.server` with `url: [path: System.get_env("PREVIEW_BASE_PATH", "/")]` in the endpoint config (read the env in `dev.exs` at boot, or in `config/runtime.exs`) — **and the three things that setting cannot reach**, below |
 | Next.js | `next dev -p "$PREVIEW_PORT"` with `basePath: process.env.PREVIEW_BASE_PATH ?? ""` in `next.config` |
 | Rails | `rails server -p "$PREVIEW_PORT"` with `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]` |
 | Plain static server | serve the directory on `$PREVIEW_PORT`; relative asset paths need nothing more |
@@ -183,6 +183,55 @@ These recipes matter only under the default path gateway. Under
 `PREVIEW_BASE_PATH` is empty, so the same commands degrade gracefully
 to a plain `--port` — an app that cannot be path-prefix-hosted at all
 is exactly what that gateway exists for.
+
+#### When the preview tab flickers
+
+`url: [path: …]` (and its equivalents above) covers what the *router*
+emits — `~p` routes and static paths. It reaches nothing that lives
+outside the router, and a Phoenix app ships three such things by
+default:
+
+- **The LiveSocket path.** `assets/js/app.js` carries a literal
+  `new LiveSocket("/live", …)` straight from the generator. Under a
+  path preview that socket opens against **CodeLead's own** LiveView
+  endpoint, which completes the upgrade and then rejects the join — the
+  session token was signed by a different `secret_key_base`. The
+  client reads that as `stale` and falls back to a full page load, so
+  **the preview reloads itself a couple of times a second, forever**.
+  If a LiveView preview flickers, this is why. Render the path instead
+  of hardcoding it:
+
+  ```heex
+  <%!-- root.html.heex --%>
+  <meta name="live-socket-path" content={MyAppWeb.Endpoint.path("/live")} />
+  ```
+  ```js
+  // assets/js/app.js
+  const path = document
+    .querySelector("meta[name='live-socket-path']")
+    .getAttribute("content")
+  const liveSocket = new LiveSocket(path, Socket, { /* … */ })
+  ```
+
+  `Phoenix.Endpoint.path/1` applies the configured `:url` `:path`, so
+  this stays `/live` when `PREVIEW_BASE_PATH` is unset — nothing to
+  undo in production.
+
+- **Absolute `url()` in CSS.** `url("/fonts/x.woff2")` misses the mount
+  and 404s against CodeLead. Make it relative to the stylesheet, which
+  resolves under any mount — counting the levels from where the
+  *bundle* lands, not the source: from `assets/css/app.css` up to a
+  top-level `fonts/` that is `url("../../fonts/x.woff2")`.
+
+- **Hand-written literal `href`/`src`.** A stray `href="/"` in a layout
+  walks the user out of the preview and into CodeLead. Use `~p`.
+
+CodeLead notices the reload loop and breaks it: repeated navigations to
+the same `/preview/<id>/` URL get a diagnostic page naming these three
+causes instead of another proxied response. The page carries a
+one-click bypass, and `PREVIEW_LOOP_BREAKER=off` disarms the check
+instance-wide. It is a *diagnostic*, not a fix — bodies are still never
+rewritten.
 
 ### Cookies in the preview (path gateway)
 

@@ -105,4 +105,23 @@ defmodule CodeLead.TasksBoardEventsTest do
       assert Tasks.commit_notes([]) == %{}
     end
   end
+
+  describe "titles/1" do
+    test "keys titles by id, skipping ids without a task" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "Add search"})
+      gone = System.unique_integer([:positive])
+
+      titles = Tasks.titles([task.id, gone])
+
+      assert titles[task.id] == "Add search"
+      # A live session can outlive its task; the caller falls back to
+      # the bare id rather than this raising.
+      refute Map.has_key?(titles, gone)
+    end
+
+    test "asks nothing of the database for an empty list" do
+      assert Tasks.titles([]) == %{}
+    end
+  end
 end

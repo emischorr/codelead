@@ -54,6 +54,9 @@ defmodule CodeLead.Application do
             id: CodeLead.Executor.Devcontainer.Bootstrap,
             restart: :temporary
           ),
+          # Before the endpoint: the path gateway's reload-loop breaker
+          # must own its state before a request can count against it.
+          CodeLeadWeb.PreviewProxy.LoopBreaker,
           # Start to serve requests, typically the last entry
           CodeLeadWeb.Endpoint
         ]

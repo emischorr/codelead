@@ -45,6 +45,10 @@ defmodule CodeLead.Preview.Session do
     Process.flag(:trap_exit, true)
     port = if port_opener, do: port_opener.()
     Preview.broadcast(task_id, :starting)
+    # After the port opens, never before: `terminate/2` does not run if
+    # `init/1` raises, and this is the only thing here that can — an
+    # earlier announcement would leave an open with no matching close.
+    Preview.broadcast_session(task_id, :opened)
     Process.send_after(self(), :probe, @probe_interval_ms)
     start_timer = Process.send_after(self(), :start_timeout, Preview.start_timeout_ms())
 
@@ -154,6 +158,9 @@ defmodule CodeLead.Preview.Session do
 
   @impl true
   def terminate(_reason, state) do
+    # Ahead of the stopper: a container stopper waits up to 5s on a
+    # `docker exec`, and the readout should not lag the decision.
+    Preview.broadcast_session(state.task_id, :closed)
     state |> stop_server() |> close_port()
   end
 

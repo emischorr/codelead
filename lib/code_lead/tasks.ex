@@ -638,6 +638,22 @@ defmodule CodeLead.Tasks do
   def get_task(id), do: Repo.get(Task, id)
 
   @doc """
+  Titles for the given task ids, keyed by id. Ids without a row are
+  simply absent — a live session can outlive the task it belongs to.
+  """
+  @spec titles([pos_integer()]) :: %{pos_integer() => String.t()}
+  def titles([]), do: %{}
+
+  def titles(task_ids) do
+    Repo.all(
+      from t in Task,
+        where: t.id in ^task_ids,
+        select: {t.id, t.title}
+    )
+    |> Map.new()
+  end
+
+  @doc """
   The Kanban board for a project: non-archived tasks grouped by column.
   """
   @spec board(pos_integer()) :: %{(:planning | :running | :review | :done) => [Task.t()]}

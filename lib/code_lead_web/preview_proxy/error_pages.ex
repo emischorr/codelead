@@ -18,6 +18,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     page(
       "Nothing is listening #{target}",
       """
+      <p>
       Start your dev server from the task's Review tab
       (<strong>Start preview</strong>) or its <strong>Terminal</strong>
       tab. For container tasks it must listen on <code>0.0.0.0</code>,
@@ -26,6 +27,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
       relay sidecar's published host port — if the address above looks
       unreachable from the app, check <code>PREVIEW_PUBLISH_IP</code> /
       <code>PREVIEW_UPSTREAM_HOST</code>. This tab retries automatically.
+      </p>
       """,
       ~s(<meta http-equiv="refresh" content="4">)
     )
@@ -37,8 +39,10 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     page(
       "No preview port declared",
       """
+      <p>
       Declare a preview port on the task's repository
       (Settings → Projects → repository) to enable the live preview.
+      </p>
       """
     )
   end
@@ -46,7 +50,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   @doc "No such task."
   @spec not_found() :: String.t()
   def not_found do
-    page("Task not found", "This preview URL does not match any task.")
+    page("Task not found", "<p>This preview URL does not match any task.</p>")
   end
 
   @doc """
@@ -61,7 +65,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   def unauthorized(true) do
     page(
       "Restoring your session",
-      ~s(A stale preview cookie was cleared. This tab reloads itself.),
+      ~s(<p>A stale preview cookie was cleared. This tab reloads itself.</p>),
       ~s(<meta http-equiv="refresh" content="1">)
     )
   end
@@ -69,7 +73,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   def unauthorized(false) do
     page(
       "Session expired",
-      ~s(Log in to CodeLead in its own tab, then reload this one.)
+      ~s(<p>Log in to CodeLead in its own tab, then reload this one.</p>)
     )
   end
 
@@ -101,15 +105,81 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     page(
       "This instance uses subdomain previews",
       """
+      <p>
       Previews are served on per-task subdomains here, not under
       <code>/preview/…</code> paths — this looks like a stale link.
       <a href="/preview/launch/#{task_id}">Open this task's preview</a>
       at its current address.
+      </p>
       """
     )
   end
 
-  defp page(title, body_html, extra_head \\ "") do
+  @doc """
+  The path gateway saw one preview page reload itself over and over —
+  the signature of a previewed app emitting root-absolute URLs that
+  escape the `/preview/<id>` mount. `retry_href` bypasses the breaker
+  once. Deliberately no auto-refresh: reloading *is* the symptom.
+  """
+  @spec reload_loop(integer() | String.t(), String.t()) :: String.t()
+  def reload_loop(task_id, retry_href) do
+    page(
+      "This preview kept reloading itself",
+      """
+      <p>
+      The app behind this preview is emitting <strong>root-absolute</strong>
+      URLs that escape <code>/preview/#{task_id}</code>. They arrive at
+      CodeLead instead of your dev server; CodeLead answers them, the app's
+      client gives up, and the page reloads — over and over.
+      </p>
+      <p>
+      Setting <code>PREVIEW_BASE_PATH</code> fixes routes and static paths,
+      but cannot reach these three:
+      </p>
+      <ul>
+        <li>
+          <code>new LiveSocket("/live", …)</code> in <code>assets/js/app.js</code>
+          — <strong>this one is the loop.</strong> It opens against CodeLead's
+          own LiveView endpoint, the channel join fails, and LiveView falls
+          back to a full page load.
+        </li>
+        <li><code>url("/fonts/…")</code> and friends inside your CSS.</li>
+        <li>Hand-written literal <code>href="/"</code> / <code>src="/…"</code> in templates.</li>
+      </ul>
+      <pre>#{fix_snippet()}</pre>
+      <p>
+      The full recipe is in <code>docs/configuration.md</code>, under
+      <em>Preview base path</em>. For an app that cannot be path-prefix-hosted
+      at all, <code>PREVIEW_DOMAIN</code> gives every task a real origin and
+      none of this applies.
+      </p>
+      <p><a href="#{Plug.HTML.html_escape(retry_href)}">Load it anyway</a> — pauses this check for a few minutes.</p>
+      """,
+      "",
+      "wide"
+    )
+  end
+
+  # Angle brackets are escaped by hand: this lands inside a <pre>, and a
+  # literal <meta> would be parsed as markup rather than shown.
+  defp fix_snippet do
+    """
+    # root.html.heex — render the mount-aware socket path
+    &lt;meta name="live-socket-path" content={MyAppWeb.Endpoint.path("/live")} /&gt;
+
+    # assets/js/app.js — read it instead of hardcoding "/live"
+    const path = document
+      .querySelector("meta[name='live-socket-path']")
+      .getAttribute("content")
+    const liveSocket = new LiveSocket(path, Socket, { … })
+
+    # assets/css/app.css — relative to the built stylesheet, so any mount
+    # works (count levels from where the bundle lands, not the source)
+    url("../../fonts/archivo-variable.woff2")
+    """
+  end
+
+  defp page(title, body_html, extra_head \\ "", main_class \\ "") do
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -130,13 +200,21 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
         code { font-family: ui-monospace, monospace; font-size: 12px;
                background: #161b22; border-radius: 4px; padding: 0.1rem 0.35rem; }
         strong { color: #c9d1d9; }
+        a { color: #58a6ff; }
+        p + p, p + ul, p + pre, ul + p, pre + p { margin-top: 0.85rem; }
+        main.wide { max-width: 34rem; }
+        ul { text-align: left; margin: 0.75rem 0; padding-left: 1.1rem; }
+        li { margin: 0.35rem 0; color: #8b949e; }
+        pre { text-align: left; background: #161b22; border-radius: 6px;
+              padding: 0.7rem 0.85rem; overflow-x: auto; color: #c9d1d9;
+              font: 12px/1.6 ui-monospace, monospace; }
       </style>
     </head>
     <body>
-      <main>
+      <main class="#{main_class}">
         <div class="mark">CodeLead Preview</div>
         <h1>#{title}</h1>
-        <p>#{body_html}</p>
+        #{body_html}
       </main>
     </body>
     </html>
