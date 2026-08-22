@@ -6,11 +6,13 @@ defmodule CodeLead.TerminalTest do
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.OsProcessHelpers
   alias CodeLead.Terminal
   alias CodeLead.Terminal.Session
   alias CodeLead.Workspace
 
   @fake_shell Path.expand("../support/fake_shell.sh", __DIR__)
+  @fake_shell_bg Path.expand("../support/fake_shell_bg.sh", __DIR__)
 
   setup do
     original = Application.get_env(:code_lead, :terminal_command)
@@ -223,6 +225,71 @@ defmodule CodeLead.TerminalTest do
     end
   end
 
+  describe "stop/1" do
+    test "reaps what the shell started, not just the shell", %{worktree: worktree} do
+      Application.put_env(:code_lead, :terminal_command, ["/bin/sh", @fake_shell_bg])
+      marker = Path.join(worktree, "child.pid")
+      task = terminal_task(worktree)
+
+      assert {:ok, pid} =
+               Terminal.ensure_session(task,
+                 extra_env: [{"CODELEAD_MARKER_FILE", marker}]
+               )
+
+      ref = Process.monitor(pid)
+      child_pid = await_marker(marker)
+      assert OsProcessHelpers.alive?(child_pid)
+
+      assert Terminal.stop(task.id) == :ok
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+      refute Terminal.alive?(task.id)
+      assert OsProcessHelpers.await_gone(child_pid) == :ok
+    end
+
+    test "is a no-op without a session" do
+      assert Terminal.stop(System.unique_integer([:positive])) == :ok
+    end
+
+    test "an application shutdown reaps the shell's children too", %{worktree: worktree} do
+      Application.put_env(:code_lead, :terminal_command, ["/bin/sh", @fake_shell_bg])
+      marker = Path.join(worktree, "child.pid")
+      task = terminal_task(worktree)
+
+      assert {:ok, pid} =
+               Terminal.ensure_session(task,
+                 extra_env: [{"CODELEAD_MARKER_FILE", marker}]
+               )
+
+      ref = Process.monitor(pid)
+      child_pid = await_marker(marker)
+
+      DynamicSupervisor.terminate_child(CodeLead.Terminal.SessionSupervisor, pid)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+      assert OsProcessHelpers.await_gone(child_pid) == :ok
+    end
+  end
+
+  defp await_marker(path, attempts \\ 80) do
+    case File.read(path) do
+      {:ok, contents} ->
+        case String.trim(contents) do
+          "" -> retry_marker(path, attempts)
+          pid -> pid
+        end
+
+      {:error, :enoent} ->
+        retry_marker(path, attempts)
+    end
+  end
+
+  defp retry_marker(_path, 0), do: flunk("fake shell never recorded its child pid")
+
+  defp retry_marker(path, attempts) do
+    Process.sleep(25)
+    await_marker(path, attempts - 1)
+  end
+
   defp start_resizable_session(task_id, pty?, resizer) do
     start_supervised!(
       {Session,
@@ -235,6 +302,7 @@ defmodule CodeLead.TerminalTest do
              [:binary, :exit_status, :hide, :stderr_to_stdout, args: [@fake_shell]]
            )
          end,
+         stopper: fn _port -> :ok end,
          resizer: resizer
        }}
     )

@@ -28,7 +28,11 @@
 # build script.
 #
 # An `exec` whose argv mentions ld-musl is the libc probe: it answers
-# $FAKE_DOCKER_LIBC (default glibc) instead of bridging the agent.
+# $FAKE_DOCKER_LIBC (default glibc) instead of bridging the agent. An
+# `exec` carrying `kill -0` is preview adoption's liveness probe and
+# answers $FAKE_DOCKER_PID_ALIVE (default 0, i.e. gone); one carrying
+# `kill -TERM` is a session stopper and always succeeds, leaving only
+# its argv in the log.
 #
 # The preview relay sidecar reads its own knobs: `inspect` of the task
 # container's networks reports the task container on the bridge at
@@ -145,6 +149,16 @@ case "$1" in
     case "$*" in
       *ld-musl*)
         echo "${FAKE_DOCKER_LIBC:-glibc}"
+        exit 0
+        ;;
+      *"kill -0"*)
+        # Preview adoption's liveness probe: is the recorded pid still
+        # serving inside the container?
+        [ "${FAKE_DOCKER_PID_ALIVE:-0}" = "1" ] && exit 0
+        exit 1
+        ;;
+      *"kill -TERM"*)
+        # A stopper. Only the argv log matters; it always succeeds.
         exit 0
         ;;
     esac

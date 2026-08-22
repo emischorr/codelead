@@ -510,8 +510,13 @@ above the bar instead of underneath it.
   `Preview.Session` probes the upstream until the port answers —
   `Starting… → Running`, or a failure panel (`#preview-failure`) with
   the command's log tail. The session stops on request-changes, on the
-  task leaving Review for good, and after a viewer-less idle window;
-  the branded 502 page's auto-refresh picks the tab up the moment the
+  task leaving Review for good, after a viewer-less idle window, and on
+  application shutdown — stopping signals the command's whole process
+  group, since closing the Port would leave it running (ADR-0013). A
+  container preview that outlived an ungraceful exit is re-attached at
+  boot (`Preview.adopt_survivors/0`), so the chip reflects the server
+  that is actually serving instead of offering to start a second one.
+  The branded 502 page's auto-refresh picks the tab up the moment the
   server answers.
 
   **The proxy behind it.** Requests reach the shared forwarding core
@@ -620,12 +625,19 @@ above the bar instead of underneath it.
   hidden — scrollback repaints on reattach). The per-task
   `Terminal.Session` owns the shell Port, so a page refresh reattaches
   to the same shell; leaving the tab detaches the viewer and the
-  session idles out after 15 minutes viewer-less. PTY via `script(1)`
+  session idles out after `TERMINAL_IDLE_MINUTES` viewer-less. It also
+  stops when the execution context is destroyed (`discard_context` /
+  `release_context`) and on application shutdown — but deliberately
+  *not* on request-changes, which preserves the worktree, the branch and
+  the ACP session, and so preserves the shell too. Stopping signals the
+  shell's process group, taking what the user started with it
+  (ADR-0013). PTY via `script(1)`
   in the target (host or container image), plain-pipe `sh -i` fallback
   flagged in the status line; container sessions are license-gated and
   self-heal the container (`ensure_for_task/1`). Sessions export
-  `TERM`/`COLUMNS`/`LINES`, `CODELEAD_TTY_FILE`, the project env, and
-  `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN` (see ADR-0008).
+  `TERM`/`COLUMNS`/`LINES`, `CODELEAD_TTY_FILE`, `CODELEAD_PID_FILE`,
+  the project env, and `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN` (see
+  ADR-0008).
 - **Terminal resize** — xterm's `onResize` pushes `terminal_resize`
   (debounced 150 ms, since a window drag fires it continuously) and the
   session applies it to the PTY *device* it recorded in

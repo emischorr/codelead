@@ -37,6 +37,15 @@ defmodule CodeLead.Application do
         CodeLead.Terminal.child_specs() ++
         CodeLead.Preview.child_specs() ++
         [
+          # One-shot, async: re-attaches sessions to container previews
+          # that outlived an ungraceful exit, so Review shows the server
+          # that is actually serving instead of offering to start a
+          # second one. Needs the Preview registry above it.
+          Supervisor.child_spec(
+            {Task, &CodeLead.Preview.adopt_at_boot/0},
+            id: CodeLead.Preview.Adopter,
+            restart: :temporary
+          ),
           # One-shot, async: stages the container harness onto the
           # workspace volume and reaps orphaned task environments. Never
           # crashes boot; no-ops without docker.

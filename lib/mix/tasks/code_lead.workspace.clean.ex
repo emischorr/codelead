@@ -19,9 +19,13 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
 
   Refuses to run while any task has a live or pending run (`queued`,
   `dispatched`, `executing` in the database) — cleaning would delete
-  worktrees and containers out from under the running agents. Pass
-  `--force` to clean anyway; forcing also removes the live runs'
-  containers.
+  worktrees and containers out from under the running agents — and
+  likewise while any task sits in Review, where a preview server or a
+  Developer shell outlives the run and may still be writing into these
+  paths. This task runs without the application started, so it cannot
+  ask a live instance to stop those sessions; stopping the instance is
+  what ends them. Pass `--force` to clean anyway; forcing also removes
+  the live runs' containers.
   """
 
   use Mix.Task
@@ -41,9 +45,15 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
 
     Mix.Task.run("app.config")
 
-    unless opts[:force], do: refuse_when_live_runs!()
+    unless opts[:force], do: refuse_when_live!()
 
     root = Workspace.root()
+
+    # Before any deletion: removing the labeled containers is the only
+    # lever this VM has over processes still writing into the worktrees
+    # (a preview server, a Developer shell). Sweeping afterwards races
+    # them and produces the leftovers `Remover` then reports.
+    sweep_containers()
 
     # Verified removal with the docker-root fallback: container runs
     # leave root-owned files a plain rm_rf cannot delete. A surviving
@@ -62,35 +72,58 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
     )
 
     Enum.each(base_clones(root), &Git.git(&1, ["worktree", "prune"]))
-    sweep_containers()
 
     Mix.shell().info("Cleaned per-task workspace state under #{root}")
   end
 
-  defp refuse_when_live_runs! do
-    case live_run_ids() do
-      [] ->
-        :ok
+  # Two separate reasons, because the remedies differ: a live run is
+  # stopped from the board, while a Review context is released by a
+  # running instance this VM cannot talk to.
+  defp refuse_when_live! do
+    {run_ids, review_ids} = live_ids()
 
-      ids ->
-        Mix.raise("""
-        Refusing to clean: #{length(ids)} task(s) have a live or pending run \
-        (ids: #{Enum.join(ids, ", ")}). Cleaning would delete their worktrees, \
-        task folders, and containers out from under them.
+    refuse_when_live_runs!(run_ids)
+    refuse_when_review_contexts!(review_ids)
+  end
 
-        Stop the runs first, or pass --force to clean anyway.\
-        """)
-    end
+  defp refuse_when_live_runs!([]), do: :ok
+
+  defp refuse_when_live_runs!(ids) do
+    Mix.raise("""
+    Refusing to clean: #{length(ids)} task(s) have a live or pending run \
+    (ids: #{Enum.join(ids, ", ")}). Cleaning would delete their worktrees, \
+    task folders, and containers out from under them.
+
+    Stop the runs first, or pass --force to clean anyway.\
+    """)
+  end
+
+  defp refuse_when_review_contexts!([]), do: :ok
+
+  defp refuse_when_review_contexts!(ids) do
+    Mix.raise("""
+    Refusing to clean: #{length(ids)} task(s) are in Review \
+    (ids: #{Enum.join(ids, ", ")}). Review is where an execution context \
+    outlives its run — a preview server or a Developer shell may still be \
+    writing into these paths, and this task runs without the application, \
+    so it cannot ask the instance to stop them.
+
+    Stop the instance first (which stops those processes), move the tasks \
+    on, or pass --force to clean anyway.\
+    """)
   end
 
   # The mix task runs in its own BEAM with the app not started, so it
   # cannot ask RunSupervisor — the database's run_state is the best
   # available signal. :failed is deliberately not blocking: a failed
   # run has no live process.
-  defp live_run_ids do
-    case Ecto.Migrator.with_repo(CodeLead.Repo, fn _repo -> Tasks.active_runs() end) do
-      {:ok, runs, _started_apps} ->
-        for %{id: id, run_state: run_state} <- runs, run_state in @live_states, do: id
+  defp live_ids do
+    query = fn _repo -> {Tasks.active_runs(), Tasks.review_task_ids()} end
+
+    case Ecto.Migrator.with_repo(CodeLead.Repo, query) do
+      {:ok, {runs, review_ids}, _started_apps} ->
+        run_ids = for %{id: id, run_state: run_state} <- runs, run_state in @live_states, do: id
+        {run_ids, review_ids}
 
       {:error, reason} ->
         Mix.raise(
@@ -102,7 +135,7 @@ defmodule Mix.Tasks.CodeLead.Workspace.Clean do
       # A dropped or never-created database cannot have an instance
       # running against it.
       if error.postgres[:code] == :invalid_catalog_name do
-        []
+        {[], []}
       else
         reraise(error, __STACKTRACE__)
       end

@@ -7,6 +7,7 @@ defmodule CodeLead.PreviewTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.LicenseHelpers
+  alias CodeLead.OsProcessHelpers
   alias CodeLead.Preview
 
   setup do
@@ -70,5 +71,95 @@ defmodule CodeLead.PreviewTest do
     assert_receive {:preview_state, _task_id, :stopped}, 2_000
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
     assert Preview.status(task.id) == :stopped
+  end
+
+  test "stopping a local preview reaps the whole process group, not just the shell" do
+    worktree = worktree!()
+    child_pid_file = Path.join(worktree, "child.pid")
+
+    # `$!` is a *grandchild* of the port: signalling only the shell's own
+    # pid leaves it holding the preview port forever.
+    task =
+      repo_task(%{
+        preview_port: 5173,
+        preview_command: "sleep 300 & echo $! > #{child_pid_file}; sleep 300"
+      })
+      |> put_context!(%{worktree_path: worktree})
+
+    assert {:ok, pid} = Preview.ensure_session(task)
+    ref = Process.monitor(pid)
+
+    child_pid = await_recorded_pid(child_pid_file)
+    assert OsProcessHelpers.alive?(child_pid)
+
+    assert Preview.stop(task.id) == :ok
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+    assert OsProcessHelpers.await_gone(child_pid) == :ok
+  end
+
+  test "an application shutdown stops the server, not just the port" do
+    worktree = worktree!()
+    child_pid_file = Path.join(worktree, "child.pid")
+
+    task =
+      repo_task(%{
+        preview_port: 5173,
+        preview_command: "sleep 300 & echo $! > #{child_pid_file}; sleep 300"
+      })
+      |> put_context!(%{worktree_path: worktree})
+
+    assert {:ok, pid} = Preview.ensure_session(task)
+    ref = Process.monitor(pid)
+    child_pid = await_recorded_pid(child_pid_file)
+
+    # What the supervisor does on the way down — no :stop call anywhere.
+    DynamicSupervisor.terminate_child(CodeLead.Preview.SessionSupervisor, pid)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+    assert OsProcessHelpers.await_gone(child_pid) == :ok
+  end
+
+  test "a command that exits leaving background children still gets them reaped" do
+    worktree = worktree!()
+    child_pid_file = Path.join(worktree, "child.pid")
+
+    # The shell daemonizes a server (stdout detached, or the port would
+    # stay open on the child's handle) and exits. Its own pid is gone by
+    # the time the session notices, but the group it led is not — and the
+    # orphan would otherwise hold the preview port.
+    task =
+      repo_task(%{
+        preview_port: 5173,
+        preview_command: "sleep 300 >/dev/null 2>&1 & echo $! > #{child_pid_file}"
+      })
+      |> put_context!(%{worktree_path: worktree})
+
+    assert {:ok, pid} = Preview.ensure_session(task)
+    ref = Process.monitor(pid)
+    child_pid = await_recorded_pid(child_pid_file)
+
+    # The session ends on its own: the port reports the shell's exit.
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+    assert OsProcessHelpers.await_gone(child_pid) == :ok
+  end
+
+  defp await_recorded_pid(path, attempts \\ 80) do
+    case File.read(path) do
+      {:ok, contents} ->
+        case String.trim(contents) do
+          "" -> retry_recorded_pid(path, attempts)
+          pid -> pid
+        end
+
+      {:error, :enoent} ->
+        retry_recorded_pid(path, attempts)
+    end
+  end
+
+  defp retry_recorded_pid(_path, 0), do: flunk("preview command never recorded its child pid")
+
+  defp retry_recorded_pid(path, attempts) do
+    Process.sleep(25)
+    await_recorded_pid(path, attempts - 1)
   end
 end

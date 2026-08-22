@@ -26,17 +26,39 @@ defmodule CodeLead.Executor.DockerCli do
 
   @doc """
   Runs a docker command, merging stderr into the returned output — these
-  are lifecycle commands, not protocol traffic.
+  are lifecycle commands, not protocol traffic. `:timeout` (default
+  `:infinity`) bounds a wedged daemon for callers running under a
+  supervisor shutdown budget; it bounds the *wait*, not the CLI child,
+  which keeps running after the timeout like any other port program.
   """
-  @spec run([String.t()]) ::
+  @spec run([String.t()], keyword()) ::
           {:ok, String.t()}
-          | {:error, {:docker, non_neg_integer(), String.t()} | :docker_cli_not_found}
-  def run(args) do
+          | {:error, {:docker, non_neg_integer(), String.t()} | :docker_cli_not_found | :timeout}
+  def run(args, opts \\ []) do
     with {:ok, {path, prefix}} <- cli() do
-      case System.cmd(path, prefix ++ args, stderr_to_stdout: true) do
-        {output, 0} -> {:ok, output}
-        {output, status} -> {:error, {:docker, status, output}}
+      case Keyword.get(opts, :timeout, :infinity) do
+        :infinity -> exec(path, prefix ++ args)
+        timeout -> exec_bounded(path, prefix ++ args, timeout)
       end
+    end
+  end
+
+  defp exec(path, args) do
+    case System.cmd(path, args, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
+      {output, status} -> {:error, {:docker, status, output}}
+    end
+  end
+
+  # A plain linked Task rather than `CodeLead.TaskSupervisor`: the
+  # bounded callers are stoppers running under a supervisor shutdown,
+  # where the task supervisor may already be terminating.
+  defp exec_bounded(path, args, timeout) do
+    task = Task.async(fn -> exec(path, args) end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _timed_out_or_died -> {:error, :timeout}
     end
   end
 end

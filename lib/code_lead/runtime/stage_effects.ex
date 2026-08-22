@@ -31,6 +31,7 @@ defmodule CodeLead.Runtime.StageEffects do
   alias CodeLead.Scheduler
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
+  alias CodeLead.Terminal
   alias CodeLead.Workflow.Stage
 
   @doc """
@@ -53,7 +54,10 @@ defmodule CodeLead.Runtime.StageEffects do
   def on_enter(:execute, %Task{} = task, _prepared) do
     # A run entering means the reviewed build is history — the preview
     # server (if any) stops here, covering request-changes, whose edge
-    # keeps the context alive.
+    # keeps the context alive. The terminal deliberately does not: the
+    # preview *is* the reviewed artifact and would serve a stale build,
+    # while a terminal is a tool the human is holding, and this edge
+    # destroys nothing it depends on.
     Preview.stop(task.id)
     try_dispatch(task)
   end
@@ -88,7 +92,7 @@ defmodule CodeLead.Runtime.StageEffects do
   def discard_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
   def discard_context(%Task{worktree_path: nil, target: :repo} = task) do
-    Preview.stop(task.id)
+    stop_sessions(task.id)
     # No worktree was ever provisioned, but ephemeral resources (a
     # container) may still exist under the task's identity.
     context = rebuilt_context(%{task | worktree_path: CodeLead.Workspace.worktree_path(task.id)})
@@ -97,7 +101,7 @@ defmodule CodeLead.Runtime.StageEffects do
   end
 
   def discard_context(%Task{} = task) do
-    Preview.stop(task.id)
+    stop_sessions(task.id)
     context = rebuilt_context(task)
 
     case context.executor.teardown(context, keep: false) do
@@ -116,7 +120,7 @@ defmodule CodeLead.Runtime.StageEffects do
   def release_context(%Task{target: :repo, repository_id: nil}), do: :ok
 
   def release_context(%Task{} = task) do
-    Preview.stop(task.id)
+    stop_sessions(task.id)
 
     context =
       rebuilt_context(%{
@@ -131,6 +135,15 @@ defmodule CodeLead.Runtime.StageEffects do
 
   # The reconstruction the Executor moduledoc warns about: no env, no
   # exec_ref — executor-private state must resolve from the task id.
+  # Both sessions hold processes rooted in the context about to be
+  # removed — a preview server and a shell's children keep writing into
+  # the worktree while it is deleted, which is what turns a teardown
+  # into a reported leftover.
+  defp stop_sessions(task_id) do
+    Preview.stop(task_id)
+    Terminal.stop(task_id)
+  end
+
   defp rebuilt_context(%Task{target: :repo} = task) do
     repository = Projects.get_repository!(task.repository_id)
 
