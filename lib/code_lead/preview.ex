@@ -15,10 +15,13 @@ defmodule CodeLead.Preview do
   the proxy never depends on one.
   """
 
+  require Logger
+
   alias CodeLead.Executor.Devcontainer
   alias CodeLead.Executor.DockerCli
   alias CodeLead.Executor.EnvScrub
   alias CodeLead.License
+  alias CodeLead.OsProcess
   alias CodeLead.Preview.Session
   alias CodeLead.PreviewGateway
   alias CodeLead.Projects
@@ -104,6 +107,44 @@ defmodule CodeLead.Preview do
     :exit, _reason -> :ok
   end
 
+  @doc """
+  Boot entry point for `adopt_survivors/0`, skipped under
+  `:adopt_previews_at_boot, false` — the test env, where a boot-time
+  Repo query would race the Ecto sandbox.
+  """
+  @spec adopt_at_boot() :: :ok
+  def adopt_at_boot do
+    if Application.get_env(:code_lead, :adopt_previews_at_boot, true),
+      do: adopt_survivors(),
+      else: :ok
+  end
+
+  @doc """
+  Re-attaches sessions to container previews that outlived the VM.
+  Best-effort: a task in Review whose recorded pid still runs in its
+  container gets a session back — status chip, Stop button and idle
+  timeout included — instead of a second server on the next start.
+  """
+  @spec adopt_survivors() :: :ok
+  def adopt_survivors do
+    cond do
+      not DockerCli.available?() ->
+        :ok
+
+      not License.feature_enabled?(:container_execution_env) ->
+        # Community instances run no container execs at all; a survivor
+        # here is the reaper's business, not ours.
+        :ok
+
+      true ->
+        Enum.each(Tasks.review_task_ids(), &adopt_survivor/1)
+    end
+  rescue
+    error ->
+      Logger.warning("preview adoption failed: #{Exception.message(error)}")
+      :ok
+  end
+
   @doc false
   @spec broadcast(pos_integer(), status()) :: :ok
   def broadcast(task_id, status) do
@@ -170,6 +211,55 @@ defmodule CodeLead.Preview do
     end
   end
 
+  # Never `ensure_for_task/1`: adoption re-attaches to an environment
+  # that is already up, and must not bring one back to life.
+  defp adopt_survivor(task_id) do
+    with %Task{execution_env: :container} = task <- Tasks.get_task(task_id),
+         nil <- whereis(task_id),
+         {:ok, pid} <- recorded_pid(task_id),
+         {:ok, container_id} <- Devcontainer.container_for_task(task_id),
+         :ok <- alive_in_container(container_id, pid) do
+      spec = %{
+        task_id: task_id,
+        port_opener: nil,
+        stopper: container_stopper(container_id, pid_file(task_id)),
+        probe: probe(task)
+      }
+
+      case DynamicSupervisor.start_child(@supervisor, {Session, spec}) do
+        {:ok, _pid} ->
+          Logger.info("adopted surviving preview server (task #{task_id}, pid #{pid})")
+
+        _already_started_or_failed ->
+          :ok
+      end
+    else
+      _nothing_to_adopt -> :ok
+    end
+  end
+
+  # The pid file is never deleted on stop, so it is stale by
+  # construction — liveness is what makes it meaningful, never the file.
+  defp recorded_pid(task_id) do
+    case File.read(pid_file(task_id)) do
+      {:ok, contents} ->
+        case String.trim(contents) do
+          "" -> :error
+          pid -> {:ok, pid}
+        end
+
+      {:error, _no_pid_file} ->
+        :error
+    end
+  end
+
+  defp alive_in_container(container_id, pid) do
+    case DockerCli.run(["exec", container_id, "sh", "-c", "kill -0 #{pid}"], timeout: 5_000) do
+      {:ok, _alive} -> :ok
+      {:error, _gone_or_unreachable} -> :error
+    end
+  end
+
   defp session_env(task, opts) do
     Projects.env_vars(task.project_id) ++ Keyword.get(opts, :extra_env, [])
   end
@@ -192,18 +282,7 @@ defmodule CodeLead.Preview do
        %{
          task_id: task.id,
          port_opener: fn -> open_port(cli_path, args, []) end,
-         # The docker exec client's death does not reach the process
-         # inside the container, so stop kills by the recorded pid — the
-         # pid file lives on the workspace mount at a coincident path.
-         stopper: fn _port ->
-           _ =
-             DockerCli.run(
-               ["exec", container_id, "sh", "-c"] ++
-                 [~s{kill -TERM "$(cat #{pid_file})" 2>/dev/null}]
-             )
-
-           :ok
-         end,
+         stopper: container_stopper(container_id, pid_file),
          probe: probe(task)
        }}
     end
@@ -225,18 +304,31 @@ defmodule CodeLead.Preview do
            port_opener: fn ->
              open_port(shell_path, args, cd: task.worktree_path, env: port_env)
            end,
-           # `sh -lc` keeps the command as its own child, so the shell's
-           # os pid is the group to signal.
-           stopper: fn port ->
-             with {:os_pid, os_pid} <- Port.info(port, :os_pid) do
-               _ =
-                 System.cmd("kill", ["-TERM", Integer.to_string(os_pid)], stderr_to_stdout: true)
-             end
-
-             :ok
+           # `sh -lc` is its own process-group leader and everything the
+           # command starts inherits that group, so the group — not the
+           # shell's pid — is what has to be signalled. Closing the port
+           # kills nothing (ADR-0013).
+           stopper: fn
+             nil -> :ok
+             os_pid -> OsProcess.terminate_group(os_pid)
            end,
            probe: probe(task)
          }}
+    end
+  end
+
+  # Shared by the spawning and the adopting path so the two cannot
+  # drift. Closes over strings only: a stopper runs under a supervisor
+  # shutdown, where the Repo may already be on its way down.
+  defp container_stopper(container_id, pid_file) do
+    fn _os_pid ->
+      _ =
+        DockerCli.run(
+          ["exec", container_id, "sh", "-c", OsProcess.terminate_group_script(pid_file)],
+          timeout: 5_000
+        )
+
+      :ok
     end
   end
 

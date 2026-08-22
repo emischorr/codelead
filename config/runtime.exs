@@ -125,7 +125,8 @@ config :code_lead,
   preview_relay_image: System.get_env("PREVIEW_RELAY_IMAGE", "alpine/socat"),
   preview_idle_ms: String.to_integer(System.get_env("PREVIEW_IDLE_MINUTES", "30")) * 60_000,
   preview_start_timeout_ms:
-    String.to_integer(System.get_env("PREVIEW_START_TIMEOUT_SECONDS", "120")) * 1_000
+    String.to_integer(System.get_env("PREVIEW_START_TIMEOUT_SECONDS", "120")) * 1_000,
+  terminal_idle_ms: String.to_integer(System.get_env("TERMINAL_IDLE_MINUTES", "15")) * 60_000
 
 # Preview gateway selection. Unset (the convention), previews are served
 # by the path gateway at /preview/<id>/ with zero configuration. Setting

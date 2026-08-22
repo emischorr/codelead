@@ -145,4 +145,37 @@ defmodule CodeLead.Preview.SessionTest do
     refute_receive {:preview_state, ^task_id, :stopped}, 300
     assert GenServer.call(pid, :status) == :ready
   end
+
+  test "a supervisor shutdown runs the stopper", %{task_id: task_id} do
+    parent = self()
+
+    pid =
+      start_supervised!(
+        {Session, start_arg(task_id, %{stopper: fn _port -> send(parent, :stopper_ran) end})}
+      )
+
+    ref = Process.monitor(pid)
+    :ok = stop_supervised!(Session)
+
+    assert_receive :stopper_ran, 2_000
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+  end
+
+  test "the stopper runs exactly once across stop and terminate", %{task_id: task_id} do
+    parent = self()
+
+    pid =
+      start_supervised!(
+        {Session, start_arg(task_id, %{stopper: fn _port -> send(parent, :stopper_ran) end})}
+      )
+
+    ref = Process.monitor(pid)
+    assert GenServer.call(pid, :stop) == :ok
+
+    assert_receive :stopper_ran, 2_000
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+    # terminate/2 also calls it — clearing the stopper is what keeps a
+    # server from being signalled twice.
+    refute_received :stopper_ran
+  end
 end

@@ -49,7 +49,30 @@ defmodule CodeLead.Terminal.CommandTest do
     test "falls back to a plain pipe shell without script, keeping the argv prefix" do
       argv = Command.docker(["fake"], "codelead-task-7", "/work", [], "sh", false)
 
-      assert argv == ["fake", "exec", "-i", "-w", "/work", "codelead-task-7", "sh", "-i"]
+      assert argv ==
+               [
+                 "fake",
+                 "exec",
+                 "-i",
+                 "-w",
+                 "/work",
+                 "codelead-task-7",
+                 "sh",
+                 "-c",
+                 Command.pipe_payload("sh")
+               ]
+    end
+  end
+
+  describe "pipe_payload/1" do
+    test "records the shell's pid, then execs it" do
+      payload = Command.pipe_payload("/bin/zsh")
+
+      assert payload =~ ~s(echo $$ > "$CODELEAD_PID_FILE")
+      assert payload =~ ~s(exec /bin/zsh -i)
+      # Without a terminal device there is nothing to record or resize.
+      refute payload =~ "CODELEAD_TTY_FILE"
+      refute payload =~ "stty"
     end
   end
 
@@ -58,6 +81,7 @@ defmodule CodeLead.Terminal.CommandTest do
       payload = Command.payload("/bin/zsh")
 
       assert payload =~ ~s(tty > "$CODELEAD_TTY_FILE")
+      assert payload =~ ~s(echo $$ > "$CODELEAD_PID_FILE")
       assert payload =~ ~s(stty rows "$LINES" cols "$COLUMNS")
       assert String.ends_with?(payload, "exec /bin/zsh -i")
     end

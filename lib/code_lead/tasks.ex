@@ -755,6 +755,21 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
+  Ids of the tasks sitting in Review — the one state where an execution
+  context outlives its run, hosting previews, terminals and reviewer
+  execs.
+  """
+  @spec review_task_ids() :: [pos_integer()]
+  def review_task_ids do
+    Repo.all(
+      from t in Task,
+        where: t.state == :review and is_nil(t.archived_at),
+        order_by: [asc: t.id],
+        select: t.id
+    )
+  end
+
+  @doc """
   Tasks with a live or pending run across every project, oldest first.
   `run_state` is what the database believes; whether a runner process
   actually exists is the caller's cross-check.

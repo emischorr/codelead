@@ -19,6 +19,7 @@ defmodule CodeLead.Terminal do
   alias CodeLead.Executor.DockerCli
   alias CodeLead.Executor.EnvScrub
   alias CodeLead.License
+  alias CodeLead.OsProcess
   alias CodeLead.Projects
   alias CodeLead.Terminal.Command
   alias CodeLead.Terminal.Session
@@ -42,6 +43,21 @@ defmodule CodeLead.Terminal do
       pid when is_pid(pid) -> {:ok, pid}
       nil -> start_session(task, opts)
     end
+  end
+
+  @doc """
+  Stops the task's terminal session, if one runs. Safe at any time —
+  teardown calls it unconditionally.
+  """
+  @spec stop(pos_integer()) :: :ok
+  def stop(task_id) do
+    case whereis(task_id) do
+      nil -> :ok
+      pid -> GenServer.call(pid, :stop, 30_000)
+    end
+  catch
+    # The session can exit between lookup and call.
+    :exit, _reason -> :ok
   end
 
   @doc """
@@ -170,20 +186,22 @@ defmodule CodeLead.Terminal do
   # writable *inside* the execution context: the host temp dir for local
   # tasks, the per-task TMPDIR `Devcontainer.exec_flags/3` guarantees for
   # container ones.
-  defp session_env(task, tty_file, opts) do
+  defp session_env(task, tty_file, pid_file, opts) do
     Projects.env_vars(task.project_id) ++
       Keyword.get(opts, :extra_env, []) ++
       [
         {"TERM", "xterm-256color"},
         {"COLUMNS", to_string(Keyword.get(opts, :cols, 80))},
         {"LINES", to_string(Keyword.get(opts, :rows, 24))},
-        {"CODELEAD_TTY_FILE", tty_file}
+        {"CODELEAD_TTY_FILE", tty_file},
+        {"CODELEAD_PID_FILE", pid_file}
       ]
   end
 
   defp spawn_spec(%Task{target: :repo, execution_env: :container} = task, path, opts) do
     tty_file = Path.join([Workspace.agent_home(task.id), ".tmp", "codelead-tty"])
-    env = session_env(task, tty_file, opts)
+    pid_file = Path.join([Workspace.agent_home(task.id), ".tmp", "codelead-terminal.pid"])
+    env = session_env(task, tty_file, pid_file, opts)
 
     with :ok <- check_container_license(),
          {:ok, container_id} <- Devcontainer.ensure_for_task(task.id),
@@ -197,6 +215,19 @@ defmodule CodeLead.Terminal do
          task_id: task.id,
          pty?: script?,
          port_opener: fn -> open_port(cli_path, args, []) end,
+         # Killing the local `docker exec` client reaches nothing inside
+         # the container, so the shell records its own pid on the way up
+         # and the stopper signals that group. Closes over strings only:
+         # this runs under a supervisor shutdown.
+         stopper: fn _os_pid ->
+           _ =
+             DockerCli.run(
+               ["exec", container_id, "sh", "-c", OsProcess.terminate_group_script(pid_file)],
+               timeout: 5_000
+             )
+
+           :ok
+         end,
          resizer: fn cols, rows ->
            script = Command.resize_script(tty_file, cols, rows)
            DockerCli.run(["exec", container_id, "sh", "-c", script])
@@ -207,13 +238,21 @@ defmodule CodeLead.Terminal do
 
   defp spawn_spec(%Task{} = task, path, opts) do
     tty_file = Path.join(System.tmp_dir!(), "codelead-tty-#{task.id}")
-    port_env = EnvScrub.port_env(session_env(task, tty_file, opts))
+    pid_file = Path.join(System.tmp_dir!(), "codelead-terminal-#{task.id}.pid")
+    port_env = EnvScrub.port_env(session_env(task, tty_file, pid_file, opts))
 
     with {:ok, {exe, args, pty?}} <- local_command() do
       {:ok,
        %{
          task_id: task.id,
          pty?: pty?,
+         # The spawned shell leads its own process group, so signalling
+         # the group reaches whatever the user started from it — which
+         # closing the port does not (ADR-0013).
+         stopper: fn
+           nil -> :ok
+           os_pid -> OsProcess.terminate_group(os_pid)
+         end,
          port_opener: fn ->
            # Clear a previous session's device before this one records
            # its own: host pts numbers are reused, so a resize landing in

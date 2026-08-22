@@ -8,19 +8,30 @@ defmodule CodeLead.Preview.Session do
   after sitting viewer-less past the idle timeout; `restart: :temporary`
   — a stopped preview is restarted by the UI on demand, not by the
   supervisor.
+
+  Traps exits so that *every* way out runs the stopper — an application
+  shutdown included. Closing the Port would leave the server running
+  (ADR-0013), so the signal is the only thing that ends it.
   """
 
-  use GenServer, restart: :temporary
+  use GenServer, restart: :temporary, shutdown: 10_000
 
   alias CodeLead.Preview
 
   @log_limit 64_000
   @probe_interval_ms 1_000
 
+  @typedoc """
+  `port_opener: nil` starts an **adopted** session: the server predates
+  this VM — it survived an ungraceful exit inside its container — and is
+  reachable only through `stopper`. Such a session owns no Port, so it
+  learns nothing from stdout and nothing from an exit; the probe is its
+  only liveness signal, which is why it still starts in `:starting`.
+  """
   @type start_arg :: %{
           task_id: pos_integer(),
-          port_opener: (-> port()),
-          stopper: (port() -> :ok),
+          port_opener: (-> port()) | nil,
+          stopper: (pos_integer() | nil -> :ok),
           probe: (-> :ready | :waiting)
         }
 
@@ -31,7 +42,8 @@ defmodule CodeLead.Preview.Session do
 
   @impl true
   def init(%{task_id: task_id, port_opener: port_opener, stopper: stopper, probe: probe}) do
-    port = port_opener.()
+    Process.flag(:trap_exit, true)
+    port = if port_opener, do: port_opener.()
     Preview.broadcast(task_id, :starting)
     Process.send_after(self(), :probe, @probe_interval_ms)
     start_timer = Process.send_after(self(), :start_timeout, Preview.start_timeout_ms())
@@ -40,6 +52,10 @@ defmodule CodeLead.Preview.Session do
      %{
        task_id: task_id,
        port: port,
+       # Resolved now, not at stop time: a port that has already exited
+       # reports no os pid, and the group it led may still hold members
+       # — precisely the background children a stop has to reap.
+       os_pid: os_pid(port),
        stopper: stopper,
        probe: probe,
        status: :starting,
@@ -56,7 +72,7 @@ defmodule CodeLead.Preview.Session do
   end
 
   def handle_call(:stop, _from, state) do
-    stop_server(state)
+    state = stop_server(state)
     Preview.broadcast(state.task_id, :stopped)
     {:stop, :normal, :ok, state}
   end
@@ -87,24 +103,34 @@ defmodule CodeLead.Preview.Session do
 
   def handle_info(:probe, state), do: {:noreply, state}
 
+  # An adopted session has no log to show, so a timeout is not a failure
+  # panel — it is the reconciliation: the recorded pid is not serving,
+  # so signal it and forget it.
+  def handle_info(:start_timeout, %{status: :starting, port: nil} = state) do
+    state = stop_server(state)
+    Preview.broadcast(state.task_id, :stopped)
+    {:stop, :normal, state}
+  end
+
   def handle_info(:start_timeout, %{status: :starting} = state) do
-    stop_server(state)
+    state = stop_server(state)
     Preview.broadcast(state.task_id, {:failed, state.log})
     {:stop, :normal, state}
   end
 
   def handle_info(:start_timeout, state), do: {:noreply, state}
 
-  def handle_info({port, {:data, chunk}}, %{port: port} = state) do
+  def handle_info({port, {:data, chunk}}, %{port: port} = state) when is_port(port) do
     {:noreply, %{state | log: append_log(state.log, chunk)}}
   end
 
-  def handle_info({port, {:exit_status, _status}}, %{port: port, status: :starting} = state) do
+  def handle_info({port, {:exit_status, _status}}, %{port: port, status: :starting} = state)
+      when is_port(port) do
     Preview.broadcast(state.task_id, {:failed, state.log})
     {:stop, :normal, state}
   end
 
-  def handle_info({port, {:exit_status, _status}}, %{port: port} = state) do
+  def handle_info({port, {:exit_status, _status}}, %{port: port} = state) when is_port(port) do
     Preview.broadcast(state.task_id, :stopped)
     {:stop, :normal, state}
   end
@@ -117,7 +143,7 @@ defmodule CodeLead.Preview.Session do
   end
 
   def handle_info(:idle_timeout, %{viewers: viewers} = state) when map_size(viewers) == 0 do
-    stop_server(state)
+    state = stop_server(state)
     Preview.broadcast(state.task_id, :stopped)
     {:stop, :normal, state}
   end
@@ -128,21 +154,40 @@ defmodule CodeLead.Preview.Session do
 
   @impl true
   def terminate(_reason, state) do
-    if Port.info(state.port), do: Port.close(state.port)
+    state |> stop_server() |> close_port()
+  end
+
+  # The server process outlives its Port (docker exec's death never
+  # reaches into the container; a shell's children survive an EOF), so
+  # stopping means signalling it explicitly. Clearing the stopper is what
+  # makes this safe to call from every exit path, `terminate/2` included.
+  defp stop_server(%{stopper: nil} = state), do: state
+
+  defp stop_server(%{stopper: stopper, os_pid: os_pid} = state) do
+    stopper.(os_pid)
+    %{state | stopper: nil}
+  rescue
+    _cannot_signal -> %{state | stopper: nil}
+  end
+
+  defp os_pid(port) when is_port(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} -> os_pid
+      nil -> nil
+    end
+  end
+
+  defp os_pid(_no_port), do: nil
+
+  defp close_port(%{port: port} = _state) when is_port(port) do
+    if Port.info(port), do: Port.close(port)
     :ok
   catch
     # The port can die between the info check and the close.
     :error, :badarg -> :ok
   end
 
-  # The server process outlives its Port (docker exec's death never
-  # reaches into the container; a shell's children survive an EOF), so
-  # stopping means signalling it explicitly.
-  defp stop_server(state) do
-    state.stopper.(state.port)
-  rescue
-    _cannot_signal -> :ok
-  end
+  defp close_port(_no_port), do: :ok
 
   defp drop_viewer(state, viewer) do
     {gone, viewers} =

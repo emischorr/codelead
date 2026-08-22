@@ -43,14 +43,25 @@ tasks use a task folder and skip the branch/push flow.
   an earlier generation, on an unrelated repository; reusing one
   unchecked runs the agent in the wrong repo and reports nothing. `mix
   code_lead.workspace.clean` (wired into the `ecto.reset` alias, ahead
-  of `ecto.drop` so its guard can still query the database) drops
-  `worktrees/`, `tasks/`, `surveys/`, `merges/` and `agent-homes/`,
-  prunes the base clones, and best-effort removes labeled task
-  containers, so a reset stops leaving orphans behind. It refuses to
-  run while any task has a live or pending run (`queued`, `dispatched`,
-  `executing` in the database) — cleaning would pull worktrees and
-  containers out from under running agents; `--force` overrides, and a
-  refusal aborts the whole `ecto.reset` before the drop.
+  of `ecto.drop` so its guard can still query the database) best-effort
+  removes labeled task containers *first* — that is the only lever it
+  has over processes still writing into the worktrees — then drops
+  `worktrees/`, `tasks/`, `surveys/`, `merges/` and `agent-homes/` and
+  prunes the base clones, so a reset stops leaving orphans behind. It
+  refuses to run for two separate reasons: any task with a live or
+  pending run (`queued`, `dispatched`, `executing` in the database),
+  since cleaning would pull worktrees and containers out from under
+  running agents; and any task sitting in **Review**, where a preview
+  server or a Developer shell outlives the run and may still be writing
+  into those paths. The task runs without the application started, so
+  it cannot ask a live instance to stop those sessions — stopping the
+  instance is what ends them (ADR-0013). `--force` overrides either, and
+  a refusal aborts the whole `ecto.reset` before the drop.
+
+  What no cold BEAM can reach: a *local* preview server or shell
+  orphaned by an ungraceful exit (`kill -9`, OOM). It has no pid file
+  and nothing records it; find it with `lsof -i :<preview_port>` and
+  reap it by hand.
 - A task whose recorded branch survives but whose worktree directory is
   gone is re-attached to that branch (`Git.attach_worktree/3`) rather
   than branched afresh — its commits are still wanted. A branch bearing

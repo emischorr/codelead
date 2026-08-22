@@ -55,6 +55,32 @@ defmodule Mix.Tasks.CodeLead.Workspace.CleanTest do
     end
   end
 
+  test "refuses when a task is in Review and deletes nothing" do
+    %{task: task} = runnable_task_fixture()
+    task = put_context!(task, %{state: :review})
+    root = seed_workspace()
+
+    assert_raise Mix.Error, ~r/in Review.*#{task.id}/s, fn ->
+      Mix.Tasks.CodeLead.Workspace.Clean.run([])
+    end
+
+    for dir <- @per_task_dirs do
+      assert File.dir?(Path.join([root, dir, "sentinel"]))
+    end
+  end
+
+  test "--force cleans despite a Review context" do
+    %{task: task} = runnable_task_fixture()
+    _task = put_context!(task, %{state: :review})
+    root = seed_workspace()
+
+    Mix.Tasks.CodeLead.Workspace.Clean.run(["--force"])
+
+    for dir <- @per_task_dirs do
+      refute File.dir?(Path.join([root, dir, "sentinel"]))
+    end
+  end
+
   test "--force cleans despite live runs, keeping repos" do
     %{task: task} = runnable_task_fixture()
     _task = executing_task(task)

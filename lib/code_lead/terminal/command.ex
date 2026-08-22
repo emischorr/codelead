@@ -81,11 +81,31 @@ defmodule CodeLead.Terminal.Command do
     ~s(mkdir -p "${CODELEAD_TTY_FILE%/*}" 2>/dev/null; ) <>
       ~s(tty > "$CODELEAD_TTY_FILE" 2>/dev/null; ) <>
       ~s(stty rows "$LINES" cols "$COLUMNS" 2>/dev/null; ) <>
+      record_pid() <>
       ~s(exec #{shell} -i)
+  end
+
+  @doc """
+  Pipe-fallback payload: records the shell's pid for the stopper, then
+  execs it. The PTY form's `tty`/`stty` steps have no meaning without a
+  terminal device, but the pid does — without it a container terminal
+  spawned into an image that lacks `script(1)` cannot be stopped at all.
+  """
+  @spec pipe_payload(String.t()) :: String.t()
+  def pipe_payload(shell) do
+    record_pid() <> ~s(exec #{shell} -i)
+  end
+
+  # `$$` is the shell that survives the `exec`, so the recorded pid
+  # stays the one to signal. Best-effort like every other step here: a
+  # context without a writable path still gets a working terminal.
+  defp record_pid do
+    ~s(mkdir -p "${CODELEAD_PID_FILE%/*}" 2>/dev/null; ) <>
+      ~s(echo $$ > "$CODELEAD_PID_FILE" 2>/dev/null; )
   end
 
   defp size_args(cols, rows), do: "rows #{rows} cols #{cols}"
 
   defp shell_argv(shell, true), do: ["script", "-qec", payload(shell), "/dev/null"]
-  defp shell_argv(shell, false), do: [shell, "-i"]
+  defp shell_argv(shell, false), do: [shell, "-c", pipe_payload(shell)]
 end

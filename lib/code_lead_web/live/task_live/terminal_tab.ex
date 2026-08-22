@@ -105,8 +105,12 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
 
           this.handleEvent("terminal:data", ({ data }) => this.term.write(fromB64(data)))
           this.handleEvent("terminal:exit", ({ status }) => {
-            this.term.write(`\r\n\x1b[2m[shell exited with status ${status}]\x1b[0m\r\n`)
-            this.showStatus(`shell exited (${status})`, { restart: true })
+            // A numeric status is the shell's own exit code; anything
+            // else means the session was stopped for us (the execution
+            // context went away), and has no code to report.
+            const how = typeof status === "number" ? `exited with status ${status}` : "closed"
+            this.term.write(`\r\n\x1b[2m[shell ${how}]\x1b[0m\r\n`)
+            this.showStatus(`shell ${how}`, { restart: true })
           })
 
           this.restart.addEventListener("click", () => {

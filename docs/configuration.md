@@ -42,6 +42,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `PREVIEW_RELAY_IMAGE` | `alpine/socat` | Image the preview relay sidecar runs. Pulled on the first container-task preview; override for mirrored/air-gapped registries — any image whose entrypoint is `socat` works. |
 | `PREVIEW_IDLE_MINUTES` | `30` | How long a one-click preview server keeps running with nobody on the Review tab before it stops itself. |
 | `PREVIEW_START_TIMEOUT_SECONDS` | `120` | How long a started preview command gets to answer on the preview port before the session gives up and surfaces its log tail. |
+| `TERMINAL_IDLE_MINUTES` | `15` | How long a viewer-less Terminal session keeps its shell alive before stopping it. |
 | `MAINTENANCE_IMAGE` | `alpine:3.20` | Image `CodeLead.Workspace.Remover` uses to delete root-owned leftovers of container runs (a short-lived `docker run … rm -rf` over the mounted socket). Any image with a POSIX `rm` works; override for mirrored/air-gapped registries. Installs without docker never use it — blocked deletions surface for manual cleanup instead. |
 | `PREVIEW_DOMAIN` | — | Unset (the convention), previews are served at `/preview/<task_id>/` on the app's own origin with zero configuration. Set to a wildcard-DNS'd domain (e.g. `preview.example.com`) to switch the **whole instance** to per-task subdomain previews at `task-<id>.$PREVIEW_DOMAIN` — for apps that break under path-prefix hosting. See [Subdomain previews](#subdomain-previews-preview_domain). |
 
@@ -101,11 +102,14 @@ template is not.
 - `:preview_publish_ip` / `:preview_upstream_host` — see the env vars
   above.
 - `:terminal_shell` — the shell the Terminal tab spawns, default `"sh"`.
-- `:terminal_idle_ms` — how long a viewer-less terminal session keeps
-  its shell alive, default 15 minutes.
+- `:terminal_idle_ms` — from `TERMINAL_IDLE_MINUTES`; how long a
+  viewer-less terminal session keeps its shell alive, default 15 minutes.
 - `:terminal_command` — test-only whole-argv override for local
   terminal spawns (`test/support/fake_shell.sh`), mirroring
   `:docker_cli`.
+- `:adopt_previews_at_boot` — whether boot re-attaches sessions to
+  container previews that outlived an ungraceful exit, default `true`;
+  `false` in the test env, where a boot-time query races the sandbox.
 - `:mail_enabled` / `:mail_from` — see *Mail* below.
 
 ## Mail
@@ -295,16 +299,28 @@ devcontainer) with the project env plus `PREVIEW_BASE_PATH`/
 `Starting… → Running`, and a failure surfaces the command's log tail in
 place. The command should be a single process (installs belong in the
 lifecycle hooks); the session stops on request-changes, on leaving
-Review for good, and after `PREVIEW_IDLE_MINUTES` with nobody watching.
+Review for good, after `PREVIEW_IDLE_MINUTES` with nobody watching, and
+when the app shuts down. Stopping signals the command's whole process
+group, so a compound command's children go with it.
+
+A container preview that outlives an *ungraceful* exit (`kill -9`, OOM,
+a host crash) is re-attached at boot rather than left running unmanaged:
+the Review tab shows the server that is actually serving, and Start
+preview does not spawn a second one.
 
 **Manual fallback.** Without a `preview_command`, start the server from
-the task's Terminal. The terminal session closes its `docker exec`
-after 15 minutes with no viewer; the shell sees EOF and takes its
-*foreground* children with it. A server started with `nohup … &` is
-reparented to the container's PID 1 and keeps serving — nothing ever
-stops the container.
+the task's Terminal. The session stops the shell after
+`TERMINAL_IDLE_MINUTES` with no viewer, and stopping means signalling
+the shell's whole process group — so a server started from it goes down
+with it, backgrounded or not (ADR-0013). The same happens when the app
+shuts down and when the execution context is destroyed.
 
-What does end it is environment *removal*: cancel, Review→Planning
+Note the asymmetry with the one-click preview, and that it is
+deliberate: a run entering Running stops the preview but *not* the
+terminal. Request changes preserves the worktree, the branch and the ACP
+session, so it preserves the shell you are holding too.
+
+What also ends it is environment *removal*: cancel, Review→Planning
 (`worktree_policy: :discard`), reaching Done (finalize always releases
 the environment), or the boot reaper for any task not sitting in
 Review. Only the workspace mount survives that, so anything written
