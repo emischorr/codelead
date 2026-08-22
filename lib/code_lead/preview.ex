@@ -83,6 +83,32 @@ defmodule CodeLead.Preview do
   end
 
   @doc """
+  Task ids with a live preview session, adopted ones included. This is
+  the truth about *processes*, node-local like the registry itself — a
+  session counts from the moment it starts, whether or not its server
+  answers on the preview port yet.
+  """
+  @spec active_task_ids() :: [pos_integer()]
+  def active_task_ids do
+    Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
+  @doc """
+  Subscribes to the org-wide preview topic, which carries every
+  session's open and close as `{:preview_session, :opened | :closed,
+  task_id}`.
+
+  A subscriber tracks the live set from these messages. It must **not**
+  re-read the registry when a close arrives: the session broadcasts from
+  `terminate/2`, while it is still registered, so a recount there reads
+  one too many and stays wrong until the next reconcile.
+  """
+  @spec subscribe_org() :: :ok | {:error, term()}
+  def subscribe_org do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, org_topic())
+  end
+
+  @doc """
   Attaches the calling process as a viewer (monitored; a crashed viewer
   detaches implicitly) — a session with no viewers stops after the idle
   timeout.
@@ -156,6 +182,16 @@ defmodule CodeLead.Preview do
   end
 
   @doc false
+  @spec broadcast_session(pos_integer(), :opened | :closed) :: :ok
+  def broadcast_session(task_id, lifecycle) do
+    Phoenix.PubSub.broadcast(
+      CodeLead.PubSub,
+      org_topic(),
+      {:preview_session, lifecycle, task_id}
+    )
+  end
+
+  @doc false
   @spec via(pos_integer()) :: {:via, Registry, {module(), pos_integer()}}
   def via(task_id), do: {:via, Registry, {@registry, task_id}}
 
@@ -176,6 +212,8 @@ defmodule CodeLead.Preview do
       {DynamicSupervisor, name: @supervisor, strategy: :one_for_one}
     ]
   end
+
+  defp org_topic, do: "org:previews"
 
   # Registry unregistration is asynchronous after a session dies, so a
   # lookup can briefly return a dead pid — treat it as gone.

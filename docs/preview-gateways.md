@@ -78,10 +78,21 @@ per instance (ADR-0011).
   (`sid` → `_clp<id>_sid`, path-scoped), but bodies pass untouched — so absolute
   asset paths, `fetch('/api/...')`, and absolutely-built websocket URLs miss the
   mount unless the app honors `PREVIEW_BASE_PATH`.
-- **What stays broken even when honored:** double-submit CSRF (Django, Laravel,
-  Angular) 403s on AJAX writes, because client JS looks for the cookie's real name
-  and finds the namespaced one. This is structural to sharing an origin under a
-  prefix; no amount of adaptation fixes it.
+- **What stays broken even when honored:** two things. Double-submit CSRF (Django,
+  Laravel, Angular) 403s on AJAX writes, because client JS looks for the cookie's
+  real name and finds the namespaced one — structural to sharing an origin under a
+  prefix, and no amount of adaptation fixes it. And *honoring* `PREVIEW_BASE_PATH`
+  is narrower than it sounds: it configures the router, so anything outside the
+  router still emits root-absolute URLs. A Phoenix app is the worked example — its
+  generated `assets/js/app.js` hardcodes `new LiveSocket("/live", …)`, which under
+  a path preview opens against **CodeLead's own** LiveView endpoint. CodeLead
+  completes the upgrade, rejects the join as `stale`, and the client falls back to
+  a full page load — so the preview reloads itself indefinitely rather than merely
+  losing its socket. `CodeLeadWeb.Plugs.PreviewLoopGuard` detects that shape and
+  serves a diagnostic naming the likely causes; it is a **diagnostic, not a fix**,
+  and rewrites nothing. The per-framework recipes and the remaining escapes (CSS
+  `url(/…)`, literal `href="/"`) are in
+  [`configuration.md`](configuration.md#when-the-preview-tab-flickers).
 - **Profile served:** every deployment, as the lowest common denominator; the only
   choice for 443-only topologies.
 

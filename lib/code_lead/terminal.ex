@@ -119,15 +119,50 @@ defmodule CodeLead.Terminal do
   @spec alive?(pos_integer()) :: boolean()
   def alive?(task_id), do: whereis(task_id) != nil
 
+  @doc """
+  Task ids with a live terminal session. This is the truth about
+  *processes*, node-local like the registry itself — a session counts
+  from the moment it starts until its shell is gone.
+  """
+  @spec active_task_ids() :: [pos_integer()]
+  def active_task_ids do
+    Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
   @spec subscribe(pos_integer()) :: :ok | {:error, term()}
   def subscribe(task_id) do
     Phoenix.PubSub.subscribe(CodeLead.PubSub, topic(task_id))
+  end
+
+  @doc """
+  Subscribes to the org-wide terminal topic, which carries every
+  session's open and close as `{:terminal_session, :opened | :closed,
+  task_id}`.
+
+  A subscriber tracks the live set from these messages. It must **not**
+  re-read the registry when a close arrives: the session broadcasts from
+  `terminate/2`, while it is still registered, so a recount there reads
+  one too many and stays wrong until the next reconcile.
+  """
+  @spec subscribe_org() :: :ok | {:error, term()}
+  def subscribe_org do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, org_topic())
   end
 
   @doc false
   @spec broadcast(pos_integer(), term()) :: :ok
   def broadcast(task_id, message) do
     Phoenix.PubSub.broadcast(CodeLead.PubSub, topic(task_id), message)
+  end
+
+  @doc false
+  @spec broadcast_session(pos_integer(), :opened | :closed) :: :ok
+  def broadcast_session(task_id, lifecycle) do
+    Phoenix.PubSub.broadcast(
+      CodeLead.PubSub,
+      org_topic(),
+      {:terminal_session, lifecycle, task_id}
+    )
   end
 
   @doc false
@@ -147,6 +182,8 @@ defmodule CodeLead.Terminal do
   end
 
   defp topic(task_id), do: "terminal:#{task_id}"
+
+  defp org_topic, do: "org:terminals"
 
   # Registry unregistration is asynchronous after a session dies, so a
   # lookup can briefly return a dead pid — treat it as gone.

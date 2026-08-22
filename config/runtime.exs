@@ -126,7 +126,13 @@ config :code_lead,
   preview_idle_ms: String.to_integer(System.get_env("PREVIEW_IDLE_MINUTES", "30")) * 60_000,
   preview_start_timeout_ms:
     String.to_integer(System.get_env("PREVIEW_START_TIMEOUT_SECONDS", "120")) * 1_000,
-  terminal_idle_ms: String.to_integer(System.get_env("TERMINAL_IDLE_MINUTES", "15")) * 60_000
+  terminal_idle_ms: String.to_integer(System.get_env("TERMINAL_IDLE_MINUTES", "15")) * 60_000,
+  # The path gateway's reload-loop breaker: repeated navigations to the
+  # same /preview/<id>/ URL serve a diagnostic instead of proxying (an
+  # app emitting root-absolute URLs that escape the mount makes its own
+  # client reload forever). Each page offers a one-click bypass;
+  # PREVIEW_LOOP_BREAKER=off disarms it instance-wide.
+  preview_loop_breaker: System.get_env("PREVIEW_LOOP_BREAKER") != "off"
 
 # Preview gateway selection. Unset (the convention), previews are served
 # by the path gateway at /preview/<id>/ with zero configuration. Setting

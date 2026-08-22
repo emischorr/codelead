@@ -62,7 +62,9 @@ note is the "how it works today" map.
   page refreshes, keeps a bounded scrollback, broadcasts on
   `terminal:<id>`, idles out viewer-less (ADR-0008), and stops the
   shell's process group when the execution context is destroyed or the
-  app shuts down — never on request-changes (ADR-0013). Resizes go to the
+  app shuts down — never on request-changes (ADR-0013). Announces its own
+  open/close on `org:terminals`, which is how the dashboard counts live
+  sessions exactly. Resizes go to the
   PTY device the session recorded at spawn, applied by an `stty` run
   from outside it (ADR-0010). The shell's directory comes from
   `Terminal.context_path/1` — worktree or task folder — so folder-target
@@ -75,7 +77,10 @@ note is the "how it works today" map.
   shutdown. A session started with `port_opener: nil` is an *adopted*
   one — it owns no Port and manages a container server that outlived an
   ungraceful exit, re-attached at boot by `Preview.adopt_survivors/0`
-  (ADR-0013).
+  (ADR-0013). Announces its own open/close on `org:previews`. Both
+  subsystems own a topic rather than sharing one: per ADR-0013's "no
+  shared session abstraction", a coordinator knowing both registries is
+  the thing that decision rejected.
 - `CodeLead.OsProcess` — pure signalling helpers shared by both
   sessions: closing a Port does not stop the program behind it, and
   port children lead their own process groups, so stopping means

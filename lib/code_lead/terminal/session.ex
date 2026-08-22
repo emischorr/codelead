@@ -43,6 +43,10 @@ defmodule CodeLead.Terminal.Session do
       }) do
     Process.flag(:trap_exit, true)
     port = port_opener.()
+    # After the port opens, never before: `terminate/2` does not run if
+    # `init/1` raises, and this is the only thing here that can — an
+    # earlier announcement would leave an open with no matching close.
+    Terminal.broadcast_session(task_id, :opened)
 
     {:ok,
      %{
@@ -122,6 +126,9 @@ defmodule CodeLead.Terminal.Session do
 
   @impl true
   def terminate(_reason, state) do
+    # Ahead of the stopper: a container stopper waits up to 5s on a
+    # `docker exec`, and the readout should not lag the decision.
+    Terminal.broadcast_session(state.task_id, :closed)
     state |> stop_shell() |> close_port()
   end
 

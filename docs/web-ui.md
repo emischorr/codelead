@@ -207,12 +207,16 @@ short viewport squeezes the links rather than the chrome.
 
 ## DashboardLive
 
-The landing page at `/`, org-wide across every project. Five rows, in
+The landing page at `/`, org-wide across every project. Six rows, in
 the order a human triages: attention tiles (needs approval, failed runs,
 agents running, stalled runs) → a 14-day throughput chart plus lead
 time and spend tiles → active runs and the attention queue → recent
 completions and the cross-project activity feed → a per-project
-pipeline breakdown. With no projects it renders an onboarding card
+pipeline breakdown → the live-session tiles at the very bottom
+(`#tile-previews`, `#tile-terminals`), which is where an operator looks
+before restarting: since ADR-0013 a graceful shutdown stops every
+preview server and shell, and each tile names the tasks whose session a
+restart would end. With no projects it renders an onboarding card
 inside `Layouts.app` — the sidebar stays, because there is somewhere to
 navigate to (`/settings/projects/new`).
 
@@ -226,7 +230,7 @@ pill and budget tile are project-scoped, and pointing them at one
 arbitrary project's board from an org-wide page would be wrong; the page
 carries its own readouts instead.
 
-Three refresh mechanics, all load-bearing:
+Four refresh mechanics, all load-bearing:
 
 - `Tasks.subscribe_org/0` — one subscription to `"org:tasks"` rather
   than N board topics, so a project created after mount is covered.
@@ -237,8 +241,24 @@ Three refresh mechanics, all load-bearing:
   straight after a change, as `BoardLiveTest` does, sees stale content.
 - A 30s `:periodic` tick. `Costs.record_run/1` broadcasts nothing at
   all, so without it spend, the spend chart and the per-project costs
-  would freeze at mount. It also re-renders relative timestamps and
-  rolls the page over UTC midnight.
+  would freeze at mount. It also re-renders relative timestamps, rolls
+  the page over UTC midnight, and reconciles the session sets below.
+- `Preview.subscribe_org/0` + `Terminal.subscribe_org/0` — the session
+  tiles are **event-sourced, not polled**. Each `Session` announces
+  `:opened` from `init/1` (*after* the port opens, so a start that
+  raises emits no unmatched open) and `:closed` from `terminate/2`,
+  which every exit path reaches; the LiveView moves one id in or out of
+  a `MapSet`. It must **never** re-read the registry on a close: a
+  session broadcasting from `terminate/2` is still registered, so a
+  recount there reads one too many and nothing follows to correct it.
+  The registries are read only at mount — *after* subscribing, so a
+  racing event applies on top of the snapshot — and on the `:periodic`
+  tick, which clears any session that died without running `terminate/2`.
+  Session events skip `load_dashboard/1` entirely and are applied
+  immediately rather than debounced: the cost is two ETS reads plus one
+  `Tasks.titles/1` lookup, and the tiles exist to be exact *now*. A
+  preview still `:starting` counts — it already owns a live OS process a
+  restart would kill.
 
 "Stalled runs" cross-checks `Tasks.active_runs/0` against
 `RunSupervisor.active_task_ids/0`: a task persisted as `:executing`

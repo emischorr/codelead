@@ -497,6 +497,12 @@ docker compose pull
 docker compose up -d
 ```
 
+`up -d` recreates the app container, and a graceful shutdown now **stops every
+preview server and terminal session** rather than leaving them running
+(ADR-0013). Check the two tiles at the bottom of the dashboard first: *Preview
+servers* and *Terminal sessions* name the tasks whose session the restart will
+end.
+
 `migrate` reruns as part of `up` and the app waits for it, so schema changes
 apply themselves. Watch it if you want the reassurance:
 

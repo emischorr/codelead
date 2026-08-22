@@ -36,6 +36,7 @@ defmodule CodeLeadWeb.Router do
     plug :fetch_session
     plug :fetch_current_scope_for_user
     plug CodeLeadWeb.Plugs.RequirePreviewAccess
+    plug CodeLeadWeb.Plugs.PreviewLoopGuard
   end
 
   ## First-run wizard

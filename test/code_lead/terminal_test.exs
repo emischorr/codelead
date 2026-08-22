@@ -250,6 +250,21 @@ defmodule CodeLead.TerminalTest do
       assert Terminal.stop(System.unique_integer([:positive])) == :ok
     end
 
+    test "announces its open and close org-wide", %{worktree: worktree} do
+      :ok = Terminal.subscribe_org()
+      task = terminal_task(worktree)
+      task_id = task.id
+
+      assert {:ok, pid} = Terminal.ensure_session(task)
+      assert_receive {:terminal_session, :opened, ^task_id}, 2_000
+
+      ref = Process.monitor(pid)
+      assert Terminal.stop(task.id) == :ok
+
+      assert_receive {:terminal_session, :closed, ^task_id}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+    end
+
     test "an application shutdown reaps the shell's children too", %{worktree: worktree} do
       Application.put_env(:code_lead, :terminal_command, ["/bin/sh", @fake_shell_bg])
       marker = Path.join(worktree, "child.pid")
