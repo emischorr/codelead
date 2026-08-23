@@ -31,6 +31,43 @@ defmodule CodeLead.PreviewTest do
     dir
   end
 
+  # An open port with nobody answering — the shape a preview relay
+  # presents when the dev server behind it never bound. Serving is a
+  # separate step so a test can start a session first and only then let
+  # the port answer.
+  defp listener! do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {listener, port}
+  end
+
+  # One minimal HTTP response per connection — what the probe now
+  # requires before it calls a server ready.
+  defp serve!(listener) do
+    server = spawn(fn -> serve(listener) end)
+    on_exit(fn -> Process.exit(server, :kill) end)
+    server
+  end
+
+  defp serve(listener) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        _request = :gen_tcp.recv(socket, 0, 1_000)
+
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok"
+        )
+
+        :gen_tcp.close(socket)
+        serve(listener)
+
+      {:error, _closed} ->
+        :ok
+    end
+  end
+
   test "refuses without a declared preview command" do
     task = repo_task(%{preview_port: 5173})
 
@@ -52,15 +89,56 @@ defmodule CodeLead.PreviewTest do
   end
 
   test "refuses to stack a second server on a port that already answers" do
-    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-    {:ok, port} = :inet.port(listener)
-    on_exit(fn -> :gen_tcp.close(listener) end)
+    {listener, port} = listener!()
+    serve!(listener)
 
     task =
       repo_task(%{preview_port: port, preview_command: "sleep 30"})
       |> put_context!(%{worktree_path: worktree!()})
 
     assert Preview.ensure_session(task) == {:error, :port_in_use}
+  end
+
+  # The relay sidecar accepts on behalf of a dev server that may not be
+  # there, so an open port has to count for nothing on its own.
+  test "a port that accepts but never answers is not a running server" do
+    {_listener, port} = listener!()
+
+    task =
+      repo_task(%{preview_port: port, preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    assert {:ok, pid} = Preview.ensure_session(task)
+    assert Preview.status(task.id) == :starting
+
+    on_exit(fn -> Preview.stop(task.id) end)
+    assert is_pid(pid)
+  end
+
+  test "a server that stops answering leaves the running state" do
+    Application.put_env(:code_lead, :preview_liveness_ms, 100)
+    on_exit(fn -> Application.delete_env(:code_lead, :preview_liveness_ms) end)
+
+    {listener, port} = listener!()
+
+    task =
+      repo_task(%{preview_port: port, preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    :ok = Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+
+    # Started against a port that only accepts, so the session is real
+    # before anything answers on it.
+    assert {:ok, _pid} = Preview.ensure_session(task)
+    serve!(listener)
+    assert_receive {:preview_state, _task_id, :ready}, 5_000
+
+    :gen_tcp.close(listener)
+
+    assert_receive {:preview_state, _task_id, :unreachable}, 5_000
+    assert Preview.status(task.id) == :unreachable
+
+    on_exit(fn -> Preview.stop(task.id) end)
   end
 
   test "a session started under another gateway is replaced, not reused" do

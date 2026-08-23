@@ -10,6 +10,8 @@ defmodule CodeLeadWeb.PreviewProxy.Forwarder do
   import Plug.Conn
 
   alias CodeLead.PreviewGateway
+  alias CodeLeadWeb.Endpoint
+  alias CodeLeadWeb.PreviewProxy.Diagnostics
   alias CodeLeadWeb.PreviewProxy.ErrorPages
   alias CodeLeadWeb.PreviewProxy.Headers
   alias CodeLeadWeb.PreviewProxy.HTTP
@@ -23,14 +25,10 @@ defmodule CodeLeadWeb.PreviewProxy.Forwarder do
   def forward(conn, task, %Policy{} = policy) do
     case PreviewGateway.impl().upstream_for(task) do
       {:ok, upstream} ->
-        if websocket_upgrade?(conn) do
-          upgrade_websocket(conn, upstream, policy)
-        else
-          HTTP.forward(conn, upstream, policy, upstream_path(conn, policy.mount_path))
-        end
+        dispatch(conn, task, upstream, policy)
 
       {:error, _not_running} ->
-        error_page(conn, 502, ErrorPages.not_running(nil))
+        error_page(conn, 502, ErrorPages.not_running(nil, diagnose(task, nil)))
     end
   end
 
@@ -41,6 +39,24 @@ defmodule CodeLeadWeb.PreviewProxy.Forwarder do
     |> put_resp_content_type("text/html")
     |> send_resp(status, html)
   end
+
+  defp dispatch(conn, task, upstream, policy) do
+    if websocket_upgrade?(conn) do
+      upgrade_websocket(conn, upstream, policy)
+    else
+      HTTP.forward(
+        conn,
+        upstream,
+        policy,
+        upstream_path(conn, policy.mount_path),
+        # A thunk, not a value: collecting the readout inspects the relay
+        # and reads the repository, and nearly every request here answers.
+        fn -> diagnose(task, upstream) end
+      )
+    end
+  end
+
+  defp diagnose(task, upstream), do: Diagnostics.collect(task, upstream, Endpoint.url())
 
   defp upgrade_websocket(conn, upstream, policy) do
     if origin_allowed?(conn) do

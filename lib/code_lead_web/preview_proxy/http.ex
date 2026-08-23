@@ -33,15 +33,23 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
   Forwards the request to `upstream` and streams the response into
   `conn`. `policy` decides the header rewrites for the active gateway;
   `upstream_path` must carry the original (still percent-encoded) path
-  and query.
+  and query. `diagnose` is called only when the upstream cannot be
+  reached, to fill in the error page.
   """
   @spec forward(
           Plug.Conn.t(),
           CodeLead.PreviewGateway.upstream(),
           Policy.t(),
-          String.t()
+          String.t(),
+          (-> map())
         ) :: Plug.Conn.t()
-  def forward(conn, %{host: host, port: port} = upstream, policy, upstream_path) do
+  def forward(
+        conn,
+        %{host: host, port: port} = upstream,
+        policy,
+        upstream_path,
+        diagnose \\ fn -> %{} end
+      ) do
     with {:ok, method} <- Map.fetch(@methods, conn.method),
          {:ok, body, conn} <- read_full_body(conn) do
       request =
@@ -69,7 +77,7 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
           # while an upstream is down, so this fires in a steady loop.
           Logger.debug("preview proxy: connect to #{host}:#{port} failed: #{inspect(transport)}")
 
-          not_running(conn, upstream)
+          not_running(conn, upstream, diagnose)
       end
     else
       :error -> send_resp(conn, 405, "method not allowed")
@@ -168,10 +176,10 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
     |> send_resp(404, ErrorPages.stale_base_path(prefix))
   end
 
-  defp not_running(conn, upstream) do
+  defp not_running(conn, upstream, diagnose) do
     conn
     |> put_resp_content_type("text/html")
-    |> send_resp(502, ErrorPages.not_running(upstream))
+    |> send_resp(502, ErrorPages.not_running(upstream, diagnose.()))
   end
 
   defp read_full_body(conn, acc \\ []) do

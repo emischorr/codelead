@@ -537,9 +537,15 @@ above the bar instead of underneath it.
   `CodeLead.Preview` runs the command in the task's execution context
   (host shell for local tasks, `docker exec` into the devcontainer for
   container tasks) with the project env plus `PREVIEW_BASE_PATH`, and a
-  `Preview.Session` probes the upstream until the port answers —
+  `Preview.Session` probes the upstream until it *answers a request* —
   `Starting… → Running`, or a failure panel (`#preview-failure`) with
-  the command's log tail. The session stops on request-changes, on the
+  the command's log tail. An open port is not enough: a container task's
+  relay sidecar accepts on the dev server's behalf whether or not it
+  ever bound, so readiness is an HTTP response (any status — a 404 from
+  an app still wiring itself up counts). The probe keeps running after
+  that, a tenth as often, and the chip turns `Unreachable` when a server
+  that was answering stops — the only signal an adopted session, which
+  owns no Port, ever gets. The session stops on request-changes, on the
   task leaving Review for good, after a viewer-less idle window, and on
   application shutdown — stopping signals the command's whole process
   group, since closing the Port would leave it running (ADR-0013). A

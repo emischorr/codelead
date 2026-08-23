@@ -3,9 +3,10 @@ defmodule CodeLead.Preview do
   One-click preview servers — the automation behind the Review tab's
   Start/Stop button. One `Session` per task owns the dev-server process
   started from the repository's `preview_command` and probes the
-  preview upstream until the port answers; state changes
-  (`:starting → :ready`, `{:failed, log_tail}`, `:stopped`) broadcast
-  on the task's own topic as `{:preview_state, task_id, status}`.
+  preview upstream until it answers a request; state changes
+  (`:starting → :ready`, `:unreachable`, `{:failed, log_tail}`,
+  `:stopped`) broadcast on the task's own topic as
+  `{:preview_state, task_id, status}`.
 
   The session mirrors `CodeLead.Terminal`: local tasks run the command
   as a host shell in the worktree, container tasks through
@@ -33,8 +34,16 @@ defmodule CodeLead.Preview do
   @supervisor CodeLead.Preview.SessionSupervisor
   @default_idle_ms 30 * 60_000
   @default_start_timeout_ms 120_000
+  @default_liveness_ms 10_000
+  @probe_connect_ms 1_000
+  @probe_response_ms 2_000
 
-  @type status :: :stopped | :starting | :ready | {:failed, String.t()}
+  @typedoc """
+  `:unreachable` is a server that answered once and stopped — distinct
+  from `{:failed, _}`, which never served at all, and from `:stopped`,
+  which is a session that no longer exists.
+  """
+  @type status :: :stopped | :starting | :ready | :unreachable | {:failed, String.t()}
 
   @doc """
   The task's live preview session, starting one if needed. `opts`:
@@ -213,6 +222,16 @@ defmodule CodeLead.Preview do
   @spec start_timeout_ms() :: pos_integer()
   def start_timeout_ms do
     Application.get_env(:code_lead, :preview_start_timeout_ms, @default_start_timeout_ms)
+  end
+
+  @doc """
+  How often a server that has already answered is re-checked. Not an
+  operator knob — a tenth of the startup pace is right everywhere; it
+  reads app env so tests need not wait it out.
+  """
+  @spec liveness_ms() :: pos_integer()
+  def liveness_ms do
+    Application.get_env(:code_lead, :preview_liveness_ms, @default_liveness_ms)
   end
 
   @spec child_specs() :: [Supervisor.child_spec() | {module(), term()}]
@@ -541,16 +560,63 @@ defmodule CodeLead.Preview do
   # Readiness = the preview upstream accepts a TCP connection, resolved
   # through the same gateway the proxy uses (for container tasks this
   # also ensures the relay).
+  # An open port is not evidence. A container upstream is reached
+  # through the relay sidecar's published port, and both docker's
+  # publish path and socat's listener accept before anything touches the
+  # dev server — so a server that never bound leaves the connect
+  # succeeding and every request failing, which is the exact shape this
+  # probe exists to catch. The connect stays as the cheap gate that
+  # fails fast while a server is still booting; the answer comes from a
+  # request.
   defp probe(task) do
     fn ->
-      with {:ok, %{host: host, port: port}} <- PreviewGateway.impl().upstream_for(task),
-           {:ok, socket} <-
-             :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false], 1_000) do
-        :gen_tcp.close(socket)
-        :ready
-      else
-        _not_yet -> :waiting
+      case PreviewGateway.impl().upstream_for(task) do
+        {:ok, %{host: host, port: port}} -> probe_upstream(host, port)
+        {:error, _unresolvable} -> :waiting
       end
+    end
+  end
+
+  defp probe_upstream(host, port) do
+    if connectable?(host, port), do: answers?(host, port), else: :waiting
+  end
+
+  defp connectable?(host, port) do
+    case :gen_tcp.connect(
+           String.to_charlist(host),
+           port,
+           [:binary, active: false],
+           @probe_connect_ms
+         ) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+        true
+
+      {:error, _refused} ->
+        false
+    end
+  end
+
+  # Any status answers the only question asked — is a server there? A
+  # 404 or a 500 from an app still wiring itself up counts. Only a
+  # transport failure means not yet, and `:closed` is the telling one:
+  # that is a relay accepting on behalf of a dev server that is not
+  # listening.
+  defp answers?(host, port) do
+    request =
+      Req.new(
+        method: :get,
+        url: "http://#{host}:#{port}/",
+        redirect: false,
+        retry: false,
+        raw: true,
+        receive_timeout: @probe_response_ms,
+        connect_options: [timeout: @probe_connect_ms]
+      )
+
+    case Req.request(request) do
+      {:ok, _answered} -> :ready
+      {:error, _transport} -> :waiting
     end
   end
 

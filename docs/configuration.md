@@ -371,7 +371,11 @@ runs in the worktree (locally, or `docker exec`'d into the task's
 devcontainer) with the project env plus `PREVIEW_BASE_PATH`/
 `PREVIEW_ORIGIN`, a status chip follows
 `Starting… → Running`, and a failure surfaces the command's log tail in
-place. The command should be a single process (installs belong in the
+place. *Running* means the upstream answered an HTTP request, not merely
+that a port accepted a connection — for a container task the relay
+sidecar accepts on the dev server's behalf whether or not it ever bound,
+so an open port proves nothing. The chip keeps checking afterwards and
+turns to *Unreachable* when a server that was answering stops. The command should be a single process (installs belong in the
 lifecycle hooks) — a leading `VAR=value` prefix is fine
 (`PORT="$PREVIEW_PORT" mix phx.server`), but shell operators (`&&`,
 `|`, `;`) do not survive the container path, which `exec`s the command

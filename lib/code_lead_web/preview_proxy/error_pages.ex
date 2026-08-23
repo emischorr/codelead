@@ -6,9 +6,20 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   responses.
   """
 
-  @doc "Nothing answered at the dialed upstream address; auto-retries."
-  @spec not_running(%{host: String.t(), port: :inet.port_number()} | nil) :: String.t()
-  def not_running(upstream) do
+  @doc """
+  Nothing answered at the dialed upstream address; auto-retries.
+
+  `diagnostics` is the readout `CodeLeadWeb.PreviewProxy.Diagnostics`
+  collected — the dialed address, the relay hop behind it, the declared
+  command and port, and the injected `PREVIEW_*` env. Everything the
+  page needs to narrow a preview that is up on paper arrives already
+  stringified; nothing here looks anything up.
+  """
+  @spec not_running(
+          %{host: String.t(), port: :inet.port_number()} | nil,
+          CodeLeadWeb.PreviewProxy.Diagnostics.t() | %{}
+        ) :: String.t()
+  def not_running(upstream, diagnostics \\ %{}) do
     target =
       case upstream do
         %{host: host, port: port} -> "at #{host}:#{port}"
@@ -28,10 +39,39 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
       unreachable from the app, check <code>PREVIEW_PUBLISH_IP</code> /
       <code>PREVIEW_UPSTREAM_HOST</code>. This tab retries automatically.
       </p>
+      #{hint_html(diagnostics[:hint])}
+      #{facts_html(diagnostics[:facts])}
+      #{env_html(diagnostics[:env])}
       """,
-      ~s(<meta http-equiv="refresh" content="4">)
+      ~s(<meta http-equiv="refresh" content="4">),
+      "wide"
     )
   end
+
+  defp hint_html(nil), do: ""
+  defp hint_html(hint), do: ~s(<p class="hint">#{esc(hint)}</p>)
+
+  defp facts_html(facts) when is_list(facts) and facts != [] do
+    items =
+      Enum.map_join(facts, fn {label, value} ->
+        "<li>#{esc(label)} <code>#{esc(value)}</code></li>"
+      end)
+
+    "<ul>#{items}</ul>"
+  end
+
+  defp facts_html(_none), do: ""
+
+  defp env_html(env) when is_list(env) and env != [] do
+    lines = Enum.map_join(env, "\n", fn {key, value} -> esc("#{key}=#{value}") end)
+    "<pre>#{lines}</pre>"
+  end
+
+  defp env_html(_none), do: ""
+
+  # Operator-authored (the preview command) and project-configured (the
+  # env) strings both land in this markup.
+  defp esc(value), do: value |> to_string() |> Plug.HTML.html_escape()
 
   @doc "The task's repository declares no preview port."
   @spec no_port() :: String.t()
@@ -238,6 +278,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
         strong { color: #c9d1d9; }
         a { color: #58a6ff; }
         p + p, p + ul, p + pre, ul + p, pre + p { margin-top: 0.85rem; }
+        .hint { color: #d29922; }
         main.wide { max-width: 34rem; }
         ul { text-align: left; margin: 0.75rem 0; padding-left: 1.1rem; }
         li { margin: 0.35rem 0; color: #8b949e; }

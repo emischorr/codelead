@@ -2,8 +2,9 @@ defmodule CodeLead.Preview.Session do
   @moduledoc """
   One preview server per task: owns the Port (so a page refresh kills
   only the LiveView, never the server), keeps a bounded log for the
-  failure panel, probes the preview upstream until the port answers,
-  and broadcasts lifecycle changes on the task topic. Stops itself when
+  failure panel, probes the preview upstream until it answers and then
+  keeps probing to notice when it stops, and broadcasts lifecycle
+  changes on the task topic. Stops itself when
   the server exits, when the start timeout passes without readiness, or
   after sitting viewer-less past the idle timeout; `restart: :temporary`
   — a stopped preview is restarted by the UI on demand, not by the
@@ -65,7 +66,7 @@ defmodule CodeLead.Preview.Session do
     # `init/1` raises, and this is the only thing here that can — an
     # earlier announcement would leave an open with no matching close.
     Preview.broadcast_session(task_id, :opened)
-    Process.send_after(self(), :probe, @probe_interval_ms)
+    schedule_probe(@probe_interval_ms)
     start_timer = Process.send_after(self(), :start_timeout, Preview.start_timeout_ms())
 
     {:ok,
@@ -79,6 +80,9 @@ defmodule CodeLead.Preview.Session do
        os_pid: os_pid(port),
        stopper: stopper,
        probe: probe,
+       # The ref of the probe currently in flight, so a slow upstream
+       # never queues a second one behind it.
+       probing: nil,
        status: :starting,
        log: <<>>,
        viewers: %{},
@@ -112,21 +116,27 @@ defmodule CodeLead.Preview.Session do
     {:reply, :ok, drop_viewer(state, viewer)}
   end
 
+  # Run off-process: a probe dials an upstream that may be wedged rather
+  # than absent, and this GenServer answers `:status` to every mounting
+  # LiveView and `:stop` to the button.
   @impl true
-  def handle_info(:probe, %{status: :starting} = state) do
-    case state.probe.() do
-      :ready ->
-        Process.cancel_timer(state.start_timer)
-        Preview.broadcast(state.task_id, :ready)
-        {:noreply, %{state | status: :ready, start_timer: nil}}
-
-      :waiting ->
-        Process.send_after(self(), :probe, @probe_interval_ms)
-        {:noreply, state}
-    end
+  def handle_info(:probe, %{status: status, probing: nil} = state)
+      when status in [:starting, :ready, :unreachable] do
+    {:noreply, %{state | probing: run_probe(state.probe)}}
   end
 
   def handle_info(:probe, state), do: {:noreply, state}
+
+  def handle_info({ref, result}, %{probing: ref} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, settle(%{state | probing: nil}, result)}
+  end
+
+  # A probe that crashed says nothing about the server; ask again.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{probing: ref} = state) do
+    schedule_probe(probe_interval(state.status))
+    {:noreply, %{state | probing: nil}}
+  end
 
   # An adopted session has no log to show, so a timeout is not a failure
   # panel — it is the reconciliation: the recorded pid is not serving,
@@ -184,6 +194,46 @@ defmodule CodeLead.Preview.Session do
     Preview.broadcast_session(state.task_id, :closed)
     state |> stop_server() |> close_port()
   end
+
+  defp settle(%{status: :starting} = state, :ready) do
+    Process.cancel_timer(state.start_timer)
+    Preview.broadcast(state.task_id, :ready)
+    schedule_probe(Preview.liveness_ms())
+    %{state | status: :ready, start_timer: nil}
+  end
+
+  defp settle(%{status: :starting} = state, :waiting) do
+    schedule_probe(@probe_interval_ms)
+    state
+  end
+
+  # Past readiness a probe never fails the session: the server may come
+  # back, and the log tail that would explain a failure belongs to a
+  # start that already succeeded. All it does is stop the UI advertising
+  # a server nobody can reach.
+  defp settle(state, result) do
+    status = if result == :ready, do: :ready, else: :unreachable
+    if status != state.status, do: Preview.broadcast(state.task_id, status)
+    schedule_probe(Preview.liveness_ms())
+    %{state | status: status}
+  end
+
+  defp run_probe(probe) do
+    %Task{ref: ref} = Task.Supervisor.async_nolink(CodeLead.TaskSupervisor, probe)
+    ref
+  end
+
+  defp schedule_probe(interval) do
+    Process.send_after(self(), :probe, interval)
+  end
+
+  # Past readiness the question changes from "is it up yet" to "is it
+  # still there", and that one is asked at a tenth of the pace. It has
+  # to be asked by someone: a preview server dies in ways nothing else
+  # here reports — an adopted session owns no Port, and a `docker exec`
+  # dying never reaches the server it started.
+  defp probe_interval(:starting), do: @probe_interval_ms
+  defp probe_interval(_settled), do: Preview.liveness_ms()
 
   # The server process outlives its Port (docker exec's death never
   # reaches into the container; a shell's children survive an EOF), so

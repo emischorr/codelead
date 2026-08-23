@@ -46,6 +46,26 @@ defmodule CodeLead.PreviewGateway.Relay do
   @spec relay_name(pos_integer()) :: String.t()
   def relay_name(task_id), do: "codelead-preview-#{task_id}"
 
+  @doc """
+  The address the task's relay forwards to, as recorded on it at create
+  time. Diagnostic only — nothing dials it; it is the hop the proxy
+  cannot see, and the one that refuses when a dev server is not
+  listening.
+  """
+  @spec forward_target(pos_integer()) :: {:ok, String.t()} | :error
+  def forward_target(task_id) do
+    case relay_state(relay_name(task_id)) do
+      {_running_or_stopped, target} ->
+        case String.split(target, "|", parts: 2) do
+          [_publish_ip, endpoint] when endpoint != "" -> {:ok, endpoint}
+          _unlabelled -> :error
+        end
+
+      :absent ->
+        :error
+    end
+  end
+
   defp ensure_relay(task_id, network, ip, preview_port) do
     name = relay_name(task_id)
     target = "#{publish_ip()}|#{ip}:#{preview_port}"

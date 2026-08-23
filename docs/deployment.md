@@ -276,6 +276,19 @@ curl -m 3 http://127.0.0.1:<high port>/                          # host → rela
 docker compose exec app curl -m 3 http://127.0.0.1:<high port>/  # app → its own loopback: refused
 ```
 
+**Troubleshooting the same page with a *bridge* address.** When the address
+reads like a bridge gateway (`172.17.0.1:<high port>`) the app's own dialing
+is fine and the refusal is one hop further in — between the relay and the dev
+server. The page prints that hop (*relay forwards to*) next to the declared
+preview command and port, and names the common cause outright: a command that
+mentions neither `$PREVIEW_PORT` nor the declared port is almost certainly
+listening on its framework's default instead. The relay's own log is the
+second opinion:
+
+```bash
+docker logs --tail 20 codelead-preview-<task_id>   # socat: "Connection refused" to <ip>:<port>
+```
+
 Relay and docker failures also log with the underlying docker error; check
 `docker compose logs app` before digging deeper.
 

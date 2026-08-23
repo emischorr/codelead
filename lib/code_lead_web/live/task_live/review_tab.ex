@@ -119,7 +119,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
           Start preview
         </button>
         <button
-          :if={@preview_command? && @preview_run in [:starting, :ready]}
+          :if={@preview_command? && @preview_run in [:starting, :ready, :unreachable]}
           id="preview-server-stop"
           type="button"
           phx-click="preview_stop"
@@ -143,14 +143,17 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
 
   defp run_status_label(:starting), do: "Starting…"
   defp run_status_label(:ready), do: "Running"
+  defp run_status_label(:unreachable), do: "Unreachable"
   defp run_status_label({:failed, _tail}), do: "Failed"
   defp run_status_label(_other), do: ""
 
   defp run_status_class(:ready), do: "border-ok/30 text-ok"
+  defp run_status_class(:unreachable), do: "border-warn-border text-warn"
   defp run_status_class({:failed, _tail}), do: "border-warn-border text-warn"
   defp run_status_class(_starting), do: "border-border text-text3"
 
   defp run_dot_class(:ready), do: "bg-ok"
+  defp run_dot_class(:unreachable), do: "bg-warn"
   defp run_dot_class({:failed, _tail}), do: "bg-warn"
   defp run_dot_class(_starting), do: "animate-pulse bg-text3"
 

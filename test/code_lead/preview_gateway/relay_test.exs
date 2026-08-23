@@ -40,6 +40,32 @@ defmodule CodeLead.PreviewGateway.RelayTest do
     end
   end
 
+  describe "forward_target/1" do
+    test "reports the hop the proxy cannot see" do
+      use_docker("running")
+      System.put_env("FAKE_DOCKER_RELAY", "running")
+      System.put_env("FAKE_DOCKER_RELAY_TARGET", "127.0.0.1|172.17.0.5:5173")
+
+      assert Relay.forward_target(42) == {:ok, "172.17.0.5:5173"}
+    end
+
+    # A stopped relay still records what it was pointed at, and that is
+    # the fact worth reporting when nothing answers.
+    test "reports a stopped relay's target too" do
+      use_docker("running")
+      System.put_env("FAKE_DOCKER_RELAY", "stopped")
+      System.put_env("FAKE_DOCKER_RELAY_TARGET", "127.0.0.1|172.17.0.5:5173")
+
+      assert Relay.forward_target(42) == {:ok, "172.17.0.5:5173"}
+    end
+
+    test "reports nothing when no relay exists" do
+      use_docker("running")
+
+      assert Relay.forward_target(42) == :error
+    end
+  end
+
   test "creates a labeled relay on the task container's network", %{log: log} do
     use_docker("running")
 
