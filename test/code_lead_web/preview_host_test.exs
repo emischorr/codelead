@@ -61,6 +61,37 @@ defmodule CodeLeadWeb.PreviewHostTest do
       assert conn.resp_body =~ "Open this preview from CodeLead"
     end
 
+    test "a 404 under the path gateway's old mount names the stale base path", %{conn: conn} do
+      task = task_with_upstream()
+      authed = handshake(conn, task)
+
+      conn = get(authed, preview_url(task, "/preview/#{task.id}/missing"))
+
+      assert conn.status == 404
+      assert conn.resp_body =~ "predates the gateway switch"
+      refute conn.resp_body =~ "upstream 404"
+    end
+
+    test "a working route under that mount is proxied untouched", %{conn: conn} do
+      task = task_with_upstream()
+      authed = handshake(conn, task)
+
+      conn = get(authed, preview_url(task, "/preview/#{task.id}/present"))
+
+      assert conn.status == 200
+      assert conn.resp_body =~ "fallback /preview/#{task.id}/present"
+    end
+
+    test "another task's mount is not this task's stale prefix", %{conn: conn} do
+      task = task_with_upstream()
+      authed = handshake(conn, task)
+
+      conn = get(authed, preview_url(task, "/preview/#{task.id + 1}/missing"))
+
+      assert conn.status == 404
+      assert conn.resp_body == "upstream 404"
+    end
+
     test "the token handshake lands an authenticated, proxied session", %{conn: conn} do
       task = task_with_upstream()
 

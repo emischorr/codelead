@@ -38,6 +38,21 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
       # The trailing underscore is what keeps task 4 from prefixing 42.
       refute String.starts_with?(Policy.path(42).cookie_prefix, Policy.path(4).cookie_prefix)
     end
+
+    # Under the path gateway the prefix is where previews legitimately
+    # live, so there is nothing stale about seeing it.
+    test "watches for no stale mount" do
+      assert Policy.path(7).stale_prefix == nil
+    end
+  end
+
+  describe "Policy.subdomain/1" do
+    test "rewrites nothing but still names the path gateway's mount" do
+      assert %Policy{mount_path: "", cookie_prefix: nil, rewrite_location?: false} =
+               Policy.subdomain(7)
+
+      assert Policy.subdomain(7).stale_prefix == "/preview/7/"
+    end
   end
 
   describe "request_headers/3 cookies" do
@@ -237,7 +252,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
 
   describe "subdomain policy" do
     defp subdomain_forwarded(cookie_headers) do
-      forwarded(cookie_headers, Policy.subdomain(), "/")
+      forwarded(cookie_headers, Policy.subdomain(7), "/")
     end
 
     test "forwards the cookie jar verbatim, minus the preview session cookie" do
@@ -250,7 +265,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
     test "does not stamp x-forwarded-prefix" do
       headers =
         conn(:get, "/")
-        |> Headers.request_headers(@upstream, Policy.subdomain())
+        |> Headers.request_headers(@upstream, Policy.subdomain(7))
 
       refute List.keyfind(headers, "x-forwarded-prefix", 0)
       assert {"x-forwarded-proto", "http"} = List.keyfind(headers, "x-forwarded-proto", 0)
@@ -260,7 +275,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
       headers =
         Headers.response_headers(
           [{"set-cookie", "sid=abc; Path=/admin; Domain=example.com; Secure; SameSite=None"}],
-          Policy.subdomain(),
+          Policy.subdomain(7),
           :http
         )
 
@@ -273,7 +288,7 @@ defmodule CodeLeadWeb.PreviewProxy.HeadersTest do
       headers =
         Headers.response_headers(
           [{"location", "/after"}, {"keep-alive", "timeout=5"}],
-          Policy.subdomain(),
+          Policy.subdomain(7),
           :http
         )
 

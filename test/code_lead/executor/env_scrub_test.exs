@@ -21,6 +21,12 @@ defmodule CodeLead.Executor.EnvScrubTest do
       refute {~c"DATABASE_URL", false} in env
       assert {~c"DATABASE_URL", ~c"ecto://target-app-db"} in env
     end
+
+    # A previewed app inheriting it would believe it is the instance
+    # running the subdomain gateway.
+    test "the gateway selector is instance config, so it is scrubbed too" do
+      assert {~c"PREVIEW_DOMAIN", false} in EnvScrub.port_env([{"MY_VAR", "value"}])
+    end
   end
 
   describe "cmd_env/1" do

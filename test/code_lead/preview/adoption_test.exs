@@ -54,10 +54,17 @@ defmodule CodeLead.Preview.AdoptionTest do
       pid_file = Path.join(Workspace.agent_home(task.id), "preview.pid")
       File.mkdir_p!(Path.dirname(pid_file))
       File.write!(pid_file, "#{recorded_pid}\n")
+      record_url!(task.id, "/preview/#{task.id}/")
       on_exit(fn -> File.rm_rf(Workspace.agent_home(task.id)) end)
     end
 
     task
+  end
+
+  defp record_url!(task_id, url) do
+    file = Path.join(Workspace.agent_home(task_id), "preview.url")
+    File.mkdir_p!(Path.dirname(file))
+    File.write!(file, url)
   end
 
   defp log_lines(log) do
@@ -133,6 +140,25 @@ defmodule CodeLead.Preview.AdoptionTest do
     assert_receive {:preview_state, _task_id, :stopped}, 2_000
     assert_receive {:DOWN, ^ref, :process, ^adopted, :normal}, 2_000
     assert Preview.status(task.id) == :stopped
+  end
+
+  test "a survivor started under another gateway is stopped, not adopted", %{log: log} do
+    System.put_env("FAKE_DOCKER_PID_ALIVE", "1")
+    task = review_task!(4242)
+    record_url!(task.id, "https://task-#{task.id}.preview.example.com/")
+
+    assert Preview.adopt_survivors() == :ok
+    assert fetch_session(task.id) == :error
+    assert Enum.any?(log_lines(log), &String.contains?(&1, "kill -TERM"))
+  end
+
+  test "a survivor with no recorded URL is stopped, not adopted" do
+    System.put_env("FAKE_DOCKER_PID_ALIVE", "1")
+    task = review_task!(4242)
+    File.rm!(Path.join(Workspace.agent_home(task.id), "preview.url"))
+
+    assert Preview.adopt_survivors() == :ok
+    assert fetch_session(task.id) == :error
   end
 
   test "a community instance adopts nothing" do

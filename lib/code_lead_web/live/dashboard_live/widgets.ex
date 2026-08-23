@@ -1,8 +1,8 @@
 defmodule CodeLeadWeb.DashboardLive.Widgets do
   @moduledoc """
   The dashboard's panels: the two bar charts, the live run list, the
-  attention queue, the completion list, the activity feed, and the
-  per-project row.
+  attention queue, the completion list, the activity feed, the
+  per-project row, and the live-session row.
 
   Every component takes precomputed scalars and rows — the LiveView
   resolves projects, spend, and process liveness before rendering.
@@ -218,6 +218,43 @@ defmodule CodeLeadWeb.DashboardLive.Widgets do
     """
   end
 
+  @doc """
+  Renders one live preview server or terminal shell with the control
+  that ends it.
+
+  `kind` only prefixes the ids and the label — which context module the
+  click reaches is the caller's business, carried in `event`.
+  """
+  attr :kind, :string, required: true, doc: ~s("preview" | "terminal")
+  attr :task_id, :integer, required: true
+  attr :title, :string, default: nil
+  attr :event, :string, required: true
+  attr :confirm, :string, required: true
+
+  def session_row(assigns) do
+    ~H"""
+    <div
+      id={"session-row-#{@kind}-#{@task_id}"}
+      class="flex items-center gap-2 rounded-[8px] px-1.5 py-1 hover:bg-surface2"
+    >
+      <span class="min-w-0 flex-1 truncate text-[11.5px] text-text3">
+        {session_label(@task_id, @title)}
+      </span>
+      <button
+        type="button"
+        id={"close-#{@kind}-session-#{@task_id}"}
+        phx-click={@event}
+        phx-value-task-id={@task_id}
+        data-confirm={@confirm}
+        class="flex size-[22px] shrink-0 cursor-pointer items-center justify-center rounded-md text-text3 transition-colors hover:bg-warn-soft hover:text-warn"
+        aria-label={"Close #{@kind} session for task ##{@task_id}"}
+      >
+        <.icon name="hero-x-mark" class="size-3.5" />
+      </button>
+    </div>
+    """
+  end
+
   attr :label, :string, required: true
   attr :count, :integer, required: true
 
@@ -243,6 +280,11 @@ defmodule CodeLeadWeb.DashboardLive.Widgets do
       point -> Calendar.strftime(point.date, "%b %-d")
     end
   end
+
+  # A session names its task, degrading to the bare id when the task is
+  # gone — a registry outlives the row it points at.
+  defp session_label(task_id, nil), do: "##{task_id}"
+  defp session_label(task_id, title), do: "##{task_id} #{title}"
 
   defp run_state_label(:queued), do: "queued"
   defp run_state_label(:dispatched), do: "provisioning"

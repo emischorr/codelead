@@ -76,6 +76,13 @@ defmodule CodeLead.PreviewUpstreamPlug do
     |> send_resp(200, "fancy")
   end
 
+  # An app that knows nothing about the path gateway's mount — exactly
+  # what a dev server carrying a stale PREVIEW_BASE_PATH earns for its
+  # asset URLs under the subdomain gateway.
+  def call(%Plug.Conn{path_info: ["preview", _task_id, "missing"]} = conn, _opts) do
+    send_resp(conn, 404, "upstream 404")
+  end
+
   def call(conn, _opts) do
     send_resp(conn, 200, "fallback #{conn.request_path}")
   end

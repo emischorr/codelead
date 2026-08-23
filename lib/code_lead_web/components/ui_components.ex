@@ -229,6 +229,7 @@ defmodule CodeLeadWeb.UIComponents do
   attr :tone, :atom, default: :neutral, values: [:neutral, :accent, :run, :warn, :ok]
   attr :navigate, :string, default: nil
   slot :meter
+  slot :footer, doc: "rows under the readout — a list the tile's number counts"
 
   def stat_tile(%{navigate: nil} = assigns) do
     ~H"""
@@ -270,6 +271,9 @@ defmodule CodeLeadWeb.UIComponents do
       </div>
     </div>
     {render_slot(@meter)}
+    <div :if={@footer != []} class="mt-3 flex flex-col border-t border-border pt-1">
+      {render_slot(@footer)}
+    </div>
     """
   end
 

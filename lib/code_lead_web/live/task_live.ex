@@ -745,8 +745,15 @@ defmodule CodeLeadWeb.TaskLive do
   defp preview_error(:no_preview_command),
     do: "Declare a preview command on the repository to start the preview from here."
 
+  defp preview_error(:no_preview_port),
+    do: "Declare a preview port on the repository so the dev server knows what to bind."
+
   defp preview_error(:no_worktree),
     do: "This task has no worktree yet — the preview starts after the first run."
+
+  defp preview_error(:port_in_use),
+    do:
+      "A server is already answering on this task's preview port. Open preview uses it as it is; stop it from the Terminal tab to have CodeLead start a fresh one."
 
   defp preview_error(:container_unlicensed),
     do: "Container execution requires a commercial license, so the preview cannot start."

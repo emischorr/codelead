@@ -85,6 +85,28 @@ defmodule CodeLeadWeb.DashboardLive do
 
   def handle_info(_other, socket), do: {:noreply, socket}
 
+  # Forcing a session shut from here is the operator's escape hatch for a
+  # server or shell nothing else will end — a preview otherwise needs its
+  # task's Review tab, and a terminal has no other control at all.
+  #
+  # The set is updated locally as well as from the org broadcast:
+  # `stop/1` on an already-dead session is a silent `:ok`, so a row left
+  # over from a session that died without announcing it would otherwise
+  # sit there until the next `:periodic` reconcile. `MapSet.delete` is
+  # idempotent, so the broadcast landing too changes nothing.
+  @impl true
+  def handle_event("close_preview_session", %{"task-id" => task_id}, socket) do
+    task_id = String.to_integer(task_id)
+    Preview.stop(task_id)
+    {:noreply, put_preview_session(socket, :closed, task_id)}
+  end
+
+  def handle_event("close_terminal_session", %{"task-id" => task_id}, socket) do
+    task_id = String.to_integer(task_id)
+    Terminal.stop(task_id)
+    {:noreply, put_terminal_session(socket, :closed, task_id)}
+  end
+
   ## Template
 
   @impl true
@@ -306,24 +328,50 @@ defmodule CodeLeadWeb.DashboardLive do
 
           <%!-- What a restart would interrupt: since ADR-0013 a graceful
           shutdown stops every session, so these are the pre-upgrade check.
-          Tone is :run rather than :warn — someone working is not a defect. --%>
+          Tone is :run rather than :warn — someone working is not a defect.
+          Each row closes its own session: the only place in the UI a
+          terminal can be ended, which otherwise waits out its idle timeout.
+          Sorted because a MapSet has no order and the rows would
+          otherwise reshuffle themselves between renders. --%>
           <section class="grid grid-cols-2 gap-3.5">
             <.stat_tile
               id="tile-previews"
               icon="hero-window"
               label="Preview servers"
               value={to_string(MapSet.size(@preview_task_ids))}
-              detail={session_detail(@preview_task_ids, @session_titles, "None running")}
+              detail={(MapSet.size(@preview_task_ids) == 0 && "None running") || nil}
               tone={(MapSet.size(@preview_task_ids) > 0 && :run) || :neutral}
-            />
+            >
+              <:footer :if={MapSet.size(@preview_task_ids) > 0}>
+                <.session_row
+                  :for={task_id <- Enum.sort(@preview_task_ids)}
+                  kind="preview"
+                  task_id={task_id}
+                  title={Map.get(@session_titles, task_id)}
+                  event="close_preview_session"
+                  confirm={"Stop the preview server for task ##{task_id}?"}
+                />
+              </:footer>
+            </.stat_tile>
             <.stat_tile
               id="tile-terminals"
               icon="hero-command-line"
               label="Terminal sessions"
               value={to_string(MapSet.size(@terminal_task_ids))}
-              detail={session_detail(@terminal_task_ids, @session_titles, "None open")}
+              detail={(MapSet.size(@terminal_task_ids) == 0 && "None open") || nil}
               tone={(MapSet.size(@terminal_task_ids) > 0 && :run) || :neutral}
-            />
+            >
+              <:footer :if={MapSet.size(@terminal_task_ids) > 0}>
+                <.session_row
+                  :for={task_id <- Enum.sort(@terminal_task_ids)}
+                  kind="terminal"
+                  task_id={task_id}
+                  title={Map.get(@session_titles, task_id)}
+                  event="close_terminal_session"
+                  confirm={"Close the terminal session for task ##{task_id}? Anything running in it stops."}
+                />
+              </:footer>
+            </.stat_tile>
           </section>
         </div>
       </div>
@@ -487,27 +535,6 @@ defmodule CodeLeadWeb.DashboardLive do
       nil -> empty_message
       task -> "Oldest #{Format.relative(task.at)}"
     end
-  end
-
-  # Two names then a tally: the detail line is one truncated row, and an
-  # operator needs to recognise whose session it is, not read a manifest.
-  # Sorted because a MapSet has no order and the line would otherwise
-  # reshuffle itself between renders.
-  defp session_detail(task_ids, titles, empty_message) do
-    case Enum.sort(task_ids) do
-      [] -> empty_message
-      ids -> ids |> Enum.map(&task_label(&1, Map.get(titles, &1))) |> summarize(2)
-    end
-  end
-
-  defp task_label(task_id, nil), do: "##{task_id}"
-  defp task_label(task_id, title), do: "##{task_id} #{title}"
-
-  defp summarize(labels, limit) when length(labels) <= limit, do: Enum.join(labels, " · ")
-
-  defp summarize(labels, limit) do
-    {shown, rest} = Enum.split(labels, limit)
-    Enum.join(shown ++ ["+#{length(rest)} more"], " · ")
   end
 
   defp project_name(projects_by_id, project_id) do

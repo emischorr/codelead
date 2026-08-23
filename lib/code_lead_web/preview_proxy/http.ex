@@ -62,7 +62,7 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
 
       case Req.request(request) do
         {:ok, response} ->
-          stream_response(conn, response, policy)
+          respond(conn, response, policy, upstream_path)
 
         {:error, transport} ->
           # Debug, not warning: the error page reloads every few seconds
@@ -74,6 +74,15 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
     else
       :error -> send_resp(conn, 405, "method not allowed")
       {:error, _body_read} -> send_resp(conn, 400, "bad request")
+    end
+  end
+
+  defp respond(conn, response, policy, upstream_path) do
+    if stale_base_path?(response.status, policy, upstream_path) do
+      Req.cancel_async_response(response)
+      stale_base_path(conn, policy)
+    else
+      stream_response(conn, response, policy)
     end
   end
 
@@ -138,6 +147,25 @@ defmodule CodeLeadWeb.PreviewProxy.HTTP do
     end)
   rescue
     _transport_error -> conn
+  end
+
+  # A 404 under a gateway that mounts previews at their origin root, for
+  # a path that still carries the *path* gateway's mount prefix, has one
+  # cause worth naming: the dev server captured the old
+  # `PREVIEW_BASE_PATH` at spawn. Serving the upstream's own 404 here
+  # tells nobody anything — this is a diagnostic swap, not a rewrite;
+  # the body of a working response is still never touched.
+  defp stale_base_path?(404, %Policy{stale_prefix: prefix}, upstream_path)
+       when is_binary(prefix) do
+    String.starts_with?(upstream_path, prefix)
+  end
+
+  defp stale_base_path?(_status, _policy, _upstream_path), do: false
+
+  defp stale_base_path(conn, %Policy{stale_prefix: prefix}) do
+    conn
+    |> put_resp_content_type("text/html")
+    |> send_resp(404, ErrorPages.stale_base_path(prefix))
   end
 
   defp not_running(conn, upstream) do

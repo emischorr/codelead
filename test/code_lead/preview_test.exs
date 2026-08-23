@@ -9,6 +9,7 @@ defmodule CodeLead.PreviewTest do
   alias CodeLead.LicenseHelpers
   alias CodeLead.OsProcessHelpers
   alias CodeLead.Preview
+  alias CodeLead.PreviewGatewayHelpers
 
   setup do
     on_exit(&LicenseHelpers.grant_owner!/0)
@@ -40,6 +41,62 @@ defmodule CodeLead.PreviewTest do
     task = repo_task(%{preview_port: 5173, preview_command: "sleep 30"})
 
     assert Preview.ensure_session(task) == {:error, :no_worktree}
+  end
+
+  test "refuses without a declared preview port" do
+    task =
+      repo_task(%{preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    assert Preview.ensure_session(task) == {:error, :no_preview_port}
+  end
+
+  test "refuses to stack a second server on a port that already answers" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    task =
+      repo_task(%{preview_port: port, preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    assert Preview.ensure_session(task) == {:error, :port_in_use}
+  end
+
+  test "a session started under another gateway is replaced, not reused" do
+    task =
+      repo_task(%{preview_port: 5173, preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    assert {:ok, first} = Preview.ensure_session(task)
+    ref = Process.monitor(first)
+
+    PreviewGatewayHelpers.subdomain_gateway!()
+
+    assert {:ok, second} = Preview.ensure_session(task)
+    assert second != first
+    assert_receive {:DOWN, ^ref, :process, ^first, :normal}, 5_000
+
+    on_exit(fn -> Preview.stop(task.id) end)
+  end
+
+  test "a session whose injected env drifted is replaced" do
+    task =
+      repo_task(%{preview_port: 5173, preview_command: "sleep 30"})
+      |> put_context!(%{worktree_path: worktree!()})
+
+    assert {:ok, first} =
+             Preview.ensure_session(task, extra_env: [{"PREVIEW_ORIGIN", "http://a"}])
+
+    ref = Process.monitor(first)
+
+    assert {:ok, second} =
+             Preview.ensure_session(task, extra_env: [{"PREVIEW_ORIGIN", "http://b"}])
+
+    assert second != first
+    assert_receive {:DOWN, ^ref, :process, ^first, :normal}, 5_000
+
+    on_exit(fn -> Preview.stop(task.id) end)
   end
 
   test "container tasks are gated on the license" do

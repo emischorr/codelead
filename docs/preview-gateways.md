@@ -164,6 +164,17 @@ Shipped today:
 - The shared core under `lib/code_lead_web/preview_proxy/` and the container-task
   plumbing (`Relay`, `Address`, `Upstream`) — gateway-independent, reusable as-is
   by a third gateway.
+- Gateway drift is reconciled, because a dev server captures its base path at spawn
+  and no probe can tell a stale server from a correct one — both answer. A
+  `Preview.Session` carries a fingerprint (the `url_for/1` result it was started for,
+  plus the injected env) and `ensure_session/2` replaces a session that no longer
+  matches; boot adoption compares the same URL against a `preview.url` file written
+  beside `preview.pid`, and discards a survivor from another gateway instead of
+  adopting it. Servers started by hand from the Terminal tab stay outside this — only
+  the recorded pid is ever signalled. `Policy.stale_prefix` closes the loop on the
+  browser side: under the subdomain gateway an upstream 404 for a path still carrying
+  `/preview/<id>/` is swapped for a diagnostic, the same *name it, never rewrite it*
+  posture as the loop breaker.
 
 References: ADR-0008 (path proxy, no-body-rewriting), ADR-0009 (relay sidecar),
 ADR-0011 (new-tab-only, subdomain gateway, token handshake);

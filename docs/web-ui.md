@@ -215,8 +215,18 @@ completions and the cross-project activity feed → a per-project
 pipeline breakdown → the live-session tiles at the very bottom
 (`#tile-previews`, `#tile-terminals`), which is where an operator looks
 before restarting: since ADR-0013 a graceful shutdown stops every
-preview server and shell, and each tile names the tasks whose session a
-restart would end. With no projects it renders an onboarding card
+preview server and shell, and each tile lists the tasks whose session a
+restart would end. Every row carries a ✕ that force-closes that one
+session (`#close-preview-session-<task_id>` /
+`#close-terminal-session-<task_id>`, both behind a `data-confirm`).
+For a **terminal** this is the only control in the whole UI that ends
+one — otherwise a shell runs until its idle timeout, a shutdown, or the
+destruction of its execution context, which is what leaves a dev server
+holding a port. A preview can also be stopped from its task's Review
+tab. The click calls `Preview.stop/1` / `Terminal.stop/1` and deletes
+the row locally as well as awaiting the org broadcast, so a row left by
+a session that died without announcing it clears too instead of waiting
+for the 30 s reconcile. With no projects it renders an onboarding card
 inside `Layouts.app` — the sidebar stays, because there is somewhere to
 navigate to (`/settings/projects/new`).
 
@@ -535,9 +545,16 @@ above the bar instead of underneath it.
   group, since closing the Port would leave it running (ADR-0013). A
   container preview that outlived an ungraceful exit is re-attached at
   boot (`Preview.adopt_survivors/0`), so the chip reflects the server
-  that is actually serving instead of offering to start a second one.
-  The branded 502 page's auto-refresh picks the tab up the moment the
-  server answers.
+  that is actually serving instead of offering to start a second one —
+  unless it was started under a different preview gateway, in which case
+  it is stopped rather than adopted, because it would serve the base
+  path it captured at spawn forever. The same check runs on Start: a
+  session whose fingerprint no longer matches the active gateway is
+  replaced. Start also refuses (`port_in_use`) when something already
+  answers on the declared port with no session owning it — a
+  hand-started server, which CodeLead cannot signal because it only
+  records its own. The branded 502 page's auto-refresh picks the tab up
+  the moment the server answers.
 
   **The proxy behind it.** Requests reach the shared forwarding core
   (`PreviewProxy.Forwarder` — HTTP streaming via `PreviewProxy.HTTP`,

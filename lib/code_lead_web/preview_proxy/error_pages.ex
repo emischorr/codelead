@@ -116,6 +116,42 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
   end
 
   @doc """
+  The subdomain gateway 404'd a request still carrying the path
+  gateway's `/preview/<id>/` mount — the signature of a dev server
+  that captured `PREVIEW_BASE_PATH` before the instance switched
+  gateways. `prefix` is the mount the request arrived under.
+  """
+  @spec stale_base_path(String.t()) :: String.t()
+  def stale_base_path(prefix) do
+    page(
+      "This preview server predates the gateway switch",
+      """
+      <p>
+      This request arrived under <code>#{Plug.HTML.html_escape(prefix)}</code>,
+      which is where the <strong>path</strong> gateway used to mount previews.
+      Previews are served at the root of their own origin here, so the dev
+      server behind this page is still building URLs from the
+      <code>PREVIEW_BASE_PATH</code> it captured when it started — which is
+      why its stylesheets and scripts 404.
+      </p>
+      <p>
+      <strong>Stop and start the preview</strong> from the task's Review tab.
+      The new server gets an empty <code>PREVIEW_BASE_PATH</code> and serves
+      at the root. A server started by hand from the Terminal tab has to be
+      killed there first — CodeLead only signals the one it started.
+      </p>
+      <p>
+      If the previewed app genuinely serves a
+      <code>#{Plug.HTML.html_escape(prefix)}</code> route and this really is
+      a missing page, that is the other reading of this 404.
+      </p>
+      """,
+      "",
+      "wide"
+    )
+  end
+
+  @doc """
   The path gateway saw one preview page reload itself over and over —
   the signature of a previewed app emitting root-absolute URLs that
   escape the `/preview/<id>` mount. `retry_href` bypasses the breaker

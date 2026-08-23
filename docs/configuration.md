@@ -305,6 +305,31 @@ previews at `task-42.preview.localhost:4000` with zero setup.
 This is deliberately the feature's only knob — everything else about
 previews keeps working by default under either gateway.
 
+#### Switching gateways on a live instance
+
+Tasks already sitting in Review keep working, but their **running dev
+servers do not migrate**: a server captured `PREVIEW_BASE_PATH` in its
+environment when it started, and it keeps emitting URLs from the old
+gateway's mount until it is restarted. The symptom is a preview whose
+document loads but whose stylesheets and scripts 404 under
+`/preview/<id>/…`.
+
+CodeLead reconciles the sessions it owns. A session is fingerprinted
+with the preview URL it was started for, so a mismatch with the active
+gateway stops the server and starts a fresh one — at boot for a
+container survivor (which is discarded rather than adopted), and on the
+next Start for a live session. A server started **by hand** from the
+Terminal tab is outside that: CodeLead only ever signals the process it
+recorded, so kill that one yourself before starting the preview. When
+a request still arrives under the old mount and the upstream 404s it,
+the proxy serves a diagnostic naming this cause instead of the
+upstream's own 404.
+
+Relatedly, Start preview refuses with *a server is already answering on
+this task's preview port* rather than spawning a second server behind
+the first — a probe cannot tell the two apart, and the older one wins
+the port.
+
 ### Serving a preview from a container task
 
 The base path above is what the *browser* needs. A **container** task's

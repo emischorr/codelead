@@ -21,6 +21,21 @@ defmodule CodeLead.Preview.Session do
   @log_limit 64_000
   @probe_interval_ms 1_000
 
+  # A session started without one — directly, outside `Preview` — can be
+  # compared against nothing, so it is never the reason for a restart.
+  @unknown %{url: nil, env: nil}
+
+  @typedoc """
+  What the server was started for, so a later `ensure_session/2` can
+  tell whether the active gateway still matches it: `:url` is the
+  browser-facing preview URL, `:env` the injected pairs (`nil` on an
+  adopted session, whose spawn env died with the previous VM).
+  """
+  @type fingerprint :: %{
+          url: String.t() | nil,
+          env: [{String.t(), String.t()}] | nil
+        }
+
   @typedoc """
   `port_opener: nil` starts an **adopted** session: the server predates
   this VM — it survived an ungraceful exit inside its container — and is
@@ -29,10 +44,11 @@ defmodule CodeLead.Preview.Session do
   only liveness signal, which is why it still starts in `:starting`.
   """
   @type start_arg :: %{
-          task_id: pos_integer(),
-          port_opener: (-> port()) | nil,
-          stopper: (pos_integer() | nil -> :ok),
-          probe: (-> :ready | :waiting)
+          :task_id => pos_integer(),
+          :port_opener => (-> port()) | nil,
+          :stopper => (pos_integer() | nil -> :ok),
+          :probe => (-> :ready | :waiting),
+          optional(:fingerprint) => fingerprint()
         }
 
   @spec start_link(start_arg()) :: GenServer.on_start()
@@ -41,7 +57,7 @@ defmodule CodeLead.Preview.Session do
   end
 
   @impl true
-  def init(%{task_id: task_id, port_opener: port_opener, stopper: stopper, probe: probe}) do
+  def init(%{task_id: task_id, port_opener: port_opener, stopper: stopper, probe: probe} = arg) do
     Process.flag(:trap_exit, true)
     port = if port_opener, do: port_opener.()
     Preview.broadcast(task_id, :starting)
@@ -55,6 +71,7 @@ defmodule CodeLead.Preview.Session do
     {:ok,
      %{
        task_id: task_id,
+       fingerprint: Map.get(arg, :fingerprint, @unknown),
        port: port,
        # Resolved now, not at stop time: a port that has already exited
        # reports no os pid, and the group it led may still hold members
@@ -73,6 +90,10 @@ defmodule CodeLead.Preview.Session do
   @impl true
   def handle_call(:status, _from, state) do
     {:reply, state.status, state}
+  end
+
+  def handle_call(:fingerprint, _from, state) do
+    {:reply, state.fingerprint, state}
   end
 
   def handle_call(:stop, _from, state) do

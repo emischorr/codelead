@@ -40,13 +40,23 @@ defmodule CodeLead.Preview do
   The task's live preview session, starting one if needed. `opts`:
   `:extra_env` (pre-computed pairs such as PREVIEW_BASE_PATH — the
   caller owns any cross-domain lookups).
+
+  A session whose fingerprint no longer matches the active gateway is
+  stopped and replaced rather than reused: its server captured the old
+  `PREVIEW_BASE_PATH` at spawn and would keep serving it forever.
   """
   @spec ensure_session(Task.t(), keyword()) ::
           {:ok, pid()}
-          | {:error, :no_preview_command | :no_worktree | :container_unlicensed | term()}
+          | {:error,
+             :no_preview_command
+             | :no_preview_port
+             | :no_worktree
+             | :port_in_use
+             | :container_unlicensed
+             | term()}
   def ensure_session(%Task{} = task, opts \\ []) do
     case whereis(task.id) do
-      pid when is_pid(pid) -> {:ok, pid}
+      pid when is_pid(pid) -> reuse_or_restart(task, pid, opts)
       nil -> start_session(task, opts)
     end
   end
@@ -224,12 +234,29 @@ defmodule CodeLead.Preview do
     end
   end
 
+  defp reuse_or_restart(%Task{} = task, pid, opts) do
+    if matches?(pid, fingerprint(task, opts)) do
+      {:ok, pid}
+    else
+      Logger.info(
+        "preview server for task #{task.id} predates the active gateway — restarting it"
+      )
+
+      stop_and_await(task.id, pid)
+      start_session(task, opts)
+    end
+  end
+
   defp start_session(%Task{target: :repo, repository_id: repository_id} = task, opts)
        when not is_nil(repository_id) do
     repository = Projects.get_repository!(repository_id)
 
     cond do
       is_nil(repository.preview_command) -> {:error, :no_preview_command}
+      # Without one `preview_env/2` returns nothing at all, so the
+      # command's `$PREVIEW_PORT` expands to empty and the only symptom
+      # is a probe that never readies. Refuse where the cause is legible.
+      is_nil(repository.preview_port) -> {:error, :no_preview_port}
       is_nil(task.worktree_path) -> {:error, :no_worktree}
       true -> start_session(task, repository.preview_command, opts)
     end
@@ -237,10 +264,25 @@ defmodule CodeLead.Preview do
 
   defp start_session(%Task{}, _opts), do: {:error, :no_preview_command}
 
+  # No session owns this task, so anything already answering is a server
+  # CodeLead does not manage — hand-started from the Terminal, or one
+  # that outlived its session. Spawning a second one produces a process
+  # that dies on the bound port while this very probe reports `:ready`
+  # from the *old* one, which is how a stale base path survives a
+  # gateway switch unnoticed.
   defp start_session(task, preview_command, opts) do
-    env = session_env(task, opts)
+    if probe(task).() == :ready do
+      {:error, :port_in_use}
+    else
+      spawn_session(task, preview_command, opts)
+    end
+  end
 
-    with {:ok, spec} <- spawn_spec(task, preview_command, env) do
+  defp spawn_session(task, preview_command, opts) do
+    with {:ok, spec} <- spawn_spec(task, preview_command, session_env(task, opts)) do
+      record_url(task.id, gateway_url(task))
+      spec = Map.put(spec, :fingerprint, fingerprint(task, opts))
+
       case DynamicSupervisor.start_child(@supervisor, {Session, spec}) do
         {:ok, pid} -> {:ok, pid}
         {:error, {:already_started, pid}} -> {:ok, pid}
@@ -257,23 +299,140 @@ defmodule CodeLead.Preview do
          {:ok, pid} <- recorded_pid(task_id),
          {:ok, container_id} <- Devcontainer.container_for_task(task_id),
          :ok <- alive_in_container(container_id, pid) do
-      spec = %{
-        task_id: task_id,
-        port_opener: nil,
-        stopper: container_stopper(container_id, pid_file(task_id)),
-        probe: probe(task)
-      }
+      url = gateway_url(task)
 
-      case DynamicSupervisor.start_child(@supervisor, {Session, spec}) do
-        {:ok, _pid} ->
-          Logger.info("adopted surviving preview server (task #{task_id}, pid #{pid})")
-
-        _already_started_or_failed ->
-          :ok
+      if recorded_url(task_id) == url do
+        adopt(task, container_id, pid, url)
+      else
+        discard_survivor(task_id, container_id, pid)
       end
     else
       _nothing_to_adopt -> :ok
     end
+  end
+
+  defp adopt(%Task{id: task_id} = task, container_id, pid, url) do
+    spec = %{
+      task_id: task_id,
+      port_opener: nil,
+      stopper: container_stopper(container_id, pid_file(task_id)),
+      probe: probe(task),
+      # The env this server was spawned with died with the VM that
+      # spawned it, so only the URL half is knowable here.
+      fingerprint: %{url: url, env: nil}
+    }
+
+    case DynamicSupervisor.start_child(@supervisor, {Session, spec}) do
+      {:ok, _pid} ->
+        Logger.info("adopted surviving preview server (task #{task_id}, pid #{pid})")
+
+      _already_started_or_failed ->
+        :ok
+    end
+  end
+
+  # A survivor from another gateway serves the base path it captured at
+  # spawn, and no probe can tell — it answers perfectly, just with the
+  # wrong asset URLs. Signalling it here is what makes switching
+  # PREVIEW_DOMAIN work for tasks already sitting in Review.
+  defp discard_survivor(task_id, container_id, pid) do
+    Logger.info(
+      "preview server for task #{task_id} (pid #{pid}) predates the active gateway — stopping it"
+    )
+
+    container_stopper(container_id, pid_file(task_id)).(nil)
+    :ok
+  end
+
+  # What a running server would have to have been started for to still
+  # be correct: the browser-facing URL (which is what the gateway
+  # decides) and the injected env. `nil` on either side means "unknown"
+  # — an adopted session knows only the URL — and unknown never forces
+  # a restart on its own.
+  defp fingerprint(%Task{} = task, opts) do
+    %{url: gateway_url(task), env: Keyword.get(opts, :extra_env, [])}
+  end
+
+  defp matches?(pid, %{url: url, env: env}) do
+    case GenServer.call(pid, :fingerprint, 5_000) do
+      %{url: nil} -> true
+      %{url: ^url, env: nil} -> true
+      %{url: ^url, env: ^env} -> true
+      _drifted -> false
+    end
+  catch
+    # A session dying under us is not a mismatch; the restart it would
+    # trigger is the same thing the next lookup does anyway.
+    :exit, _gone -> true
+  end
+
+  # Reads application env only — no `Endpoint` — because boot adoption
+  # runs before `CodeLeadWeb.Endpoint` starts. That also means a bare
+  # PHX_HOST change (which moves PREVIEW_ORIGIN but not the relative
+  # path-gateway URL) is caught only by the `:env` half.
+  defp gateway_url(%Task{} = task) do
+    case PreviewGateway.impl().url_for(task) do
+      {:ok, url} -> url
+      {:error, _no_url} -> nil
+    end
+  end
+
+  # `stop/1` returns as soon as the session replies, but the session is
+  # still in `terminate/2` — a container stopper waits up to 5s on a
+  # `docker exec` — and stays registered until it exits, so restarting
+  # in the same call would collide with the corpse's name.
+  defp stop_and_await(task_id, pid) do
+    ref = Process.monitor(pid)
+    stop(task_id)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      30_000 ->
+        Process.demonitor(ref, [:flush])
+        :ok
+    end
+
+    await_deregistered(task_id)
+  end
+
+  # The registry drops the key from its own DOWN handler, which races
+  # ours.
+  defp await_deregistered(task_id, attempts \\ 100) do
+    case Registry.lookup(@registry, task_id) do
+      [] ->
+        :ok
+
+      _still_taken when attempts > 0 ->
+        Process.sleep(10)
+        await_deregistered(task_id, attempts - 1)
+
+      _still_taken ->
+        :ok
+    end
+  end
+
+  # Written beside the pid file and, like it, never deleted on stop: it
+  # is stale by construction, and only a live process makes it mean
+  # anything.
+  defp record_url(_task_id, nil), do: :ok
+
+  defp record_url(task_id, url) do
+    file = url_file(task_id)
+    _ = File.mkdir_p(Path.dirname(file))
+    _ = File.write(file, url)
+    :ok
+  end
+
+  defp recorded_url(task_id) do
+    case File.read(url_file(task_id)) do
+      {:ok, contents} -> String.trim(contents)
+      {:error, _no_url_file} -> nil
+    end
+  end
+
+  defp url_file(task_id) do
+    Path.join(Workspace.agent_home(task_id), "preview.url")
   end
 
   # The pid file is never deleted on stop, so it is stale by
