@@ -49,3 +49,5 @@ npm-debug.log
 
 # CodeLead workspace root (base clones, worktrees, task folders).
 /workspace/
+
+*.har
