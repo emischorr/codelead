@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
+    <%!-- Mount-aware: /live normally, /preview/<id>/live under a CodeLead
+         path preview. A hardcoded "/live" in app.js would open against the
+         proxy's own LiveView endpoint and reload this page forever. --%>
+    <meta name="live-socket-path" content={CodeLeadWeb.Endpoint.path("/live")} />
     <.live_title default="CodeLead" suffix=" · CodeLead">
       {assigns[:page_title]}
     </.live_title>
