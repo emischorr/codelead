@@ -489,14 +489,14 @@ defmodule CodeLeadWeb.UIComponents do
 
   def tab_nav(assigns) do
     ~H"""
-    <nav class={["flex gap-5 overflow-x-auto border-b border-border", @class]}>
+    <nav class={["flex gap-5 overflow-hidden border-b border-border", @class]}>
       <.link
         :for={tab <- @tabs}
         id={"task-tab-#{tab.id}"}
         patch={tab.patch}
         class={[
-          "flex items-center gap-1.5 whitespace-nowrap pb-2.5 text-[13.5px]",
-          tab.id == @active && "-mb-px border-b-2 font-semibold",
+          "-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-2.5 text-[13.5px]",
+          tab.id == @active && "font-semibold",
           tab.id != @active && "font-medium",
           tab_nav_color(tab, tab.id == @active)
         ]}
@@ -509,9 +509,9 @@ defmodule CodeLeadWeb.UIComponents do
   end
 
   defp tab_nav_color(%{warn: true}, true), do: "border-warn text-warn"
-  defp tab_nav_color(%{warn: true}, false), do: "text-warn"
+  defp tab_nav_color(%{warn: true}, false), do: "border-transparent text-warn"
   defp tab_nav_color(_tab, true), do: "border-accent text-accent"
-  defp tab_nav_color(_tab, false), do: "text-text2 hover:text-text"
+  defp tab_nav_color(_tab, false), do: "border-transparent text-text2 hover:text-text"
 
   @doc """
   Renders a kanban column: uppercase header with count, then the card stack.
