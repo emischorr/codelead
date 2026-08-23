@@ -64,7 +64,14 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
           class="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4 sm:p-6"
         >
           <div class="hidden text-center text-[13px] text-text3 only:block" id="agent-events-empty">
-            No agent activity yet — events appear here live during a run.
+            <%= if @task.run_state == :dispatched do %>
+              <div class="flex flex-col items-center gap-2 py-2">
+                <.pulse_dot class="size-2 bg-run" />
+                <span>{provisioning_label(@task.execution_env)}</span>
+              </div>
+            <% else %>
+              No agent activity yet — events appear here live during a run.
+            <% end %>
           </div>
           <.feed_block
             :for={{id, block} <- @blocks}
@@ -118,6 +125,9 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
 
   defp session_label(nil), do: "no session yet"
   defp session_label(session_id), do: session_id
+
+  defp provisioning_label(:container), do: "Provisioning the container environment…"
+  defp provisioning_label(_execution_env), do: "Provisioning the workspace…"
 
   # Where the run works: a git worktree for a :repo task, the task folder
   # for a :folder one. Nil until a :repo task has been provisioned.
