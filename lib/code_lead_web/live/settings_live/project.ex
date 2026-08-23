@@ -307,7 +307,12 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             Optional. The command that starts the dev server on the preview
             port — declaring it puts a Start preview button on the Review
             tab. It runs in the worktree with the project env plus <code class="font-mono">PREVIEW_BASE_PATH</code>; without it,
-            start the server yourself from the task's Terminal.
+            start the server yourself from the task's Terminal. It must be a
+            single command — a <code class="font-mono">VAR=value</code>
+            prefix
+            is fine, chaining with <code class="font-mono">&amp;&amp;</code>
+            or <code class="font-mono">|</code>
+            is not.
           </p>
 
           <div class="mt-4 flex justify-end gap-2">

@@ -347,7 +347,12 @@ devcontainer) with the project env plus `PREVIEW_BASE_PATH`/
 `PREVIEW_ORIGIN`, a status chip follows
 `Starting… → Running`, and a failure surfaces the command's log tail in
 place. The command should be a single process (installs belong in the
-lifecycle hooks); the session stops on request-changes, on leaving
+lifecycle hooks) — a leading `VAR=value` prefix is fine
+(`PORT="$PREVIEW_PORT" mix phx.server`), but shell operators (`&&`,
+`|`, `;`) do not survive the container path, which `exec`s the command
+so the pid it records is the server's; put anything compound in the
+lifecycle hooks or the project env store. The session stops on
+request-changes, on leaving
 Review for good, after `PREVIEW_IDLE_MINUTES` with nobody watching, and
 when the app shuts down. Stopping signals the command's whole process
 group, so a compound command's children go with it.

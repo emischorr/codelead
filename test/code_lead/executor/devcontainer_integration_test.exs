@@ -154,10 +154,14 @@ defmodule CodeLead.Executor.DevcontainerIntegrationTest do
     # python's stdlib server serves the worktree in the foreground on
     # the declared port — the whole chain is real: session exec into the
     # devcontainer, socat relay on its network, TCP readiness probe
-    # through the gateway upstream.
+    # through the gateway upstream. The `VAR=value` prefix is part of
+    # the case: `exec` alone would take it for the command name.
     task =
       container_task(
-        %{preview_port: 8199, preview_command: "python3 -m http.server 8199"},
+        %{
+          preview_port: 8199,
+          preview_command: ~s(PORT=8199 sh -c 'python3 -m http.server "$PORT"')
+        },
         "python:3-alpine"
       )
 

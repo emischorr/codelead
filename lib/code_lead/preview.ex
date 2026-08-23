@@ -314,7 +314,12 @@ defmodule CodeLead.Preview do
         prefix ++
           ["exec", "-i", "-w", task.worktree_path] ++
           exec_flags ++
-          [container_id, "sh", "-lc", wrap_command(preview_command, pid_file)]
+          [
+            container_id,
+            "sh",
+            "-lc",
+            OsProcess.record_pid_and_exec(preview_command, pid_file)
+          ]
 
       {:ok,
        %{
@@ -368,13 +373,6 @@ defmodule CodeLead.Preview do
 
       :ok
     end
-  end
-
-  # `echo $$` before `exec` records the pid the command keeps — the
-  # command should be a single process; installs belong in the
-  # devcontainer's lifecycle hooks.
-  defp wrap_command(preview_command, pid_file) do
-    ~s(echo $$ > #{pid_file}; exec #{preview_command})
   end
 
   defp pid_file(task_id) do

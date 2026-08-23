@@ -10,8 +10,9 @@ defmodule CodeLead.OsProcess do
   reaches the whole tree.
 
   Pure and stateless, like `CodeLead.Terminal.Command`: one function
-  signals from the host, the other builds the equivalent shell snippet
-  for processes reachable only through `docker exec`.
+  signals from the host, the others build the equivalent shell snippets
+  for processes reachable only through `docker exec` — the two ends of
+  the pid-file contract, writing it and reading it back.
   """
 
   @doc """
@@ -27,6 +28,20 @@ defmodule CodeLead.OsProcess do
   rescue
     # `kill(1)` missing is not a reason to fail a teardown.
     _cannot_signal -> :ok
+  end
+
+  @doc """
+  Shell snippet that records the pid the process behind `command` keeps
+  and then hands the shell over to it.
+  """
+  @spec record_pid_and_exec(String.t(), String.t()) :: String.t()
+  def record_pid_and_exec(command, pid_file) do
+    # `exec env` rather than a bare `exec`: `exec` is a special builtin,
+    # so a leading `VAR=value` after it is taken as the command name
+    # (`exec: PORT=4002: not found`). `env` applies the assignments and
+    # execs the utility, so the pid `$$` just recorded is still the one
+    # the server ends up holding.
+    ~s(echo $$ > "#{pid_file}"; exec env #{command})
   end
 
   @doc """
