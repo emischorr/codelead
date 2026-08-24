@@ -674,6 +674,47 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
+  Non-archived tasks whose title or description matches `query`, for the
+  dashboard's global search. Title hits rank above description-only hits;
+  ties break by most recently updated. Returns the top `limit` rows plus
+  the total match count, so the caller can render a "N more results" hint
+  without a second round trip.
+  """
+  @spec search_tasks(String.t(), pos_integer()) :: %{results: [map()], total: non_neg_integer()}
+  def search_tasks(query, limit) do
+    like = "%" <> escape_like(query) <> "%"
+
+    base =
+      from t in Task,
+        where: is_nil(t.archived_at),
+        where:
+          fragment("? ILIKE ?", t.title, ^like) or fragment("? ILIKE ?", t.description, ^like)
+
+    total = Repo.aggregate(base, :count, :id)
+
+    results =
+      Repo.all(
+        from t in base,
+          order_by: [
+            desc: fragment("? ILIKE ?", t.title, ^like),
+            desc: t.updated_at,
+            desc: t.id
+          ],
+          limit: ^limit,
+          select: %{
+            id: t.id,
+            project_id: t.project_id,
+            title: t.title,
+            state: t.state,
+            run_state: t.run_state,
+            updated_at: t.updated_at
+          }
+      )
+
+    %{results: results, total: total}
+  end
+
+  @doc """
   Non-archived tasks needing a human, for the attention counter.
   """
   @spec attention_tasks(pos_integer()) :: [Task.t()]
@@ -900,6 +941,9 @@ defmodule CodeLead.Tasks do
   end
 
   ## Internals
+
+  # Backslash-escape ILIKE's own wildcards so user input can't inject them.
+  defp escape_like(string), do: String.replace(string, ~r/([%_\\])/, "\\\\\\1")
 
   defp merge_summary(summary, state, run_state, count, attention) do
     summary
