@@ -389,18 +389,36 @@ above the bar instead of underneath it.
   `FlashMessages.delete_error/1` on refusal — the guard is the context
   function's `state in [:planning, :cancelled]` match, the UI only
   shows the link in Planning,
-  the planning surface (`#planner-form` selects
-  a `:plan` agent from `Agents.eligible_planners/2`; an `:llm_api` pick
-  shows `#chat-form` — `Planning.send_message/3` is synchronous →
-  `start_async` — and an `:acp` pick swaps in `#run-survey`, which
-  fires `Planning.start_survey/2` and waits for `{:survey_completed, _}`
-  on the task topic; survey turns render with a provenance label. The
+  the **Planning agent card** (`#planning-card`, one card for the whole
+  planning-agent lifecycle: `#planner-form` selects a `:plan` agent from
+  `Agents.eligible_planners/2` — options suffixed `· Repo level` (acp)
+  / `· Task level` (llm_api) — beside the one `#run-refinement` button,
+  in a single controls row on top. The button fires
+  `Planning.start_refinement/2` for either level and waits for
+  `{:survey_completed, _}` on the task topic; for a repo-level agent
+  without a linked repository it is disabled ("Link a repository
+  first"). There is no chat UI — the console chat remains IEx-only. The
   selected planner lives in the socket, not on the task — see
-  [`planning.md`](planning.md)), timeline
+  [`planning.md`](planning.md)). Refinement output lands on the
+  same card: parsed findings as an expandable checklist with
+  Address/Dismiss/Reopen and per-item notes (planning only; read-only
+  afterwards, and every resolution broadcasts `{:findings_changed, _}`
+  so other viewers see the tick live; an address needs a note before
+  Save enables, a dismissal's note is optional), the survey narrative
+  collapsible above, the raw turn behind `#toggle-raw-report`, obsolete
+  items folded, cited paths as forge links, and a "run N" caption from
+  the second survey on. Noted
+  resolutions render read-only as `#task-decisions` beneath the spec —
+  exactly the block injected into prompts — and "Add to spec" pre-fills
+  the edit form without writing the task. Timeline
   (`Tasks.steps/1` on a vertical rail, opened by a `timeline_start`
   node synthesized from `task.inserted_at` — no `:created` step row
   exists; every timestamp carries a UTC `title` that the `.LocalTime`
-  colocated hook rewrites to the viewer's zone),
+  colocated hook rewrites to the viewer's zone; stored step summaries
+  render through `Format.step_summary/1`, which turns the technical
+  `repo survey: <status>` — kept in the DB as the survey-count match
+  key — into "Refinement completed/failed" here and in the dashboard
+  activity feed),
   executor/reviewer selection (planning) or verdict
   list, the target card, per-run cost/token/duration rows
   (`Costs.task_runs/1`, with the token split on hover).

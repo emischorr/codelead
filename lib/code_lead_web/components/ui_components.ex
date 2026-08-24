@@ -21,7 +21,10 @@ defmodule CodeLeadWeb.UIComponents do
       <.badge variant={:warn}>Question</.badge>
       <.badge variant={:ok} soft={false}>2</.badge>
   """
-  attr :variant, :atom, default: :neutral, values: [:neutral, :accent, :run, :warn, :ok]
+  attr :variant, :atom,
+    default: :neutral,
+    values: [:neutral, :accent, :run, :warn, :ok, :danger]
+
   attr :soft, :boolean, default: true
   attr :class, :any, default: nil
   slot :inner_block, required: true
@@ -43,11 +46,13 @@ defmodule CodeLeadWeb.UIComponents do
   defp badge_classes(:run, true), do: "bg-run-soft text-run"
   defp badge_classes(:warn, true), do: "bg-warn-soft text-warn"
   defp badge_classes(:ok, true), do: "bg-ok-soft text-ok"
+  defp badge_classes(:danger, true), do: "bg-del-bg text-del-text"
   defp badge_classes(:neutral, false), do: "bg-text3 text-surface"
   defp badge_classes(:accent, false), do: "bg-accent text-white"
   defp badge_classes(:run, false), do: "bg-run text-white"
   defp badge_classes(:warn, false), do: "bg-warn text-surface"
   defp badge_classes(:ok, false), do: "bg-ok text-white"
+  defp badge_classes(:danger, false), do: "bg-del-text text-white"
 
   @doc """
   Renders the task-state badge, with a pulsing dot while executing.
@@ -620,12 +625,17 @@ defmodule CodeLeadWeb.UIComponents do
       >
         {@label}
       </span>
+      <%!-- Assistant turns are markdown (chat replies and survey
+            reports both are); user turns stay literal text. --%>
       <div
-        class={[
-          "max-w-[85%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed",
-          @role == :user && "bg-accent-soft text-text",
-          @role == :assistant && "bg-surface2 text-text"
-        ]}
+        :if={@role == :assistant}
+        class="max-w-[85%] rounded-xl bg-surface2 px-3.5 py-2.5 text-[13px] leading-relaxed text-text"
+      >
+        <.markdown text={@content} />
+      </div>
+      <div
+        :if={@role == :user}
+        class="max-w-[85%] whitespace-pre-wrap rounded-xl bg-accent-soft px-3.5 py-2.5 text-[13px] leading-relaxed text-text"
         phx-no-format
       >{@content}</div>
     </div>

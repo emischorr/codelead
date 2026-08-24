@@ -1,22 +1,34 @@
-# Planning surface (last updated: 2026-08-15, surveys stay local)
+# Planning surface (last updated: 2026-08-24, task-level refinement, no chat UI)
 
-Implemented in `CodeLead.Planning`, rendered by the Task tab's chat card
-(`CodeLeadWeb.TaskLive.TaskTab`). The planning conversation helps the
-human sharpen a task's description and spec before anything runs.
-Nothing here moves the card and nothing here edits the task — the
-output crystallizes only when the human writes it into the spec.
+Implemented in `CodeLead.Planning`, rendered by the Task tab's Planning
+agent card (`CodeLeadWeb.TaskLive.TaskTab`). A one-shot agent
+refinement helps the human sharpen a task's description and spec before
+anything runs. Nothing here moves the card and nothing here edits the
+task — the output crystallizes only when the human writes it into the
+spec.
 
 ## Role, not mode
 
 A planning agent is an ordinary agent with `:plan` in `roles`, filtered
 into the surface by role **and** the task's `work_type`, exactly like
-executors and reviewers (`Agents.eligible_planners/2`). The **driver**
-decides what it can do in that slot:
+executors and reviewers (`Agents.eligible_planners/2`). One entry
+point, `Planning.start_refinement/2` — the **driver** decides the
+refinement's depth in that slot:
 
-| Driver | Entry point | Capability |
+| Driver | Depth | Capability |
 |---|---|---|
-| `:llm_api` | `Planning.send_message/3` | text-only refinement: task fields plus a repository file listing, one completion |
-| `:acp` | `Planning.start_survey/2` | **repo-aware survey**: reads current default-branch source read-only and reports what the spec leaves out |
+| `:llm_api` | **Task level** | one completion over the task fields plus a repository file listing (`refinement_prompt/1`); no repository required |
+| `:acp` | **Repo level** | **repo-aware survey**: reads current default-branch source read-only and reports what the spec leaves out |
+
+Both depths produce the same two-part report — markdown narrative plus
+findings JSON tail — recorded as a `:plan` step (`repo survey: <status>`
+vs `task refinement: <status>`; both prefixes feed
+`Findings.survey_run_count/1` and display as "Refinement
+completed/failed"). There is deliberately **no chat interface** in the
+web UI; the conversational loop (`Planning.send_message/3`,
+`Planning.chat/2`) remains available from the IEx console only, and
+old `:chat` planning messages are kept in the database but no longer
+rendered.
 
 Role (*which slot*) and mode (*how an ACP session runs*) are separate
 axes on purpose. There is no `mode` field and no ACP session mode; the
@@ -76,13 +88,99 @@ Invariants, each structural rather than conventional:
 - `<root>/surveys/` is dropped by `mix code_lead.workspace.clean`
   (wired into `mix ecto.reset`), like `worktrees/` and `tasks/`.
 
+## Findings
+
+A survey report is more than prose: its output contract is a markdown
+narrative followed by exactly one fenced ```json block, which
+`CodeLead.Findings.Report` parses into **findings** — persisted,
+severity-labelled rows (`findings` table, `CodeLead.Findings` context),
+one per item, keyed to the task and the producing `:plan` step. The raw
+turn stays on `planning_messages` exactly as before; findings are parsed
+*from* it, not instead of it. Parsing is deliberately lenient: items
+without a title are dropped, unknown severity defaults to `:medium`, a
+bare trailing JSON object is accepted without its fence, and a report
+with no parseable block writes nothing — the turn renders as markdown
+behind a "could not parse findings" hint. An advisory run never fails
+because the model got the tail wrong (the same graceful degradation as
+the reviewers' trailing-verdict convention in
+[`reviews.md`](reviews.md)).
+
+There is deliberately no gap/contradiction/assumption taxonomy on the
+row. The prompt also scopes the report: the agent is told to assume
+general knowledge of the project and to skip broad or obvious
+observations — only things someone scoping this specific task would
+act on. The three lenses live only in the prompt; the classification axes
+are `severity` (`:high | :medium | :low`, agent-assigned) and `phase`
+(`:planning | :review`, system-assigned — reviewers reuse the same table
+in a later iteration, which is why the parser and renderer are
+phase-agnostic).
+
+**Two owners, one row.** The agent owns the observation side —
+`observed` (`:open | :resolved | :not_applicable`) plus
+`first_seen_step_id`/`last_seen_step_id`. The human owns the resolution
+side — `resolution` (`:addressed | :dismissed`), `resolution_note`,
+`resolved_by_id`, `resolved_at`. A later run may reclassify the
+observation; it can never set, clear, or change a resolution. When a
+run *after* the human's resolution still flags the item, the UI shows a
+subtle "agent still flags this" marker; the tick stays. The timing
+matters (`Finding.still_flagged?/2` compares `resolved_at` against the
+latest survey step): the run that produced the finding proves nothing
+about a resolution made while reading it. What a row displays as is
+derived from both sides (`Finding.display_state/1`), never stored.
+
+**Reconciliation is the agent's job.** A re-run's prompt lists every
+prior finding — open, addressed, dismissed, obsolete — with its id and
+any human note, and the report classifies each in a `"prior"` list
+(`still_open` / `resolved` / `not_applicable`) instead of re-reporting
+it. The app applies the classification and inserts only the genuinely
+new items; nothing in Elixir tries to fuzzy-match titles. A prior
+finding the report omits keeps its previous observation untouched —
+omission means nothing.
+
+**Resolutions flow into prompts.** `Findings.decisions_block/1` renders
+noted `:addressed` resolutions under `## Decisions` and noted
+`:dismissed` ones under `## Out of scope`; a resolution without a note
+flows nowhere, and an empty block injects nothing. That is why the UI
+requires a note to address (Save stays disabled, and the LiveView
+refuses a blank one) but leaves it optional to dismiss — an addressed
+finding without a decision text would be a tick that changes nothing. The block is appended
+to the fresh-dispatch executor prompt (`TaskRunner.build_prompt/1` —
+not the request-changes rework prompt, whose carried session already saw
+it), the review prompt, and both refinement prompts (survey and
+task-level, plus the console chat preamble). The Task card shows the
+block read-only beneath the spec
+— what the user sees there is exactly what is injected. "Add to spec"
+on a finding pre-fills the edit form; nothing writes the task silently.
+
+**Surface.** One Planning agent card on the Task tab carries the whole
+lifecycle: the agent select (suffixed `· Repo level` / `· Task level`
+by driver) and the one "Run agent refinement" button in a single row on
+top — same button either level, disabled for a repo-level agent until a
+repository is linked — and, once a run has reported, the rows as an
+expandable checklist (severity chip, cited paths as forge links where
+`Git.forge/1` recognizes the host, obsolete items folded away), with
+the report narrative collapsible above and the raw turn behind a "show
+raw report" toggle. Actions exist only while the task is in Planning;
+afterwards findings are a read-only record of why the task is shaped as
+it is. Resolutions broadcast `{:findings_changed, _}` on the task
+topic, so every open LiveView sees a tick as it happens. The "run N"
+counter is derived from the refinement `:plan` steps, never stored; a
+step's stored summary stays the technical `repo survey: <status>` /
+`task refinement: <status>` (they are that counter's match keys) and is
+rendered as "Refinement completed/failed" by
+`CodeLeadWeb.Format.step_summary/1`.
+
 ## Messages
 
 `planning_messages` carries `role` (`:user` | `:assistant`), `kind`
-(`:chat` | `:survey`) and `agent_id`. Only `:chat` turns are replayed as
-history into later `llm_api` completions — a survey report is a
-standalone artifact, and replaying a multi-KB report would resend it in
-full on every subsequent turn.
+(`:chat` | `:survey`) and `agent_id`. Both refinement depths append a
+`:survey` turn — the raw transcript and the source of findings: the row
+keeps the full content (narrative plus JSON tail), while the card
+renders the parsed pieces and offers the raw report behind a toggle.
+`:chat` turns exist only through the IEx console loop and are not
+rendered in the web UI; only they are replayed as history into later
+console completions — a report is a standalone artifact, and replaying
+a multi-KB report would resend it in full on every subsequent turn.
 
 ## Attention
 

@@ -168,7 +168,9 @@ defmodule CodeLeadWeb.DashboardLive.Widgets do
         <.icon name={executor_icon(@entry.executor_type)} class="size-[11px]" />
       </span>
       <span class="min-w-0 flex-1">
-        <span class="block truncate text-[12.5px] text-text">{@entry.summary}</span>
+        <span class="block truncate text-[12.5px] text-text">
+          {Format.step_summary(@entry.summary)}
+        </span>
         <span class="block truncate text-[11px] text-text3">
           {@entry.task_title} · {Format.relative(@entry.at)}
         </span>

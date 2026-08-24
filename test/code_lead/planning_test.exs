@@ -67,6 +67,29 @@ defmodule CodeLead.PlanningTest do
     assert run.status == :ok
   end
 
+  test "the chat preamble carries the planning decisions" do
+    %{agent: agent, task: task} = planning_setup()
+
+    finding =
+      Repo.insert!(%CodeLead.Findings.Finding{
+        task_id: task.id,
+        phase: :planning,
+        severity: :high,
+        title: "Retry policy",
+        observed: :open
+      })
+
+    {:ok, _finding} = CodeLead.Findings.resolve(finding, nil, :addressed, "retry 3x, then hold")
+
+    stub_reply("Noted.", self())
+    {:ok, _reply} = Planning.send_message(task, agent.id, "Anything open?")
+
+    assert_receive {:llm_request, request}
+    [preamble | _rest] = request["messages"]
+    assert preamble["content"] =~ "## Decisions"
+    assert preamble["content"] =~ "- Retry policy: retry 3x, then hold"
+  end
+
   test "conversation history is replayed on later turns" do
     %{agent: agent, task: task} = planning_setup()
     stub_reply("Answer one", self())

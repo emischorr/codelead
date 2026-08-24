@@ -21,6 +21,7 @@ defmodule CodeLead.Reviews do
   alias CodeLead.Agents.Agent
   alias CodeLead.Costs
   alias CodeLead.Executor.Context
+  alias CodeLead.Findings
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Repo
@@ -240,12 +241,21 @@ defmodule CodeLead.Reviews do
     Title: #{task.title}
     Description: #{task.description || "(none)"}
     Spec / acceptance criteria: #{task.spec || "(none)"}
-
+    #{decisions_section(task)}
     #{artifact}
 
     End your review with a single line containing only JSON in the form
     {"verdict": "pass" | "concerns" | "block"}
     """
+  end
+
+  # Reviewers judge the artifact against the human's planning
+  # decisions, not only the spec.
+  defp decisions_section(task) do
+    case Findings.decisions_block(task.id) do
+      "" -> ""
+      block -> "\n" <> block <> "\n"
+    end
   end
 
   # ACP reviewers get the execution context read-only; llm_api

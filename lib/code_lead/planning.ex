@@ -5,14 +5,19 @@ defmodule CodeLead.Planning do
   it into the task (`Tasks.update_task(task, %{spec: ...})`) — nothing
   here changes the task itself.
 
-  Two capabilities, selected by the **driver** of the `:plan`-role
-  agent the human picks:
+  One entry point, `start_refinement/2`, whose depth is selected by the
+  **driver** of the `:plan`-role agent the human picks:
 
-  - `:llm_api` → `send_message/3`, a single completion that refines the
-    description and spec from text plus a repository file listing.
-  - `:acp` → `start_survey/2`, a **repo-aware survey**: a read-only
-    agent reads current default-branch source and reports requirement
-    gaps, contradictions, and unstated assumptions.
+  - `:llm_api` → **task-level**: a single completion over the task
+    fields plus a repository file listing.
+  - `:acp` → **repo-level**: a read-only agent reads current
+    default-branch source and reports requirement gaps, contradictions,
+    and unstated assumptions.
+
+  Both produce the same two-part report (narrative + findings JSON
+  tail) and land as a `:survey` turn parsed into findings. The chat
+  loop (`send_message/3`, `chat/2`) remains for the IEx console only —
+  the web UI has no chat interface.
 
   The survey is the reviewer primitive moved upstream — same
   `CodeLead.AdvisoryRun`, same read-only posture, same advisory status.
@@ -33,6 +38,7 @@ defmodule CodeLead.Planning do
   alias CodeLead.Agents.Agent
   alias CodeLead.Costs
   alias CodeLead.Executor.Context
+  alias CodeLead.Findings
   alias CodeLead.Git
   alias CodeLead.Planning.PlanningMessage
   alias CodeLead.Projects
@@ -78,22 +84,23 @@ defmodule CodeLead.Planning do
   end
 
   @doc """
-  Starts a repo-aware survey with an `:acp` plan agent: reads current
-  default-branch source read-only and reports gaps in the task's spec.
+  Starts a one-shot refinement with a `:plan` agent: an `:acp` agent
+  runs the repo-aware survey, an `:llm_api` agent a single completion
+  over the task fields. Both report gaps in the task's spec.
 
   Runs asynchronously and appends its findings as a `:survey` turn;
   completion is announced as `{:survey_completed, _}` on the task
   topic. Nothing about the card moves and no attention is raised — the
   human pulled this.
   """
-  @spec start_survey(Task.t(), pos_integer()) :: {:ok, :started} | {:error, term()}
-  def start_survey(%Task{} = task, agent_id) do
+  @spec start_refinement(Task.t(), pos_integer()) :: {:ok, :started} | {:error, term()}
+  def start_refinement(%Task{} = task, agent_id) do
     agent = Agents.get_agent!(agent_id)
 
     with :ok <- check_planner(agent, task),
-         :ok <- check_repository(task) do
+         :ok <- check_repository(agent, task) do
       Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn ->
-        run_survey(task, agent)
+        run_refinement(task, agent)
       end)
 
       {:ok, :started}
@@ -124,25 +131,66 @@ defmodule CodeLead.Planning do
     end
   end
 
-  ## Survey execution (inside CodeLead.TaskSupervisor)
+  @doc false
+  @spec survey_prompt(Task.t()) :: String.t()
+  def survey_prompt(%Task{} = task) do
+    """
+    You are surveying an existing codebase on behalf of a product owner \
+    who is still writing this task's spec. You are read-only: do not \
+    write or modify any code, and do not create branches or commits.
 
-  defp check_planner(%Agent{driver: :acp} = agent, %Task{} = task) do
+    Read the repository you have been given — it is checked out at the \
+    current default branch — and compare it against the task below.
+
+    #{report_contract()}\
+    #{task_section(task)}\
+    """
+  end
+
+  @doc false
+  @spec refinement_prompt(Task.t()) :: String.t()
+  def refinement_prompt(%Task{} = task) do
+    """
+    You are reviewing a task on behalf of a product owner who is still \
+    writing its spec. You cannot read the repository — work from the \
+    task fields below and, when present, the repository file listing.
+
+    #{report_contract()}\
+    #{task_section(task)}#{repo_context(task)}\
+    """
+  end
+
+  ## Refinement execution (inside CodeLead.TaskSupervisor)
+
+  defp check_planner(%Agent{} = agent, %Task{} = task) do
     if Agents.eligible?(agent, task.work_type, task.project_id, :plan),
       do: :ok,
       else: {:error, :planner_ineligible}
   end
 
-  defp check_planner(%Agent{}, %Task{}), do: {:error, :not_repo_aware}
+  # Only the repo-level survey needs source to read; a task-level
+  # refinement works from the task fields alone.
+  defp check_repository(%Agent{driver: :acp}, %Task{repository_id: nil}),
+    do: {:error, :missing_repository}
 
-  defp check_repository(%Task{repository_id: nil}), do: {:error, :missing_repository}
-  defp check_repository(%Task{}), do: :ok
+  defp check_repository(%Agent{}, %Task{}), do: :ok
 
-  defp run_survey(%Task{} = task, %Agent{} = agent) do
-    repository = Projects.get_repository!(task.repository_id)
+  defp run_refinement(%Task{} = task, %Agent{} = agent) do
     started_at = DateTime.utc_now(:second)
     monotonic_start = System.monotonic_time(:millisecond)
 
-    result = survey_result(task, agent, repository)
+    # The stored summary stays technical — it is the run counter's match
+    # key (`Findings.survey_run_count/1`) and is display-mapped by
+    # `CodeLeadWeb.Format.step_summary/1`.
+    {summary_key, result} =
+      case agent.driver do
+        :acp ->
+          {"repo survey",
+           survey_result(task, agent, Projects.get_repository!(task.repository_id))}
+
+        :llm_api ->
+          {"task refinement", refinement_result(task, agent)}
+      end
 
     step =
       Tasks.record_step(
@@ -150,7 +198,7 @@ defmodule CodeLead.Planning do
         :plan,
         :agent,
         agent.name,
-        "repo survey: #{result.status}",
+        "#{summary_key}: #{result.status}",
         Integer.to_string(agent.id)
       )
 
@@ -168,11 +216,36 @@ defmodule CodeLead.Planning do
 
     insert_message(task.id, :assistant, findings(result), kind: :survey, agent_id: agent.id)
 
+    delta = apply_findings(task, step, agent, result)
+
     Phoenix.PubSub.broadcast(
       CodeLead.PubSub,
       Tasks.task_topic(task.id),
-      {:task_event, task.id, {:survey_completed, %{agent: agent.name, status: result.status}}}
+      {:task_event, task.id,
+       {:survey_completed, %{agent: agent.name, status: result.status, delta: delta}}}
     )
+  end
+
+  # A report whose findings block does not parse writes no rows and
+  # degrades to the raw turn (delta nil) — never a survey failure.
+  defp apply_findings(task, step, agent, %{status: :ok, content: content}) do
+    case Findings.apply_report(task, :planning, step, agent, content) do
+      {:ok, delta} -> delta
+      :error -> nil
+    end
+  end
+
+  defp apply_findings(_task, _step, _agent, _result), do: nil
+
+  # The task-level depth: one completion, no execution context at all.
+  defp refinement_result(%Task{} = task, %Agent{} = agent) do
+    provider = Agents.get_provider!(agent.provider_id)
+    messages = [%{role: :user, content: refinement_prompt(task)}]
+
+    case LlmApi.complete(provider.kind, provider.config, agent, messages) do
+      {:ok, reply, usage} -> %{status: :ok, content: reply, usage: usage}
+      {:error, reason} -> failed("refinement failed: #{inspect(reason)}")
+    end
   end
 
   defp survey_result(%Task{} = task, %Agent{} = agent, repository) do
@@ -249,35 +322,104 @@ defmodule CodeLead.Planning do
 
   defp failed(detail), do: %{status: :error, content: detail, usage: nil}
 
-  defp findings(%{status: :ok} = result), do: result[:content] || "The survey returned nothing."
-  defp findings(%{status: status} = result), do: "Survey #{status}: #{result[:content]}"
+  defp findings(%{status: :ok} = result), do: result[:content] || "The run returned nothing."
+  defp findings(%{status: status} = result), do: "Refinement #{status}: #{result[:content]}"
 
-  defp survey_prompt(%Task{} = task) do
+  # The report contract shared by both refinement depths: the lenses,
+  # the two-part output shape, and the prior-classification rules.
+  defp report_contract do
     """
-    You are surveying an existing codebase on behalf of a product owner \
-    who is still writing this task's spec. You are read-only: do not \
-    write or modify any code, and do not create branches or commits.
+    Look for three things: requirements gaps (what someone implementing \
+    this would have to decide), contradictions between the task and the \
+    existing code, docs or conventions, and unstated assumptions or \
+    open questions. Do not label items by these categories — they are \
+    lenses, not output sections.
 
-    Read the repository you have been given — it is checked out at the \
-    current default branch — and compare it against the task below. \
-    Report:
+    Assume the reader already has a general knowledge of what this \
+    project is and how it is built. Do not report broad or obvious \
+    observations — the language or framework in use, the overall \
+    structure, the fact that code exists. Report only things someone \
+    scoping this specific task would act on.
 
-    1. **Requirements gaps** — what the spec does not say that someone \
-       implementing this would have to decide.
-    2. **Contradictions** — where the description or spec disagrees \
-       with the existing code, docs, or conventions. Cite files.
-    3. **Unstated assumptions and open questions** — what the spec \
-       takes for granted, and what you would need answered.
+    Write your report in two parts.
 
-    Be specific and cite paths. This survey is advisory: the human \
-    rewrites the spec, not you.
+    Part 1 — a short markdown narrative: what exists today that is \
+    relevant to this task, with file paths. Be specific and cite paths. \
+    No process narration, no restating the task.
 
+    Part 2 — exactly one fenced ```json block, the last thing in your \
+    output, in this shape:
+
+    {
+      "findings": [
+        {
+          "title": "one line, imperative or noun phrase, ≤ 120 chars",
+          "severity": "high" | "medium" | "low",
+          "body": "markdown; why it matters and what has to be decided",
+          "paths": ["lib/foo.ex", "lib/bar.ex:42"]
+        }
+      ],
+      "prior": [
+        { "id": 12, "status": "still_open" | "resolved" | "not_applicable" }
+      ]
+    }
+
+    Severity: high = must be decided before this task can run; medium = \
+    should be decided, an implementer could guess wrong; low = worth \
+    clarifying, low risk either way.
+
+    Do not repeat a prior finding as a new one. If a prior finding is \
+    now covered by the spec or the decisions, mark it "resolved". If \
+    the task changed so it no longer applies, mark it "not_applicable". \
+    "prior" may be empty when there are no prior findings.
+
+    This report is advisory: the human rewrites the spec, not you.\
+    """
+  end
+
+  defp task_section(%Task{} = task) do
+    """
     ## Task
     Title: #{task.title}
     Work type: #{task.work_type} | Target: #{task.target} | Priority: #{task.priority}
     Description: #{task.description || "(none)"}
     Current spec: #{task.spec || "(none)"}
+    #{prior_findings_section(task)}#{decisions_section(task)}\
     """
+  end
+
+  # All prior findings — every state — so the agent classifies instead
+  # of re-reporting, and never re-adds a dismissed item as new.
+  defp prior_findings_section(%Task{} = task) do
+    case Findings.prior_for_prompt(task.id, :planning) do
+      [] ->
+        ""
+
+      prior ->
+        lines = Enum.map_join(prior, "\n", &prior_line/1)
+        "\n## Prior findings (classify each in \"prior\")\n" <> lines <> "\n"
+    end
+  end
+
+  defp prior_line(%{id: id, title: title} = finding) do
+    "- [#{id}] (#{prior_status(finding)}) #{title}"
+  end
+
+  defp prior_status(%{resolution: resolution, resolution_note: note})
+       when resolution in [:addressed, :dismissed] do
+    label = "#{resolution} by human"
+    if note, do: ~s(#{label}: "#{note}"), else: label
+  end
+
+  defp prior_status(%{observed: :not_applicable}), do: "marked not applicable in an earlier run"
+  defp prior_status(%{observed: :resolved}), do: "an earlier run considered this resolved"
+  defp prior_status(_finding), do: "open"
+
+  defp decisions_section(%Task{} = task) do
+    case Findings.decisions_block(task.id) do
+      "" -> ""
+      block -> "\n" <> block <> "\n"
+    end
   end
 
   ## Messages
@@ -314,7 +456,7 @@ defmodule CodeLead.Planning do
     Work type: #{task.work_type} | Target: #{task.target} | Priority: #{task.priority}
     Description: #{task.description || "(none)"}
     Current spec: #{task.spec || "(none)"}
-    #{repo_context(task)}
+    #{decisions_section(task)}#{repo_context(task)}
     """
   end
 

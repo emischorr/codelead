@@ -1,12 +1,15 @@
 defmodule CodeLeadWeb.TaskLive.TaskTab do
   @moduledoc """
   The Task tab: attention banner, description/spec (editable while in
-  Planning), the planning-assistant chat, the timeline, and the
+  Planning), the planning-agent card, the timeline, and the
   executor/reviewers/cost rail.
   """
   use CodeLeadWeb, :html
 
   alias CodeLead.Agents
+  alias CodeLead.Findings.Finding
+  alias CodeLead.Git
+  alias CodeLeadWeb.ForgeLinks
   alias CodeLeadWeb.FormOptions
 
   attr :task, :map, required: true
@@ -19,12 +22,19 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :reviews, :list, required: true
   attr :runs, :list, required: true
   attr :task_stat, :map, required: true
-  attr :messages, :list, required: true
+  attr :findings, :list, default: []
+  attr :decisions, :string, default: ""
+  attr :survey_run_count, :integer, default: 0
+  attr :survey_report, :map, default: nil
+  attr :survey_delta, :map, default: nil
+  attr :latest_survey_step, :map, default: nil
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :show_raw_report?, :boolean, default: false
+  attr :hide_resolved?, :boolean, default: false
   attr :eligible_planners, :list, default: []
   attr :selected_planner, :map, default: nil
-  attr :chat_pending?, :boolean, default: false
   attr :survey_pending?, :boolean, default: false
-  attr :pending_chat, :string, default: nil
   attr :eligible_executors, :list, default: []
   attr :eligible_reviewers, :list, default: []
   attr :edit_form, :any, required: true
@@ -85,19 +95,27 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         <.description_card
           task={@task}
           edit_form={@edit_form}
+          decisions={@decisions}
           editable?={@task.state == :planning}
           editing?={@editing? && @task.state == :planning}
         />
 
-        <.chat_card
+        <.planning_card
           task={@task}
-          messages={@messages}
+          findings={@findings}
           agents={@agents}
+          repository={@repository}
+          survey_run_count={@survey_run_count}
+          survey_report={@survey_report}
+          survey_delta={@survey_delta}
+          latest_survey_step={@latest_survey_step}
+          finding_expanded={@finding_expanded}
+          finding_action={@finding_action}
+          show_raw_report?={@show_raw_report?}
+          hide_resolved?={@hide_resolved?}
           eligible_planners={@eligible_planners}
           selected_planner={@selected_planner}
-          chat_pending?={@chat_pending?}
           survey_pending?={@survey_pending?}
-          pending_chat={@pending_chat}
         />
 
         <.section_card label="Timeline" id="timeline-card">
@@ -107,7 +125,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
               :for={step <- @steps}
               id={"timeline-step-#{step.id}"}
               executor_type={step.executor_type}
-              summary={step.summary}
+              summary={Format.step_summary(step.summary)}
               at={step.inserted_at}
             />
           </ol>
@@ -140,6 +158,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
 
   attr :task, :map, required: true
   attr :edit_form, :any, required: true
+  attr :decisions, :string, default: ""
   attr :editable?, :boolean, required: true
   attr :editing?, :boolean, required: true
 
@@ -175,6 +194,18 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
             Spec / acceptance criteria
           </span>
           <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-text2" phx-no-format>{@task.spec}</p>
+        </div>
+        <%!-- P6: exactly what gets injected into the agent's prompt,
+              rendered verbatim. The edit surface is the finding row. --%>
+        <div
+          :if={@decisions != ""}
+          id="task-decisions"
+          class="flex flex-col gap-1.5 rounded-xl bg-surface2 px-3.5 py-2.5"
+        >
+          <span class="text-[10.5px] font-semibold uppercase tracking-wider text-text3">
+            Included in the agent's prompt
+          </span>
+          <.markdown text={@decisions} class="text-[12.5px] text-text2" />
         </div>
         <div class="mt-0.5 flex flex-wrap gap-1.5">
           <%!-- Target, repository and branch live in the Target card on the rail. --%>
@@ -228,110 +259,430 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   end
 
   attr :task, :map, required: true
-  attr :messages, :list, required: true
+  attr :findings, :list, required: true
   attr :agents, :map, default: %{}
+  attr :repository, :map, default: nil
+  attr :survey_run_count, :integer, default: 0
+  attr :survey_report, :map, default: nil
+  attr :survey_delta, :map, default: nil
+  attr :latest_survey_step, :map, default: nil
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :show_raw_report?, :boolean, default: false
+  attr :hide_resolved?, :boolean, default: false
   attr :eligible_planners, :list, default: []
   attr :selected_planner, :map, default: nil
-  attr :chat_pending?, :boolean, required: true
   attr :survey_pending?, :boolean, default: false
-  attr :pending_chat, :string, default: nil
 
-  defp chat_card(assigns) do
-    assigns = assign(assigns, :repo_aware?, repo_aware?(assigns.selected_planner))
+  # One card for the whole planning-agent lifecycle: pick an agent and
+  # run it on top, findings (once any exist) and the chat below.
+  defp planning_card(assigns) do
+    {active, obsolete} =
+      Enum.split_with(assigns.findings, &(Finding.display_state(&1) != :obsolete))
+
+    visible =
+      if assigns.hide_resolved?,
+        do: Enum.filter(active, &is_nil(&1.resolution)),
+        else: active
+
+    assigns =
+      assign(assigns,
+        forge: (assigns.repository && Git.forge(assigns.repository.git_url)) || :other,
+        default_branch: assigns.repository && assigns.repository.default_branch,
+        visible: visible,
+        obsolete: obsolete,
+        any_resolved?: Enum.any?(assigns.findings, & &1.resolution),
+        parse_failed?: assigns.survey_report != nil and assigns.survey_report.parse_failed?,
+        repo_aware?: repo_aware?(assigns.selected_planner)
+      )
 
     ~H"""
-    <.section_card label="Planning assistant" id="chat-card">
-      <div
-        :if={@messages != [] || @pending_chat}
-        class="flex max-h-96 flex-col gap-2.5 overflow-y-auto"
-        id="chat-messages"
-      >
-        <.chat_bubble
-          :for={message <- @messages}
-          role={message.role}
-          content={message.content}
-          label={survey_label(message, @agents)}
-        />
-        <.chat_bubble :if={@pending_chat} role={:user} content={@pending_chat} />
-        <div :if={@chat_pending?} class="flex items-center gap-2 text-xs text-text3">
-          <span class="size-1.5 animate-pulse rounded-full bg-accent" /> Assistant is thinking…
+    <.section_card label="Planning agent" id="planning-card">
+      <:actions>
+        <div class="flex items-center gap-3">
+          <span :if={@survey_run_count > 1} id="findings-run-count" class="text-[11px] text-text3">
+            run {@survey_run_count}{delta_caption(@survey_delta)}
+          </span>
+          <button
+            :if={@any_resolved?}
+            type="button"
+            id="toggle-hide-resolved"
+            phx-click="toggle_hide_resolved"
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            {if @hide_resolved?, do: "Show resolved", else: "Hide resolved"}
+          </button>
+          <button
+            :if={@survey_report}
+            type="button"
+            id="toggle-raw-report"
+            phx-click="toggle_raw_report"
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            {if @show_raw_report?, do: "Hide raw report", else: "Show raw report"}
+          </button>
         </div>
-        <div :if={@survey_pending?} class="flex items-center gap-2 text-xs text-text3">
-          <span class="size-1.5 animate-pulse rounded-full bg-accent" />
-          Surveying the repository — this can take a few minutes…
-        </div>
-      </div>
-      <p
-        :if={@messages == [] && !@pending_chat && @task.state == :planning}
-        class="text-[13px] text-text3"
-      >
-        Sharpen the spec together before starting the run.
-      </p>
+      </:actions>
 
       <div :if={@task.state == :planning} class="flex flex-col gap-2">
-        <form id="planner-form" phx-change="set_planner">
-          <select
-            name="agent_id"
-            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-          >
-            <option :if={@eligible_planners == []} value="">
-              No planning agents for this work type
-            </option>
-            <option
-              :for={agent <- @eligible_planners}
-              value={agent.id}
-              selected={@selected_planner && @selected_planner.id == agent.id}
+        <div class="flex items-center gap-2">
+          <form id="planner-form" phx-change="set_planner" class="min-w-0 flex-1">
+            <select
+              name="agent_id"
+              class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
             >
-              {agent.name} · {planner_capability(agent)}
-            </option>
-          </select>
-        </form>
+              <option :if={@eligible_planners == []} value="">
+                No planning agents for this work type
+              </option>
+              <option
+                :for={agent <- @eligible_planners}
+                value={agent.id}
+                selected={@selected_planner && @selected_planner.id == agent.id}
+              >
+                {agent.name} · {agent_level(agent)}
+              </option>
+            </select>
+          </form>
 
-        <button
-          :if={@repo_aware?}
-          type="button"
-          id="run-survey"
-          phx-click="run_survey"
-          disabled={@survey_pending? || is_nil(@task.repository_id)}
-          class="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-[13px] font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <.icon name="hero-magnifying-glass" class="size-4" />
-          {if @task.repository_id, do: "Run repo survey", else: "Link a repository to survey"}
-        </button>
-
-        <form :if={!@repo_aware?} id="chat-form" phx-submit="send_chat" class="flex gap-2">
-          <input
-            type="text"
-            name="message"
-            placeholder={chat_placeholder(@selected_planner)}
-            disabled={@chat_pending? || is_nil(@selected_planner)}
-            autocomplete="off"
-            class="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg px-3.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
-          />
+          <%!-- Same button either level; only the repo-level survey needs
+                a repository to read. --%>
           <button
-            type="submit"
-            disabled={@chat_pending? || is_nil(@selected_planner)}
-            class="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-accent text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Send message"
+            type="button"
+            id="run-refinement"
+            phx-click="run_refinement"
+            disabled={
+              @survey_pending? || is_nil(@selected_planner) ||
+                (@repo_aware? && is_nil(@task.repository_id))
+            }
+            class="flex h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-[13px] font-medium text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <.icon name="hero-paper-airplane" class="size-4" />
+            <.icon name="hero-magnifying-glass" class="size-4" />
+            {if @repo_aware? && is_nil(@task.repository_id),
+              do: "Link a repository first",
+              else: "Run agent refinement"}
           </button>
-        </form>
+        </div>
+
+        <div :if={@survey_pending?} class="flex items-center gap-2 text-xs text-text3">
+          <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+          Refinement running — this can take a few minutes…
+        </div>
       </div>
-      <p :if={@task.state != :planning && @messages == []} class="text-[13px] text-text3">
-        No planning conversation was recorded.
+
+      <p :if={@parse_failed?} id="findings-parse-hint" class="text-xs text-text3">
+        Could not parse findings from the last survey — showing the raw report.
+      </p>
+
+      <div
+        :if={@survey_report && (@show_raw_report? || @parse_failed?)}
+        id="findings-raw-report"
+        class="flex flex-col gap-1.5 rounded-xl bg-surface2 px-3.5 py-2.5"
+      >
+        <span class="text-[10.5px] font-semibold uppercase tracking-wider text-text3">
+          {survey_label(@survey_report.message, @agents)}
+        </span>
+        <.markdown text={@survey_report.message.content} class="text-[13px]" />
+      </div>
+
+      <details
+        :if={
+          !@show_raw_report? && !@parse_failed? && @survey_report &&
+            @survey_report.narrative not in [nil, ""]
+        }
+        id="findings-narrative"
+        class="group rounded-xl bg-surface2"
+        open={@findings == []}
+      >
+        <summary class="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 [&::-webkit-details-marker]:hidden">
+          <.icon
+            name="hero-chevron-right"
+            class="size-3.5 text-text3 transition-transform group-open:rotate-90"
+          />
+          <span class="text-[10.5px] font-semibold uppercase tracking-wider text-text3">
+            {survey_label(@survey_report.message, @agents)}
+          </span>
+        </summary>
+        <.markdown text={@survey_report.narrative} class="px-3.5 pb-3 text-[13px]" />
+      </details>
+
+      <div :if={@visible != []} id="findings-list" class="flex flex-col">
+        <.finding_row
+          :for={finding <- @visible}
+          finding={finding}
+          task_state={@task.state}
+          forge={@forge}
+          default_branch={@default_branch}
+          latest_survey_step={@latest_survey_step}
+          expanded?={@finding_expanded && MapSet.member?(@finding_expanded, finding.id)}
+          action={@finding_action}
+        />
+      </div>
+
+      <p
+        :if={@findings == [] && @survey_report && !@parse_failed?}
+        class="text-[13px] text-text3"
+      >
+        The survey reported no findings.
+      </p>
+
+      <details :if={@obsolete != []} id="findings-obsolete" class="group">
+        <summary class="flex cursor-pointer list-none items-center gap-2 text-xs text-text3 [&::-webkit-details-marker]:hidden">
+          <.icon
+            name="hero-chevron-right"
+            class="size-3.5 transition-transform group-open:rotate-90"
+          />
+          {length(@obsolete)} no longer applicable
+        </summary>
+        <div class="mt-1.5 flex flex-col gap-1 pl-5.5">
+          <span
+            :for={finding <- @obsolete}
+            id={"finding-obsolete-#{finding.id}"}
+            class="text-[13px] text-text3 line-through"
+          >
+            {finding.title}
+          </span>
+        </div>
+      </details>
+
+      <p
+        :if={@task.state != :planning && @findings == [] && is_nil(@survey_report)}
+        class="text-[13px] text-text3"
+      >
+        No refinement was recorded.
       </p>
     </.section_card>
     """
   end
 
+  attr :finding, :map, required: true
+  attr :task_state, :atom, required: true
+  attr :forge, :any, required: true
+  attr :default_branch, :string, default: nil
+  attr :latest_survey_step, :map, default: nil
+  attr :expanded?, :boolean, default: false
+  attr :action, :map, default: nil
+
+  defp finding_row(assigns) do
+    finding = assigns.finding
+
+    assigns =
+      assign(assigns,
+        state: Finding.display_state(finding),
+        actionable?: assigns.task_state == :planning,
+        agent_resolved?: Finding.agent_resolved?(finding),
+        still_flagged?: Finding.still_flagged?(finding, assigns.latest_survey_step),
+        note_form?: assigns.action != nil and assigns.action.id == finding.id
+      )
+
+    ~H"""
+    <div
+      class="border-t border-border py-2.5 first:border-t-0 first:pt-0"
+      id={"finding-#{@finding.id}"}
+    >
+      <div class="flex items-center gap-2.5">
+        <%!-- The checkbox is the human's tick, never the agent's: it only
+              reflects (and toggles) the `:addressed` resolution. --%>
+        <.icon :if={@state == :dismissed} name="hero-no-symbol" class="size-4 shrink-0 text-text3" />
+        <button
+          :if={@state != :dismissed && @actionable?}
+          type="button"
+          role="checkbox"
+          aria-checked={to_string(@state == :addressed)}
+          id={"finding-check-#{@finding.id}"}
+          phx-click={if @state == :addressed, do: "reopen_finding", else: "finding_action"}
+          phx-value-id={@finding.id}
+          phx-value-resolution="addressed"
+          class={[
+            "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded border",
+            @state == :addressed && "border-accent bg-accent text-white",
+            @state != :addressed && "border-border bg-surface hover:border-accent"
+          ]}
+        >
+          <.icon :if={@state == :addressed} name="hero-check" class="size-3" />
+        </button>
+        <span
+          :if={@state != :dismissed && !@actionable?}
+          class={[
+            "flex size-4 shrink-0 items-center justify-center rounded border",
+            @state == :addressed && "border-accent bg-accent text-white",
+            @state != :addressed && "border-border bg-surface"
+          ]}
+        >
+          <.icon :if={@state == :addressed} name="hero-check" class="size-3" />
+        </span>
+
+        <.badge variant={severity_variant(@finding.severity)}>{@finding.severity}</.badge>
+
+        <button
+          type="button"
+          id={"finding-toggle-#{@finding.id}"}
+          phx-click="toggle_finding"
+          phx-value-id={@finding.id}
+          class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+        >
+          <span class={[
+            "truncate text-[13px]",
+            (@state == :dismissed && "text-text3") || "text-text"
+          ]}>
+            {@finding.title}
+          </span>
+          <span :if={@agent_resolved?} class="shrink-0 text-[11px] text-ok">
+            agent considers this resolved
+          </span>
+          <span :if={@still_flagged?} class="shrink-0 text-[11px] text-warn">
+            agent still flags this
+          </span>
+          <span :if={@finding.resolution} class="ml-auto shrink-0 text-[11px] text-text3">
+            {resolver_label(@finding)}
+          </span>
+          <.icon
+            name="hero-chevron-right"
+            class={["size-3.5 shrink-0 text-text3 transition-transform", @expanded? && "rotate-90"]}
+          />
+        </button>
+      </div>
+
+      <div
+        :if={@expanded?}
+        class="mt-2 flex flex-col gap-2 pl-[52px]"
+        id={"finding-detail-#{@finding.id}"}
+      >
+        <.markdown :if={@finding.body} text={@finding.body} class="text-[13px] text-text2" />
+
+        <div :if={@finding.paths != []} class="flex flex-wrap gap-1.5">
+          <.cited_path
+            :for={path <- @finding.paths}
+            path={path}
+            forge={@forge}
+            default_branch={@default_branch}
+          />
+        </div>
+
+        <p :if={@finding.resolution_note} class="text-[13px] text-text2">
+          <span class="font-semibold text-text3">
+            {if @finding.resolution == :dismissed, do: "Dismissed:", else: "Decision:"}
+          </span>
+          {@finding.resolution_note}
+        </p>
+
+        <div :if={@actionable? && @note_form?} class="flex flex-col gap-1">
+          <form
+            phx-submit="resolve_finding"
+            phx-change="validate_finding_note"
+            id={"finding-note-form-#{@finding.id}"}
+            class="flex items-center gap-2"
+          >
+            <input type="hidden" name="finding_id" value={@finding.id} />
+            <input type="hidden" name="resolution" value={@action.resolution} />
+            <input
+              type="text"
+              name="note"
+              id={"finding-note-#{@finding.id}"}
+              placeholder={
+                if @action.resolution == :dismissed,
+                  do: "(Optional) Why is this out of scope?",
+                  else: "What was decided?"
+              }
+              autocomplete="off"
+              class="h-8 min-w-0 flex-1 rounded-lg border border-border bg-bg px-2.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none"
+            />
+            <.button
+              variant="primary"
+              type="submit"
+              disabled={@action.resolution == :addressed && !@action.note_present?}
+            >
+              Save
+            </.button>
+            <.button type="button" phx-click="cancel_finding_action">Cancel</.button>
+          </form>
+          <p class="text-[11px] text-text3">
+            Add a note to carry this decision into the run.
+          </p>
+        </div>
+
+        <div :if={@actionable? && !@note_form?} class="flex items-center gap-3">
+          <button
+            :if={@state == :open}
+            type="button"
+            id={"finding-address-#{@finding.id}"}
+            phx-click="finding_action"
+            phx-value-id={@finding.id}
+            phx-value-resolution="addressed"
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            Address
+          </button>
+          <button
+            :if={@state == :open}
+            type="button"
+            id={"finding-dismiss-#{@finding.id}"}
+            phx-click="finding_action"
+            phx-value-id={@finding.id}
+            phx-value-resolution="dismissed"
+            class="cursor-pointer text-xs font-semibold text-text3 hover:underline"
+          >
+            Dismiss
+          </button>
+          <button
+            :if={@state in [:addressed, :dismissed]}
+            type="button"
+            id={"finding-reopen-#{@finding.id}"}
+            phx-click="reopen_finding"
+            phx-value-id={@finding.id}
+            class="cursor-pointer text-xs font-semibold text-text3 hover:underline"
+          >
+            Reopen
+          </button>
+          <button
+            :if={@state in [:addressed, :dismissed] && @finding.resolution_note}
+            type="button"
+            id={"finding-add-to-spec-#{@finding.id}"}
+            phx-click="add_finding_to_spec"
+            phx-value-id={@finding.id}
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            Add to spec
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :path, :string, required: true
+  attr :forge, :any, required: true
+  attr :default_branch, :string, default: nil
+
+  defp cited_path(assigns) do
+    url =
+      assigns.default_branch &&
+        ForgeLinks.file_url(assigns.forge, assigns.default_branch, assigns.path)
+
+    assigns = assign(assigns, :url, url)
+
+    ~H"""
+    <a
+      :if={@url}
+      href={@url}
+      target="_blank"
+      rel="noreferrer"
+      class="rounded bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-accent hover:underline"
+    >
+      {@path}
+    </a>
+    <span :if={!@url} class="rounded bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-text2">
+      {@path}
+    </span>
+    """
+  end
+
   # An ACP plan agent traverses the repo; an llm_api one reasons over
-  # the text it is given. Same slot, different capability.
+  # the text it is given. Same slot, different depth.
   defp repo_aware?(%{driver: :acp}), do: true
   defp repo_aware?(_planner), do: false
 
-  defp planner_capability(%{driver: :acp}), do: "repo survey"
-  defp planner_capability(_agent), do: "spec refinement"
+  defp agent_level(%{driver: :acp}), do: "Repo level"
+  defp agent_level(_agent), do: "Task level"
 
   defp survey_label(%{kind: :survey} = message, agents) do
     case agents[message.agent_id] do
@@ -342,8 +693,30 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
 
   defp survey_label(_message, _agents), do: nil
 
-  defp chat_placeholder(nil), do: "No planning agent for this work type"
-  defp chat_placeholder(_planner), do: "Ask the assistant to refine the spec…"
+  defp severity_variant(:high), do: :danger
+  defp severity_variant(:medium), do: :warn
+  defp severity_variant(:low), do: :ok
+
+  defp delta_caption(nil), do: ""
+
+  defp delta_caption(delta) do
+    parts =
+      [
+        {delta.new, "new"},
+        {delta.resolved, "resolved"},
+        {delta.not_applicable, "no longer applicable"}
+      ]
+      |> Enum.filter(fn {count, _label} -> count > 0 end)
+      |> Enum.map_join(", ", fn {count, label} -> "#{count} #{label}" end)
+
+    if parts == "", do: "", else: " · #{parts}"
+  end
+
+  defp resolver_label(%{resolved_by: %{username: username}} = finding) do
+    "#{username} · #{Format.relative(finding.resolved_at)}"
+  end
+
+  defp resolver_label(finding), do: Format.relative(finding.resolved_at)
 
   attr :task, :map, required: true
   attr :executor, :map, default: nil

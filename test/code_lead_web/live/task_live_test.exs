@@ -13,6 +13,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
   alias CodeLead.AgentFeed
   alias CodeLead.Executor.LocalSubprocess
+  alias CodeLead.Findings.Finding
+  alias CodeLead.Repo
   alias CodeLead.Tasks
   alias CodeLeadWeb.DiffComponents
 
@@ -321,21 +323,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
   end
 
   describe "planning agent selection" do
-    test "an llm_api planner offers the chat, not the survey", %{conn: conn} do
+    test "both planner levels offer the same run button, labelled by level", %{conn: conn} do
       project = project_fixture()
-      _coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
-      task = task_fixture(project.id)
-
-      {:ok, view, _html} = live(conn, task_path(project, task))
-
-      assert has_element?(view, "#planner-form")
-      assert has_element?(view, "#chat-form")
-      refute has_element?(view, "#run-survey")
-    end
-
-    test "selecting an acp planner swaps the chat for the survey action", %{conn: conn} do
-      project = project_fixture()
-      repository = repository_fixture(project.id)
       coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
 
       surveyor =
@@ -347,21 +336,35 @@ defmodule CodeLeadWeb.TaskLiveTest do
           name: "Surveyor #{System.unique_integer([:positive])}"
         })
 
-      task = task_fixture(project.id, %{target: :repo, repository_id: repository.id})
+      # no repository: the task-level run works, the repo-level one can't
+      task = task_fixture(project.id, %{target: :folder})
 
       {:ok, view, _html} = live(conn, task_path(project, task))
 
-      # Whichever planner sorts first, switching to the ACP one is what
-      # exposes the repo-aware action.
+      assert view |> element("#planner-form") |> render() =~ "· Task level"
+      assert view |> element("#planner-form") |> render() =~ "· Repo level"
+
       view |> element("#planner-form") |> render_change(%{"agent_id" => to_string(coach.id)})
-      refute has_element?(view, "#run-survey")
+      refute has_element?(view, "#run-refinement[disabled]")
+      assert view |> element("#run-refinement") |> render() =~ "Run agent refinement"
 
       view |> element("#planner-form") |> render_change(%{"agent_id" => to_string(surveyor.id)})
-      assert has_element?(view, "#run-survey")
-      refute has_element?(view, "#chat-form")
+      assert has_element?(view, "#run-refinement[disabled]")
+      assert view |> element("#run-refinement") |> render() =~ "Link a repository first"
     end
 
-    test "no planner for the work type leaves the chat disabled", %{conn: conn} do
+    test "there is no chat interface", %{conn: conn} do
+      project = project_fixture()
+      _coach = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+      task = task_fixture(project.id)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      refute has_element?(view, "#chat-form")
+      refute has_element?(view, "#chat-messages")
+    end
+
+    test "no planner for the work type disables the run", %{conn: conn} do
       project = project_fixture()
       _content_planner = agent_fixture(%{roles: [:plan], work_type: :content})
       task = task_fixture(project.id, %{work_type: :code})
@@ -370,6 +373,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
 
       assert has_element?(view, "#planner-form")
       assert render(view) =~ "No planning agents for this work type"
+      assert has_element?(view, "#run-refinement[disabled]")
     end
 
     test "a completed survey renders as a labelled turn", %{conn: conn} do
@@ -405,6 +409,207 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert html =~ "payment failure"
       assert html =~ "Repo survey"
       assert html =~ surveyor.name
+    end
+  end
+
+  describe "findings" do
+    defp finding_fixture(task, attrs \\ %{}) do
+      Repo.insert!(
+        struct!(
+          %Finding{
+            task_id: task.id,
+            phase: :planning,
+            severity: :high,
+            title: "Retry policy",
+            observed: :open
+          },
+          attrs
+        )
+      )
+    end
+
+    test "resolving a finding propagates to another connected session", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      finding = finding_fixture(task)
+
+      {:ok, view_a, _html} = live(conn, task_path(project, task))
+      {:ok, view_b, _html} = live(conn, task_path(project, task))
+
+      view_a |> element("#finding-check-#{finding.id}") |> render_click()
+
+      view_a
+      |> form("#finding-note-form-#{finding.id}", %{note: "retry 3x, then hold"})
+      |> render_submit()
+
+      html_b = render(view_b)
+      assert html_b =~ "retry 3x, then hold"
+      assert has_element?(view_b, ~s(#finding-check-#{finding.id}[aria-checked="true"]))
+    end
+
+    test "add to spec pre-fills the edit form without changing the task", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{spec: "Existing criteria."})
+
+      finding =
+        finding_fixture(task, %{
+          resolution: :addressed,
+          resolution_note: "retry 3x, then hold",
+          resolved_at: DateTime.utc_now(:second)
+        })
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#finding-toggle-#{finding.id}") |> render_click()
+      view |> element("#finding-add-to-spec-#{finding.id}") |> render_click()
+
+      assert has_element?(view, "#task-edit-form")
+      assert render(view) =~ "Existing criteria.\n- Retry policy: retry 3x, then hold"
+
+      # nothing is written until the human saves through the normal path
+      assert Tasks.get_task!(task.id).spec == "Existing criteria."
+    end
+
+    test "outside Planning the findings render read-only", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :review})
+      finding = finding_fixture(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+
+      assert has_element?(view, "#planning-card")
+      assert has_element?(view, "#finding-#{finding.id}")
+      refute has_element?(view, "#finding-check-#{finding.id}")
+
+      view |> element("#finding-toggle-#{finding.id}") |> render_click()
+      refute has_element?(view, "#finding-address-#{finding.id}")
+      refute has_element?(view, "#finding-dismiss-#{finding.id}")
+    end
+
+    test "the run counter appears from the second survey on", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      finding_fixture(task)
+      Tasks.record_step(task.id, :plan, :agent, "Surveyor", "repo survey: ok")
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+      refute has_element?(view, "#findings-run-count")
+
+      Tasks.record_step(task.id, :plan, :agent, "Surveyor", "repo survey: ok")
+
+      send(
+        view.pid,
+        {:task_event, task.id, {:survey_completed, %{agent: "Surveyor", status: :ok}}}
+      )
+
+      assert view |> element("#findings-run-count") |> render() =~ "run 2"
+    end
+
+    test "an unparseable survey shows the hint and the raw report", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      Repo.insert!(%CodeLead.Planning.PlanningMessage{
+        task_id: task.id,
+        role: :assistant,
+        kind: :survey,
+        content: "Gap: the spec never says what happens on payment failure."
+      })
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#findings-parse-hint")
+      assert view |> element("#findings-raw-report") |> render() =~ "payment failure"
+    end
+
+    test "addressing requires a note, dismissing does not", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      finding = finding_fixture(task)
+      other = finding_fixture(task, %{title: "Cache invalidation"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#finding-check-#{finding.id}") |> render_click()
+
+      # Save stays disabled until a note is typed, and a blank submit writes nothing
+      assert has_element?(view, "#finding-note-form-#{finding.id} button[type=submit][disabled]")
+      view |> form("#finding-note-form-#{finding.id}", %{note: "   "}) |> render_submit()
+      assert Repo.get!(Finding, finding.id).resolution == nil
+
+      view |> form("#finding-note-form-#{finding.id}", %{note: "retry 3x"}) |> render_change()
+      refute has_element?(view, "#finding-note-form-#{finding.id} button[type=submit][disabled]")
+
+      # a dismissal needs no note, and its input says so
+      view |> element("#finding-toggle-#{other.id}") |> render_click()
+      view |> element("#finding-dismiss-#{other.id}") |> render_click()
+
+      assert view |> element("#finding-note-#{other.id}") |> render() =~
+               "(Optional) Why is this out of scope?"
+
+      view |> form("#finding-note-form-#{other.id}", %{note: ""}) |> render_submit()
+      assert Repo.get!(Finding, other.id).resolution == :dismissed
+    end
+
+    test "the still-flags marker waits for a run after the resolution", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      step = Tasks.record_step(task.id, :plan, :agent, "Surveyor", "repo survey: ok")
+      finding = finding_fixture(task, %{last_seen_step_id: step.id})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#finding-check-#{finding.id}") |> render_click()
+
+      view
+      |> form("#finding-note-form-#{finding.id}", %{note: "retry 3x, then hold"})
+      |> render_submit()
+
+      refute render(view) =~ "agent still flags this"
+
+      # a later run that still lists the finding as open raises the marker
+      finding
+      |> Ecto.Changeset.change(resolved_at: DateTime.add(DateTime.utc_now(:second), -60, :second))
+      |> Repo.update!()
+
+      later = Tasks.record_step(task.id, :plan, :agent, "Surveyor", "repo survey: ok")
+      finding |> Ecto.Changeset.change(last_seen_step_id: later.id) |> Repo.update!()
+
+      send(
+        view.pid,
+        {:task_event, task.id, {:survey_completed, %{agent: "Surveyor", status: :ok}}}
+      )
+
+      assert render(view) =~ "agent still flags this"
+    end
+
+    test "the timeline shows survey steps as refinement", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      step = Tasks.record_step(task.id, :plan, :agent, "Surveyor", "repo survey: ok")
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert view |> element("#timeline-step-#{step.id}") |> render() =~ "Refinement completed"
+      refute render(view) =~ "repo survey: ok"
+    end
+
+    test "the decisions block appears on the task card once a noted resolution exists", %{
+      conn: conn
+    } do
+      project = project_fixture()
+      task = task_fixture(project.id)
+
+      finding_fixture(task, %{
+        resolution: :addressed,
+        resolution_note: "retry 3x, then hold",
+        resolved_at: DateTime.utc_now(:second)
+      })
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert view |> element("#task-decisions") |> render() =~ "retry 3x, then hold"
+      assert view |> element("#task-decisions") |> render() =~ "Included in the agent"
     end
   end
 

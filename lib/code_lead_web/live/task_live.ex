@@ -12,6 +12,8 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Agents
   alias CodeLead.Costs
   alias CodeLead.Finalizer
+  alias CodeLead.Findings
+  alias CodeLead.Findings.Report
   alias CodeLead.Git
   alias CodeLead.Git.DiffFile
   alias CodeLead.License
@@ -61,8 +63,12 @@ defmodule CodeLeadWeb.TaskLive do
         live_message: nil,
         feed_blocks: [],
         all_runs?: false,
-        chat_pending?: false,
         survey_pending?: false,
+        survey_delta: nil,
+        finding_expanded: MapSet.new(),
+        finding_action: nil,
+        show_raw_report?: false,
+        hide_resolved?: false,
         show_feedback?: false,
         editing?: false,
         schedule_form: nil,
@@ -399,29 +405,10 @@ defmodule CodeLeadWeb.TaskLive do
     {:noreply, assign(socket, selected_planner: planner || socket.assigns.selected_planner)}
   end
 
-  def handle_event("send_chat", %{"message" => message}, socket) do
+  def handle_event("run_refinement", _params, socket) do
     %{task: task, selected_planner: planner} = socket.assigns
 
-    case {String.trim(message), planner} do
-      {"", _planner} ->
-        {:noreply, socket}
-
-      {_message, nil} ->
-        {:noreply,
-         put_flash(socket, :error, "No planning agent is configured for this work type.")}
-
-      {content, planner} ->
-        {:noreply,
-         socket
-         |> assign(chat_pending?: true, pending_chat: content)
-         |> start_async(:chat_reply, fn -> Planning.send_message(task, planner.id, content) end)}
-    end
-  end
-
-  def handle_event("run_survey", _params, socket) do
-    %{task: task, selected_planner: planner} = socket.assigns
-
-    case planner && Planning.start_survey(task, planner.id) do
+    case planner && Planning.start_refinement(task, planner.id) do
       {:ok, :started} ->
         {:noreply, assign(socket, survey_pending?: true)}
 
@@ -433,28 +420,117 @@ defmodule CodeLeadWeb.TaskLive do
     end
   end
 
-  ## Async results
+  ## Planning: findings
 
-  @impl true
-  def handle_async(:chat_reply, {:ok, result}, socket) do
-    socket = assign(socket, chat_pending?: false, pending_chat: nil)
+  def handle_event("toggle_finding", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    expanded = socket.assigns.finding_expanded
 
-    case result do
-      {:ok, _message} ->
-        {:noreply, assign(socket, messages: Planning.list_messages(socket.assigns.task.id))}
+    expanded =
+      if MapSet.member?(expanded, id),
+        do: MapSet.delete(expanded, id),
+        else: MapSet.put(expanded, id)
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Assistant call failed: #{inspect(reason)}")}
+    {:noreply, assign(socket, finding_expanded: expanded)}
+  end
+
+  def handle_event("finding_action", %{"id" => id, "resolution" => resolution}, socket)
+      when resolution in ["addressed", "dismissed"] do
+    id = String.to_integer(id)
+
+    {:noreply,
+     assign(socket,
+       finding_action: %{
+         id: id,
+         resolution: String.to_existing_atom(resolution),
+         note_present?: false
+       },
+       finding_expanded: MapSet.put(socket.assigns.finding_expanded, id)
+     )}
+  end
+
+  def handle_event("cancel_finding_action", _params, socket) do
+    {:noreply, assign(socket, finding_action: nil)}
+  end
+
+  def handle_event("validate_finding_note", %{"note" => note}, socket) do
+    case socket.assigns.finding_action do
+      nil ->
+        {:noreply, socket}
+
+      action ->
+        {:noreply,
+         assign(socket, finding_action: %{action | note_present?: String.trim(note) != ""})}
     end
   end
 
-  def handle_async(:chat_reply, {:exit, reason}, socket) do
-    {:noreply,
-     socket
-     |> assign(chat_pending?: false, pending_chat: nil)
-     |> put_flash(:error, "Assistant call crashed: #{inspect(reason)}")}
+  def handle_event(
+        "resolve_finding",
+        %{"finding_id" => id, "resolution" => resolution} = params,
+        socket
+      )
+      when resolution in ["addressed", "dismissed"] do
+    case actionable_finding(socket, id) do
+      nil ->
+        {:noreply, socket}
+
+      finding ->
+        user = socket.assigns.current_scope.user
+        note = params["note"]
+
+        if resolution == "addressed" and String.trim(note || "") == "" do
+          {:noreply, socket}
+        else
+          resolve_and_reload(socket, finding, user, String.to_existing_atom(resolution), note)
+        end
+    end
   end
 
+  def handle_event("reopen_finding", %{"id" => id}, socket) do
+    case actionable_finding(socket, id) do
+      nil ->
+        {:noreply, socket}
+
+      finding ->
+        case Findings.reopen(finding) do
+          {:ok, _finding} ->
+            {:noreply, load_task(socket)}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not reopen the finding.")}
+        end
+    end
+  end
+
+  # P9: pre-fill the edit form, never write the task directly — the
+  # human saves through the normal path.
+  def handle_event("add_finding_to_spec", %{"id" => id}, socket) do
+    task = socket.assigns.task
+
+    case actionable_finding(socket, id) do
+      %{resolution_note: note, title: title} when is_binary(note) ->
+        spec = String.trim_trailing(task.spec || "")
+        line = "- #{title}: #{note}"
+        appended = if spec == "", do: line, else: spec <> "\n" <> line
+        changeset = Task.planning_changeset(task, %{"spec" => appended})
+        {:noreply, assign(socket, editing?: true, edit_form: to_form(changeset))}
+
+      _no_note ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_raw_report", _params, socket) do
+    {:noreply, assign(socket, show_raw_report?: !socket.assigns.show_raw_report?)}
+  end
+
+  def handle_event("toggle_hide_resolved", _params, socket) do
+    {:noreply, assign(socket, hide_resolved?: !socket.assigns.hide_resolved?)}
+  end
+
+  ## Async results
+
+  @impl true
   def handle_async(:load_diff, {:ok, {:ok, files, stats}}, socket) do
     %{diff_files: previous, diff_expanded: expanded} = socket.assigns
 
@@ -562,6 +638,8 @@ defmodule CodeLeadWeb.TaskLive do
     executor = task.agent_id && agents[task.agent_id]
     steps = Tasks.steps(task.id)
     runs = Costs.task_runs(task.id)
+    messages = Planning.list_messages(task.id)
+    findings = Findings.list(task.id, :planning)
 
     socket
     |> assign(
@@ -585,7 +663,12 @@ defmodule CodeLeadWeb.TaskLive do
       task_duration_ms: Costs.task_duration_ms(task.id),
       cost_mode: runs |> Enum.map(& &1.provider_kind) |> Agents.billing_mode(),
       runs: runs,
-      messages: Planning.list_messages(task.id),
+      messages: messages,
+      findings: findings,
+      decisions: Findings.decisions_block_from(findings),
+      survey_run_count: Findings.survey_run_count(task.id),
+      survey_report: survey_report(messages),
+      latest_survey_step: latest_survey_step(steps),
       eligible_executors:
         (planning? && Agents.eligible_executors(task.work_type, project.id)) || [],
       eligible_reviewers:
@@ -622,6 +705,56 @@ defmodule CodeLeadWeb.TaskLive do
       forge_known?: repository != nil and Git.forge(repository.git_url) != :other
     }
   end
+
+  # The latest survey turn, split into narrative and findings payload.
+  # A turn without a parseable block degrades to the raw report (P5).
+  defp survey_report(messages) do
+    case messages |> Enum.filter(&(&1.kind == :survey)) |> List.last() do
+      nil ->
+        nil
+
+      message ->
+        case Report.extract(message.content) do
+          {:ok, _payload, narrative} ->
+            %{message: message, narrative: narrative, parse_failed?: false}
+
+          :error ->
+            %{message: message, narrative: nil, parse_failed?: true}
+        end
+    end
+  end
+
+  defp latest_survey_step(steps) do
+    steps
+    |> Enum.filter(&refinement_step?/1)
+    |> Enum.max_by(& &1.id, fn -> nil end)
+  end
+
+  defp resolve_and_reload(socket, finding, user, resolution, note) do
+    case Findings.resolve(finding, user, resolution, note) do
+      {:ok, _finding} ->
+        {:noreply, socket |> assign(finding_action: nil) |> load_task()}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save the resolution.")}
+    end
+  end
+
+  defp refinement_step?(%{kind: :plan, summary: summary}) do
+    String.starts_with?(summary, "repo survey:") or
+      String.starts_with?(summary, "task refinement:")
+  end
+
+  defp refinement_step?(_step), do: false
+
+  # Findings act only while the task is in Planning and only on rows of
+  # this task — afterwards they are a read-only record.
+  defp actionable_finding(%{assigns: %{task: %{state: :planning}, findings: findings}}, id) do
+    id = String.to_integer(id)
+    Enum.find(findings, &(&1.id == id))
+  end
+
+  defp actionable_finding(_socket, _id), do: nil
 
   # A reload that lands mid-edit — a board broadcast, an agent event —
   # must not throw away what the user has typed.
@@ -1065,8 +1198,8 @@ defmodule CodeLeadWeb.TaskLive do
     socket |> assign(live_usage: snapshot) |> put_task_stat()
   end
 
-  defp ingest_event(socket, {:survey_completed, _summary}) do
-    assign(socket, survey_pending?: false)
+  defp ingest_event(socket, {:survey_completed, summary}) do
+    assign(socket, survey_pending?: false, survey_delta: Map.get(summary, :delta))
   end
 
   defp ingest_event(socket, _event), do: socket
@@ -1080,7 +1213,8 @@ defmodule CodeLeadWeb.TaskLive do
     :permission_request,
     :review_completed,
     :review_cycle_completed,
-    :survey_completed
+    :survey_completed,
+    :findings_changed
   ]
 
   defp state_bearing?(event) when is_tuple(event), do: elem(event, 0) in @state_bearing_events
@@ -1192,12 +1326,19 @@ defmodule CodeLeadWeb.TaskLive do
           reviews={@reviews}
           runs={@runs}
           task_stat={@task_stat}
-          messages={@messages}
+          findings={@findings}
+          decisions={@decisions}
+          survey_run_count={@survey_run_count}
+          survey_report={@survey_report}
+          survey_delta={@survey_delta}
+          latest_survey_step={@latest_survey_step}
+          finding_expanded={@finding_expanded}
+          finding_action={@finding_action}
+          show_raw_report?={@show_raw_report?}
+          hide_resolved?={@hide_resolved?}
           eligible_planners={@eligible_planners}
           selected_planner={@selected_planner}
-          chat_pending?={@chat_pending?}
           survey_pending?={@survey_pending?}
-          pending_chat={assigns[:pending_chat]}
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
           edit_form={@edit_form}

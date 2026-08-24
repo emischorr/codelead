@@ -8,6 +8,7 @@ defmodule CodeLead.PlanningSurveyTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.Costs.AgentRun
+  alias CodeLead.Findings
   alias CodeLead.Git
   alias CodeLead.Planning
   alias CodeLead.Projects
@@ -67,11 +68,116 @@ defmodule CodeLead.PlanningSurveyTest do
     end
   end
 
+  describe "structured findings" do
+    defp findings_tail do
+      JSON.encode!(%{
+        findings: [
+          %{
+            title: "Payment failure path is unspecified",
+            severity: "high",
+            body: "The spec never says what happens on decline.",
+            paths: ["lib/pay.ex:42"]
+          },
+          %{title: "Docs lag the code", severity: "low"}
+        ],
+        prior: []
+      })
+    end
+
+    defp use_scenario(scenario, args) do
+      Application.put_env(
+        :code_lead,
+        :harnesses,
+        %{claude_code: ["elixir", @script, scenario | args]}
+      )
+    end
+
+    test "a structured report persists findings and announces the delta" do
+      %{task: task, planner: planner} = survey_setup()
+      use_scenario("survey_findings", [findings_tail()])
+      Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
+
+      {:ok, :started} = Planning.start_refinement(task, planner.id)
+
+      assert %{status: :ok, delta: %{new: 2, resolved: 0, not_applicable: 0, still_open: 0}} =
+               await_survey(task.id)
+
+      [step] = Enum.filter(Tasks.steps(task.id), &(&1.kind == :plan))
+      assert [high, low] = Findings.list(task.id, :planning)
+      assert high.title == "Payment failure path is unspecified"
+      assert high.severity == :high
+      assert high.phase == :planning
+      assert high.observed == :open
+      assert high.agent_id == planner.id
+      assert high.first_seen_step_id == step.id
+      assert high.last_seen_step_id == step.id
+      assert low.severity == :low
+
+      # the turn keeps the full raw content — narrative and JSON tail
+      assert [message] = Planning.list_messages(task.id)
+      assert message.kind == :survey
+      assert message.content =~ "lib/router.ex"
+      assert message.content =~ "```json"
+    end
+
+    test "an unparseable report writes no findings and degrades to the raw turn" do
+      %{task: task, planner: planner} = survey_setup()
+      Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
+
+      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      assert %{status: :ok, delta: nil} = await_survey(task.id)
+
+      assert Findings.list(task.id, :planning) == []
+      assert [message] = Planning.list_messages(task.id)
+      assert message.content =~ "Working on it."
+    end
+
+    test "a re-run classifies prior findings but never touches a human resolution" do
+      %{task: task, planner: planner} = survey_setup()
+      use_scenario("survey_findings", [findings_tail()])
+      Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
+
+      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      await_survey(task.id)
+
+      [high, low] = Findings.list(task.id, :planning)
+      {:ok, _} = Findings.resolve(high, nil, :addressed, "retry 3x, then hold")
+
+      rerun_tail =
+        JSON.encode!(%{
+          findings: [],
+          prior: [
+            %{id: high.id, status: "still_open"},
+            %{id: low.id, status: "resolved"}
+          ]
+        })
+
+      use_scenario("survey_findings", [rerun_tail])
+      {:ok, :started} = Planning.start_refinement(task, planner.id)
+
+      assert %{delta: %{new: 0, resolved: 1, still_open: 1}} = await_survey(task.id)
+
+      [rerun_step] =
+        Tasks.steps(task.id)
+        |> Enum.filter(&(&1.kind == :plan))
+        |> Enum.sort_by(& &1.id)
+        |> Enum.take(-1)
+
+      [high, low] = Findings.list(task.id, :planning)
+      assert high.observed == :open
+      assert high.last_seen_step_id == rerun_step.id
+      assert high.resolution == :addressed
+      assert high.resolution_note == "retry 3x, then hold"
+      assert low.observed == :resolved
+      assert Findings.survey_run_count(task.id) == 2
+    end
+  end
+
   test "a survey lands as a planning turn, cost-tracked and audited" do
     %{task: task, planner: planner, repository: repository} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    assert {:ok, :started} = Planning.start_survey(task, planner.id)
+    assert {:ok, :started} = Planning.start_refinement(task, planner.id)
     assert %{status: :ok} = await_survey(task.id)
 
     assert [message] = Planning.list_messages(task.id)
@@ -112,12 +218,12 @@ defmodule CodeLead.PlanningSurveyTest do
     %{task: task, planner: planner} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    {:ok, :started} = Planning.start_survey(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(task, planner.id)
     await_survey(task.id)
 
     {:ok, task} = Tasks.update_task(task, %{spec: "Now with an enterprise tier."})
 
-    {:ok, :started} = Planning.start_survey(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(task, planner.id)
     await_survey(task.id)
 
     assert [_first, _second] = Planning.list_messages(task.id)
@@ -127,7 +233,7 @@ defmodule CodeLead.PlanningSurveyTest do
     %{task: task, planner: planner} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    {:ok, :started} = Planning.start_survey(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(task, planner.id)
     await_survey(task.id)
 
     coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})
@@ -154,19 +260,61 @@ defmodule CodeLead.PlanningSurveyTest do
     refute contents =~ "Working on it."
   end
 
-  test "an llm_api planner cannot survey, and a repo is required" do
+  test "only eligible planners run, and only the repo level needs a repository" do
     %{task: task, project: project} = survey_setup()
-
-    coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})
-    assert {:error, :not_repo_aware} = Planning.start_survey(task, coach.id)
 
     executor =
       agent_fixture(%{driver: :acp, harness: :claude_code, work_type: :code, roles: [:execute]})
 
-    assert {:error, :planner_ineligible} = Planning.start_survey(task, executor.id)
+    assert {:error, :planner_ineligible} = Planning.start_refinement(task, executor.id)
 
     folder_task = task_fixture(project.id, %{work_type: :code, target: :folder})
     planner = agent_fixture(%{driver: :acp, harness: :claude_code, roles: [:plan]})
-    assert {:error, :missing_repository} = Planning.start_survey(folder_task, planner.id)
+    assert {:error, :missing_repository} = Planning.start_refinement(folder_task, planner.id)
+  end
+
+  test "a task-level refinement runs one llm completion and persists findings without a repo" do
+    project = project_fixture()
+    coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})
+    task = task_fixture(project.id, %{work_type: :code, target: :folder, title: "Pricing page"})
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
+
+    tail =
+      JSON.encode!(%{
+        findings: [%{title: "Currency handling is unspecified", severity: "high"}],
+        prior: []
+      })
+
+    test_pid = self()
+
+    Req.Test.stub(CodeLead.LlmApiStub, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:llm_request, Jason.decode!(body)})
+
+      Req.Test.json(conn, %{
+        "content" => [
+          %{"type" => "text", "text" => "Nothing about currencies yet.\n\n```json\n#{tail}\n```"}
+        ],
+        "usage" => %{"input_tokens" => 10, "output_tokens" => 10}
+      })
+    end)
+
+    assert {:ok, :started} = Planning.start_refinement(task, coach.id)
+    assert %{status: :ok, delta: %{new: 1}} = await_survey(task.id)
+
+    # the default one-shot prompt, not a chat turn
+    assert_receive {:llm_request, request}
+    [%{"content" => prompt}] = request["messages"]
+    assert prompt =~ "You cannot read the repository"
+    assert prompt =~ "Pricing page"
+
+    assert [finding] = Findings.list(task.id, :planning)
+    assert finding.title == "Currency handling is unspecified"
+    assert finding.severity == :high
+
+    [step] = Enum.filter(Tasks.steps(task.id), &(&1.kind == :plan))
+    assert step.summary == "task refinement: ok"
+    assert [%{kind: :survey}] = Planning.list_messages(task.id)
+    assert CodeLead.Repo.get_by(AgentRun, task_step_id: step.id)
   end
 end

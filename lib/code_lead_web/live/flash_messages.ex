@@ -94,22 +94,19 @@ defmodule CodeLeadWeb.FlashMessages do
   def finalize_error(other), do: "Finalization failed: #{inspect(other)}"
 
   @doc """
-  Explains why a repo-aware planning survey could not start.
+  Explains why an agent refinement could not start.
   """
   @spec survey_error(term()) :: String.t()
   def survey_error(:no_planner),
     do: "No planning agent is configured for this task's work type."
 
-  def survey_error(:not_repo_aware),
-    do: "Only an ACP planning agent can survey a repository. Pick one to run a survey."
-
   def survey_error(:planner_ineligible),
     do: "The selected planning agent isn't eligible for this task's work type."
 
   def survey_error(:missing_repository),
-    do: "Link a repository before running a repo survey."
+    do: "Link a repository before running a repo-level refinement."
 
-  def survey_error(other), do: "Survey failed to start: #{inspect(other)}"
+  def survey_error(other), do: "Refinement failed to start: #{inspect(other)}"
 
   @doc """
   Explains why a guarded delete was refused, and what to clear first.

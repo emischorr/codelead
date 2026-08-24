@@ -40,6 +40,13 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
   an `agent_runs` row (cost-tracked, **not** budget-held), and a
   `:review` task step. A crashed/timed-out reviewer records a
   verdict-less review row and never blocks the cycle.
+- The review prompt carries the planning **Decisions block**
+  (`Findings.decisions_block/1` — see [`planning.md`](planning.md)), so
+  reviewers judge the artifact against what the human decided, not only
+  the spec. The `findings` table itself is phase-aware
+  (`phase: :planning | :review`): in a later iteration reviewers emit
+  itemized findings through the same parser and renderer the survey
+  uses, instead of one free-text blob per review.
 - A reviewer that asks a question or hits a permission escalation
   raises the ordinary `attention` field and keeps waiting; its run ends
   on `AdvisoryRun`'s own 15-minute deadline (the outer stream timeout is

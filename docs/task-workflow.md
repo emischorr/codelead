@@ -61,6 +61,11 @@ or failed task is in the Running stage with nothing to hand to Review.
   prompt" must survive the async gap between `request_changes` and
   scheduler dispatch, so the feedback is persisted on the task and
   cleared on dispatch-from-planning. Not in spec §3; pure mechanics.
+  It is also the fork in `TaskRunner.build_prompt/1`: a rework prompt is
+  the stored feedback verbatim, while a fresh dispatch composes
+  title/description/spec **plus the Decisions block** from resolved
+  planning findings (`Findings.decisions_block/1` — see
+  [`planning.md`](planning.md)).
 - **`completed_at` column (addition):** the model had no completion
   timestamp — `updated_at` moves on every edit and archive, and the
   audit trail only records it as the prose summary `"approved — Done"`.

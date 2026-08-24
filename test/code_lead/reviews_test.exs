@@ -7,6 +7,8 @@ defmodule CodeLead.ReviewsTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.Costs.AgentRun
+  alias CodeLead.Findings
+  alias CodeLead.Findings.Finding
   alias CodeLead.Reviews
   alias CodeLead.Runtime
   alias CodeLead.Runtime.RunSupervisor
@@ -113,6 +115,47 @@ defmodule CodeLead.ReviewsTest do
 
     review_steps = Tasks.steps(task.id) |> Enum.filter(&(&1.kind == :review))
     assert length(review_steps) == 2
+  end
+
+  test "the executor and review prompts carry the planning decisions" do
+    %{task: task} = content_task_with_reviewers(1)
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+
+    finding =
+      Repo.insert!(%Finding{
+        task_id: task.id,
+        phase: :planning,
+        severity: :high,
+        title: "Retry policy",
+        observed: :open
+      })
+
+    {:ok, _finding} = Findings.resolve(finding, nil, :addressed, "retry 3x, then hold")
+
+    test_pid = self()
+
+    stub_llm(fn conn, body ->
+      if body["system"] in [nil, ""] do
+        send(test_pid, {:executor_prompt, body})
+        reply(conn, "Executor output.")
+      else
+        send(test_pid, {:review_prompt, body})
+        reply(conn, ~s({"verdict": "pass"}))
+      end
+    end)
+
+    {:ok, _} = Runtime.start_task(task)
+    await_review_ready(task.id)
+
+    assert_receive {:executor_prompt, executor_body}
+    [%{"content" => executor_prompt}] = executor_body["messages"]
+    assert executor_prompt =~ "## Decisions"
+    assert executor_prompt =~ "- Retry policy: retry 3x, then hold"
+
+    assert_receive {:review_prompt, review_body}
+    [%{"content" => review_prompt}] = review_body["messages"]
+    assert review_prompt =~ "## Decisions"
+    assert review_prompt =~ "- Retry policy: retry 3x, then hold"
   end
 
   test "a crashing reviewer records a failed review and never blocks the cycle" do

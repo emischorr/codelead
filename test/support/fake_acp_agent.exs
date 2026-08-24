@@ -15,6 +15,8 @@
 #
 #   elixir fake_acp_agent.exs permission_probe <toolCall JSON> [<options JSON>]
 #       # requests permission with exactly that toolCall, echoes the outcome
+#   elixir fake_acp_agent.exs survey_findings <report-tail JSON>
+#       # streams a short narrative, then that JSON as a fenced ```json block
 #   elixir fake_acp_agent.exs permission_settled_on_cancel
 #       # like permission, but records the outcome in settled.txt (cwd)
 #   elixir fake_acp_agent.exs terminal_bad_cwd   # terminal/create with cwd /etc
@@ -105,6 +107,25 @@ defmodule FakeAcpAgent do
         cost: %{amount: 0.42, currency: "USD"}
       }
     })
+
+    respond(id, %{
+      stopReason: "end_turn",
+      usage: %{
+        totalTokens: 340,
+        inputTokens: 100,
+        outputTokens: 40,
+        cachedReadTokens: 180,
+        cachedWriteTokens: 20
+      }
+    })
+  end
+
+  # A survey report in the structured-findings convention: narrative
+  # first, then the JSON the test composed (findings and/or prior
+  # classifications) as the trailing fenced block.
+  defp prompt(%{scenario: "survey_findings", args: [json | _rest]}, id, session_id) do
+    chunk(session_id, "The relevant code lives in `lib/router.ex`.\n\n")
+    chunk(session_id, "```json\n" <> json <> "\n```")
 
     respond(id, %{
       stopReason: "end_turn",

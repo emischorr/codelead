@@ -235,7 +235,7 @@ Not a pixel spec — the page/tab map and the guarantee that each surface's data
 
 | Tab | Available | Primary in | Shows |
 |---|---|---|---|
-| **Task** | always | Planning | description, spec / acceptance criteria, work type, priority, owner/assignee, repository, executor + reviewer selection, ready flag, human comments, and the **AI planning surface** (planner selection; chat for an `llm_api` planner, "Run repo survey" for an `acp` one) |
+| **Task** | always | Planning | description, spec / acceptance criteria, work type, priority, owner/assignee, repository, executor + reviewer selection, ready flag, human comments, and the **AI planning surface** (planner selection; chat for an `llm_api` planner, "Run repo survey" for an `acp` one — survey output lands as itemized **findings** with human Address/Dismiss resolutions, and noted resolutions show as a read-only **Decisions block** beneath the spec, injected verbatim into the executor/review/survey prompts) |
 | **Review / Artifact** | once Running | Review | live-updated diff (code) or rendered preview (design/content/file), plus each reviewer's findings and advisory verdict once the review cycle runs |
 | **Agent** | once Running | Running | the **executor** conversation — live event stream, send messages, answer agent questions, approve surfaced permission escalations |
 | **Developer** | once a worktree exists | — (power users) | terminal into the task's worktree (later: the container) |

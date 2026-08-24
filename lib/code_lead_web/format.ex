@@ -56,6 +56,17 @@ defmodule CodeLeadWeb.Format do
   def forge_link(_kind), do: "Compare"
 
   @doc """
+  Neutral display text for a stored step summary. The survey summary
+  stays technical in the DB — it is the match key for
+  `CodeLead.Findings.survey_run_count/1` — and is translated only here.
+  """
+  def step_summary("repo survey: ok"), do: "Refinement completed"
+  def step_summary("repo survey: " <> _status), do: "Refinement failed"
+  def step_summary("task refinement: ok"), do: "Refinement completed"
+  def step_summary("task refinement: " <> _status), do: "Refinement failed"
+  def step_summary(summary), do: summary
+
+  @doc """
   Label for the Approve button, stating the finalize mode that will
   actually run. `forge_known?` distinguishes a remote CodeLead can open
   a PR on from one where pushing the branch is all Done can do — the

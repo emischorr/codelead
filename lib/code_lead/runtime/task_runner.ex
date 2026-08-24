@@ -30,6 +30,7 @@ defmodule CodeLead.Runtime.TaskRunner do
   alias CodeLead.Agents
   alias CodeLead.Costs
   alias CodeLead.Executor
+  alias CodeLead.Findings
   alias CodeLead.Git
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
@@ -207,6 +208,25 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   def dispatch_error(reason), do: inspect(reason)
+
+  # A rework prompt (`next_prompt`, set by request-changes) is the
+  # human's feedback verbatim — the carried session already saw the
+  # spec and the decisions. Only a fresh dispatch composes the task
+  # fields plus the Decisions block from resolved findings.
+  @doc false
+  @spec build_prompt(Task.t()) :: String.t()
+  def build_prompt(%Task{next_prompt: feedback}) when is_binary(feedback), do: feedback
+
+  def build_prompt(%Task{} = task) do
+    """
+    # #{task.title}
+
+    #{task.description || ""}
+
+    #{if task.spec, do: "## Spec / acceptance criteria\n\n#{task.spec}", else: ""}
+    #{Findings.decisions_block(task.id)}\
+    """
+  end
 
   ## GenServer callbacks
 
@@ -678,18 +698,6 @@ defmodule CodeLead.Runtime.TaskRunner do
   defp elapsed_ms(_state), do: nil
 
   ## Internals
-
-  defp build_prompt(%Task{next_prompt: feedback}) when is_binary(feedback), do: feedback
-
-  defp build_prompt(%Task{} = task) do
-    """
-    # #{task.title}
-
-    #{task.description || ""}
-
-    #{if task.spec, do: "## Spec / acceptance criteria\n\n#{task.spec}", else: ""}
-    """
-  end
 
   # An llm_api executor produces text, not files — persist it as the
   # task's artifact so review and Done have something to show.
