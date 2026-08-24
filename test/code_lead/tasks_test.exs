@@ -481,4 +481,74 @@ defmodule CodeLead.TasksTest do
       assert id == t1.id
     end
   end
+
+  describe "search_tasks/2" do
+    test "matches on title" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "Rework the billing pipeline"})
+      _other = task_fixture(project.id, %{title: "Unrelated"})
+
+      assert %{results: [%{id: id}], total: 1} = Tasks.search_tasks("billing", 5)
+      assert id == task.id
+    end
+
+    test "matches on description" do
+      project = project_fixture()
+
+      task =
+        task_fixture(project.id, %{
+          title: "Task one",
+          description: "touches the billing pipeline"
+        })
+
+      assert %{results: [%{id: id}], total: 1} = Tasks.search_tasks("billing", 5)
+      assert id == task.id
+    end
+
+    test "excludes archived tasks" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "Archived billing task"})
+      put_context!(task, archived_at: DateTime.utc_now() |> DateTime.truncate(:second))
+
+      assert %{results: [], total: 0} = Tasks.search_tasks("billing", 5)
+    end
+
+    test "ranks a title hit above a description-only hit, regardless of recency" do
+      project = project_fixture()
+
+      description_hit =
+        task_fixture(project.id, %{title: "Task one", description: "mentions billing"})
+
+      title_hit = task_fixture(project.id, %{title: "Billing task two"})
+
+      # description_hit was created first, so is more recently updated only
+      # if we don't fix updated_at — assert the ordering holds anyway.
+      assert %{results: [first, second]} = Tasks.search_tasks("billing", 5)
+      assert first.id == title_hit.id
+      assert second.id == description_hit.id
+    end
+
+    test "orders ties by most recently updated first" do
+      project = project_fixture()
+      older = task_fixture(project.id, %{title: "Billing task A"})
+      newer = task_fixture(project.id, %{title: "Billing task B"})
+
+      put_context!(older, updated_at: DateTime.add(DateTime.utc_now(:second), -60, :second))
+
+      assert %{results: [first, second]} = Tasks.search_tasks("billing", 5)
+      assert first.id == newer.id
+      assert second.id == older.id
+    end
+
+    test "respects the limit and reports the total match count" do
+      project = project_fixture()
+
+      for n <- 1..7 do
+        task_fixture(project.id, %{title: "Billing task #{n}"})
+      end
+
+      assert %{results: results, total: 7} = Tasks.search_tasks("billing", 5)
+      assert length(results) == 5
+    end
+  end
 end

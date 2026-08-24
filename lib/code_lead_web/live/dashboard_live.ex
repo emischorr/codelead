@@ -173,6 +173,8 @@ defmodule CodeLeadWeb.DashboardLive do
             />
           </section>
 
+          <.live_component module={CodeLeadWeb.Components.SearchBar} id="global-search" />
+
           <section class="grid gap-3.5 lg:grid-cols-3">
             <.section_card label={"Tasks completed · last #{@window_days} days"} class="lg:col-span-2">
               <:actions>

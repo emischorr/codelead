@@ -136,4 +136,90 @@ defmodule CodeLeadWeb.DashboardLiveTest do
       assert render(view) =~ "Arrived late"
     end
   end
+
+  describe "global search" do
+    test "does not search until the query reaches 3 characters", %{conn: conn} do
+      project = project_fixture()
+      task_fixture(project.id, %{title: "Billing task"})
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#global-search-form", %{"query" => "bi"}) |> render_change()
+      refute has_element?(view, "#global-search-results")
+
+      view |> form("#global-search-form", %{"query" => "bil"}) |> render_change()
+      assert has_element?(view, "#global-search-results")
+    end
+
+    test "shows matching, non-archived tasks with their project color and status", %{
+      conn: conn
+    } do
+      project = project_fixture(%{color: :teal})
+      match = task_fixture(project.id, %{title: "Rework the billing pipeline"})
+
+      put_context!(task_fixture(project.id, %{title: "Old billing task"}),
+        archived_at: DateTime.utc_now(:second)
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#global-search-form", %{"query" => "billing"}) |> render_change()
+
+      assert has_element?(
+               view,
+               "#global-search-result-#{match.id}",
+               "Rework the billing pipeline"
+             )
+
+      assert has_element?(view, "#global-search-result-#{match.id} .bg-proj-teal")
+      refute has_element?(view, ~s{a[href$="Old billing task"]})
+      assert view |> element("#global-search-results") |> render() =~ "Planning"
+    end
+
+    test "clicking a result navigates to its task page", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id, %{title: "Rework the billing pipeline"})
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#global-search-form", %{"query" => "billing"}) |> render_change()
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               view |> element("#global-search-result-#{task.id}") |> render_click()
+
+      assert to == ~p"/projects/#{project.id}/tasks/#{task.id}"
+    end
+
+    test "arrow-down then enter navigates to the second result", %{conn: conn} do
+      project = project_fixture()
+      older = task_fixture(project.id, %{title: "Billing task A"})
+      _newer = task_fixture(project.id, %{title: "Billing task B"})
+      put_context!(older, updated_at: DateTime.add(DateTime.utc_now(:second), -60, :second))
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#global-search-form", %{"query" => "billing"}) |> render_change()
+
+      hook = element(view, "#global-search")
+      render_hook(hook, "nav", %{"key" => "ArrowDown"})
+
+      assert {:error, {:live_redirect, %{to: to}}} = render_hook(hook, "nav", %{"key" => "Enter"})
+      assert to == ~p"/projects/#{project.id}/tasks/#{older.id}"
+    end
+
+    test "hints at more results past the first five, without making them clickable", %{
+      conn: conn
+    } do
+      project = project_fixture()
+      for n <- 1..7, do: task_fixture(project.id, %{title: "Billing task #{n}"})
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#global-search-form", %{"query" => "billing"}) |> render_change()
+
+      html = view |> element("#global-search-results") |> render()
+      assert html =~ "2 more results"
+      assert LazyHTML.from_fragment(html) |> LazyHTML.query("a") |> length() == 5
+    end
+  end
 end
