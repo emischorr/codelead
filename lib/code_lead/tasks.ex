@@ -121,8 +121,9 @@ defmodule CodeLead.Tasks do
   @doc """
   Creates a task in Planning. Defaults: `target` from work type
   (code → repo, otherwise folder), the project's first repository for
-  `:repo` targets, and the project's default reviewers for the work
-  type.
+  `:repo` targets, `execution_env` derived from that repository's
+  declared environment (see `derive_execution_env/2`), and the
+  project's default reviewers for the work type.
   """
   @spec create_task(pos_integer(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def create_task(project_id, attrs) do
@@ -134,6 +135,7 @@ defmodule CodeLead.Tasks do
     with {:ok, task} <- Repo.insert(changeset) do
       task
       |> maybe_default_repository()
+      |> derive_execution_env(nil)
       |> prefill_reviewers()
       |> then(&broadcast_board_change({:ok, &1}))
     end
@@ -146,8 +148,12 @@ defmodule CodeLead.Tasks do
 
   A Planning edit that changes the execution shape is re-normalized the
   same way creation is: a `:repo` target without a repository falls back
-  to the project's first one, and a new work type drops an executor that
-  is no longer eligible and re-prefills the reviewer set.
+  to the project's first one, a repository selection that actually
+  changes re-derives `execution_env` from it (`derive_execution_env/2`,
+  overriding any value submitted in the same edit — a later edit that
+  leaves the repository alone is free to set it by hand), and a new
+  work type drops an executor that is no longer eligible and re-prefills
+  the reviewer set.
   """
   @spec update_task(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update_task(%Task{state: :planning} = task, attrs) do
@@ -159,6 +165,7 @@ defmodule CodeLead.Tasks do
     with {:ok, updated} <- Repo.update(changeset) do
       updated
       |> maybe_default_repository()
+      |> derive_execution_env(task.repository_id)
       |> realign_agents(task.work_type)
       |> then(&broadcast_board_change({:ok, &1}))
     end
@@ -1186,6 +1193,38 @@ defmodule CodeLead.Tasks do
   end
 
   defp maybe_default_repository(task), do: task
+
+  # A repository carries its own execution shape (`env_kind`): a
+  # `:devcontainer` repo runs its tasks in a container, anything else
+  # runs locally. The task inherits that shape whenever the repository
+  # selection actually changes — creation counts as a change from no
+  # repository (`previous_repository_id: nil`) — so the operator never
+  # has to remember to flip Execution by hand after picking a repo.
+  #
+  # Called only when `repository_id` differs from before, so an edit
+  # that leaves the repository alone never overwrites a manual
+  # Execution choice — that is what lets the user override it
+  # afterwards, per the task-page select.
+  defp derive_execution_env(%Task{repository_id: repository_id} = task, repository_id), do: task
+
+  defp derive_execution_env(%Task{target: :repo, repository_id: repository_id} = task, _previous)
+       when not is_nil(repository_id) do
+    desired = desired_execution_env(Projects.get_repository!(repository_id))
+
+    if task.execution_env == desired do
+      task
+    else
+      task |> Ecto.Changeset.change(execution_env: desired) |> Repo.update!()
+    end
+  end
+
+  defp derive_execution_env(task, _previous), do: task
+
+  defp desired_execution_env(%{env_kind: :devcontainer}) do
+    if License.feature_enabled?(:container_execution_env), do: :container, else: :local
+  end
+
+  defp desired_execution_env(_repository), do: :local
 
   # A work type change invalidates both agent selections — they are
   # filtered by work type — so the task is realigned rather than left
