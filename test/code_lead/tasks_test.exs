@@ -40,6 +40,67 @@ defmodule CodeLead.TasksTest do
       assert [%{id: id}] = Tasks.reviewers(task.id)
       assert id == reviewer.id
     end
+
+    test "a devcontainer repository derives container execution" do
+      project = project_fixture()
+      repository_fixture(project.id, %{env_kind: :devcontainer})
+
+      task = task_fixture(project.id, %{work_type: :code})
+
+      assert task.execution_env == :container
+    end
+
+    test "an explicit repository choice also derives its execution shape" do
+      project = project_fixture()
+      repository_fixture(project.id)
+      devcontainer = repository_fixture(project.id, %{env_kind: :devcontainer})
+
+      task =
+        task_fixture(project.id, %{work_type: :code, repository_id: devcontainer.id})
+
+      assert task.execution_env == :container
+    end
+  end
+
+  describe "execution_env derivation on repository change" do
+    test "switching to a devcontainer repository upgrades execution" do
+      project = project_fixture()
+      local_repo = repository_fixture(project.id)
+      devcontainer_repo = repository_fixture(project.id, %{env_kind: :devcontainer})
+      task = task_fixture(project.id, %{work_type: :code, repository_id: local_repo.id})
+      assert task.execution_env == :local
+
+      assert {:ok, task} = Tasks.update_task(task, %{repository_id: devcontainer_repo.id})
+
+      assert task.execution_env == :container
+    end
+
+    test "switching away from a devcontainer repository downgrades execution" do
+      project = project_fixture()
+      devcontainer_repo = repository_fixture(project.id, %{env_kind: :devcontainer})
+      local_repo = repository_fixture(project.id)
+      task = task_fixture(project.id, %{work_type: :code, repository_id: devcontainer_repo.id})
+      assert task.execution_env == :container
+
+      assert {:ok, task} = Tasks.update_task(task, %{repository_id: local_repo.id})
+
+      assert task.execution_env == :local
+    end
+
+    test "a manual execution_env choice sticks when the repository is left alone" do
+      project = project_fixture()
+      repository = repository_fixture(project.id, %{env_kind: :devcontainer})
+      task = task_fixture(project.id, %{work_type: :code, repository_id: repository.id})
+      assert task.execution_env == :container
+
+      assert {:ok, task} = Tasks.update_task(task, %{execution_env: :local})
+      assert task.execution_env == :local
+
+      # An unrelated edit that never touches repository_id must not
+      # re-derive over the manual choice.
+      assert {:ok, task} = Tasks.update_task(task, %{title: "Renamed"})
+      assert task.execution_env == :local
+    end
   end
 
   describe "editing" do
@@ -268,7 +329,7 @@ defmodule CodeLead.TasksTest do
 
     test "a container task needs a declared repository image" do
       project = project_fixture()
-      repository = repository_fixture(project.id)
+      repository = repository_fixture(project.id, %{env_kind: :devcontainer})
       executor = agent_fixture(%{roles: [:execute], work_type: :code})
 
       task =
@@ -276,14 +337,19 @@ defmodule CodeLead.TasksTest do
           work_type: :code,
           target: :repo,
           repository_id: repository.id,
-          agent_id: executor.id,
-          execution_env: :container
+          agent_id: executor.id
         })
+
+      # Creation derives `:container` from the devcontainer repository; the
+      # guard is exercised by having the repo's declaration change later.
+      assert task.execution_env == :container
+
+      {:ok, repository} = CodeLead.Projects.update_repository(repository, %{env_kind: :default})
 
       assert Tasks.startable(task, executor) == {:error, :missing_execution_env}
       assert {:error, :missing_execution_env} = Tasks.move_to_running(task)
 
-      {:ok, _} =
+      {:ok, _repository} =
         CodeLead.Projects.update_repository(repository, %{env_kind: :devcontainer})
 
       assert Tasks.startable(task, executor) == :ok

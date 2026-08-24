@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-15, container lifecycle)
+# Task workflow (last updated: 2026-08-24, execution_env derivation)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -93,6 +93,15 @@ or failed task is in the Running stage with nothing to hand to Review.
   leaves it to the Review stage's own fan-out, which raises
   `:review_ready`. This is what the per-transition change maps did
   before, now expressed as a rule.
+- **`execution_env` is re-derived from the repository whenever the
+  repository selection changes** (`Tasks.derive_execution_env/2`,
+  private): a `:devcontainer` repo switches the task to `:container`
+  (only if licensed — otherwise it stays `:local`), anything else
+  switches it to `:local`. Creation counts as a change from no
+  repository, so a new task's execution shape is derived silently,
+  with no UI feedback until the task page is opened. An edit that
+  leaves the repository untouched never re-derives, so a manual
+  Execution choice on the task page sticks.
 
 ## Two layers: Tasks (data) vs Runtime (side effects)
 
