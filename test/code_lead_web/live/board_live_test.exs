@@ -10,7 +10,8 @@ defmodule CodeLeadWeb.BoardLiveTest do
 
   setup :register_and_log_in_user
 
-  # What a `datetime-local` input posts: minute precision, no zone.
+  # What the `.SchedulePicker` hook posts as `local_at`: minute precision,
+  # naive (paired with `utc_offset_minutes` for the actual conversion).
   defp input_value(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%dT%H:%M")
 
   # On the minute, so the round trip through the input is lossless.
@@ -254,8 +255,8 @@ defmodule CodeLeadWeb.BoardLiveTest do
       assert has_element?(view, "#schedule-form")
 
       view
-      |> form("#schedule-form", schedule: %{scheduled_at: input_value(at)})
-      |> render_submit()
+      |> form("#schedule-form")
+      |> render_submit(%{schedule: %{local_at: input_value(at), utc_offset_minutes: "0"}})
 
       refute has_element?(view, "#schedule-form")
 
@@ -274,8 +275,8 @@ defmodule CodeLeadWeb.BoardLiveTest do
       view |> element("#task-card-#{task.id}-schedule") |> render_click()
 
       view
-      |> form("#schedule-form", schedule: %{scheduled_at: ""})
-      |> render_submit()
+      |> form("#schedule-form")
+      |> render_submit(%{schedule: %{local_at: ""}})
 
       assert has_element?(view, "#schedule-form")
       assert Tasks.get_task!(task.id).state == :planning

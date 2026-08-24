@@ -168,10 +168,13 @@ short viewport squeezes the links rather than the chrome.
   `attention_banner`, `timestamp`, `timeline_start`, `timeline_entry`,
   `tab_nav`, `kanban_column`,
   `task_card` (shell + column-specific `footer` slot), `chat_bubble`,
-  `empty_state`, `schedule_modal` (the "start at (UTC)" dialog shared by
-  `BoardLive` and `TaskLive`; the caller owns the `schedule_task` /
-  `close_schedule` events, and `CodeLeadWeb.ScheduleForm` supplies the
-  schemaless changeset behind it),
+  `empty_state`, `schedule_modal` (the schedule-run dialog shared by
+  `BoardLive` and `TaskLive` — quick-prefill pills, a date input and a
+  scroll-snap hour/minute wheel, all resolved in the viewer's own
+  timezone by the `.SchedulePicker` hook and converted to UTC
+  server-side; the caller owns the `schedule_task` / `close_schedule`
+  events, and `CodeLeadWeb.ScheduleForm` supplies the schemaless
+  changeset behind it),
   `fab`, `stat_tile` (icon chip + headline number +
   detail, five tones, optional `navigate` and `meter` slot) and
   `meter` (a value against a limit; renders nothing without one —
@@ -313,7 +316,7 @@ from `tasks.pr_url_kind` — the URL comes off the task, not from
 (`<card_id>-artifact-link`) instead; a card never has both, which is
 what the single `ml-auto` in the footer assumes. The planning footer's Start is a split control: the
 clock button opens the shared `schedule_modal` and starts the run at a
-chosen UTC time instead of now. Both are hidden — not just disabled —
+chosen time instead of now. Both are hidden — not just disabled —
 when `Tasks.startable?/2` is false: no eligible executor, or a `:repo`
 target with no repository, the same guard `move_to_running/1` would
 otherwise reject the transition on. A queued task with a future

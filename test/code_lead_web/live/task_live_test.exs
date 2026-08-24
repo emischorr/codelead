@@ -25,7 +25,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
     if tab, do: "#{base}?tab=#{tab}", else: base
   end
 
-  # What a `datetime-local` input posts: minute precision, no zone. The
+  # What the `.SchedulePicker` hook posts as `local_at`: minute precision,
+  # naive (paired with `utc_offset_minutes` for the actual conversion). The
   # time is on the minute so the round trip is lossless.
   defp input_value(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%dT%H:%M")
 
@@ -623,8 +624,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
       view |> element("#action-schedule-run") |> render_click()
 
       view
-      |> form("#schedule-form", schedule: %{scheduled_at: input_value(at)})
-      |> render_submit()
+      |> form("#schedule-form")
+      |> render_submit(%{schedule: %{local_at: input_value(at), utc_offset_minutes: "0"}})
 
       task = Tasks.get_task!(task.id)
       assert task.state == :running

@@ -662,13 +662,13 @@ defmodule CodeLeadWeb.UIComponents do
   @doc """
   Renders the "schedule this run" dialog.
 
-  The caller owns the events: `schedule_task` on submit,
-  `close_schedule` on dismiss. Times are UTC, like every other
-  timestamp in the app.
+  The caller owns the events: `schedule_task` on submit, `close_schedule`
+  on dismiss. The date/time is picked in the viewer's own timezone (the
+  `.SchedulePicker` hook resolves it, same as `.LocalTime` does for
+  display) and converted to UTC server-side in `CodeLeadWeb.ScheduleForm`.
   """
   attr :form, :any, required: true
   attr :task_title, :string, required: true
-  attr :min, :string, required: true
 
   def schedule_modal(assigns) do
     ~H"""
@@ -700,13 +700,61 @@ defmodule CodeLeadWeb.UIComponents do
         </div>
         <p class="mb-4 truncate text-[12.5px] text-text2">{@task_title}</p>
         <.form for={@form} id="schedule-form" phx-submit="schedule_task">
-          <.input
-            field={@form[:scheduled_at]}
-            type="datetime-local"
-            label="Start at (UTC)"
-            min={@min}
-          />
-          <p class="mt-1 text-[11.5px] text-text3">
+          <div id="schedule-picker" phx-hook=".SchedulePicker" phx-update="ignore">
+            <div class="mb-3 flex gap-1.5">
+              <button
+                :for={
+                  {label, delta} <- [
+                    {"+5 min", "5m"},
+                    {"+1 h", "1h"},
+                    {"+5 h", "5h"},
+                    {"+1 day", "1d"}
+                  ]
+                }
+                type="button"
+                data-delta={delta}
+                class="schedule-pill rounded-full bg-surface2 px-2.5 py-1 text-[11px] font-semibold text-text2 hover:bg-accent-soft hover:text-accent"
+              >
+                {label}
+              </button>
+            </div>
+            <label class="mb-1 block text-[13px] font-medium text-text2" for="schedule-date">
+              Date
+            </label>
+            <input
+              type="date"
+              id="schedule-date"
+              class="mb-3 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+            />
+            <span class="mb-1 block text-[13px] font-medium text-text2">Time</span>
+            <div class="relative flex h-[160px] justify-center gap-2 overflow-hidden rounded-lg border border-border bg-surface">
+              <div class="pointer-events-none absolute inset-x-0 top-1/2 h-8 -translate-y-1/2 rounded-md bg-surface2" />
+              <ul
+                id="schedule-wheel-hour"
+                class="schedule-wheel z-10 h-full snap-y snap-mandatory overflow-y-scroll py-[64px] text-center [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                <li :for={h <- 0..23} data-value={h} class="h-8 w-12 snap-center leading-8 text-text">
+                  {String.pad_leading(Integer.to_string(h), 2, "0")}
+                </li>
+              </ul>
+              <span class="z-10 self-center text-text3">:</span>
+              <ul
+                id="schedule-wheel-minute"
+                class="schedule-wheel z-10 h-full snap-y snap-mandatory overflow-y-scroll py-[64px] text-center [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                <li
+                  :for={m <- 0..55//5}
+                  data-value={m}
+                  class="h-8 w-12 snap-center leading-8 text-text"
+                >
+                  {String.pad_leading(Integer.to_string(m), 2, "0")}
+                </li>
+              </ul>
+            </div>
+            <.input field={@form[:local_at]} type="hidden" />
+            <.input field={@form[:utc_offset_minutes]} type="hidden" />
+          </div>
+          <p class="mt-3 text-[11.5px] text-text3">
             The card moves to Running now and waits there. Budget and capacity
             are checked again when it starts.
           </p>
@@ -717,6 +765,120 @@ defmodule CodeLeadWeb.UIComponents do
             </.button>
           </div>
         </.form>
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".SchedulePicker">
+          // Mirrors `.LocalTime`'s trust boundary: no server-side timezone
+          // database exists, so the browser resolves the zone and the UTC
+          // offset for the picked date via `Intl`; the server (ScheduleForm)
+          // does the actual local-to-UTC arithmetic with that offset.
+          const ITEM_HEIGHT = 32 // px, matches h-8 on the <li>s
+
+          function effectiveZone() {
+            return document.documentElement.dataset.timezone || undefined
+          }
+
+          // "Format `ms` as wall-clock in `zone`, treat those numbers as if
+          // they were UTC, diff against `ms`" — the standard technique for
+          // getting a zone's offset at a specific instant without a tz db.
+          function offsetMinutesFor(ms, zone) {
+            const dtf = new Intl.DateTimeFormat("en-US", {
+              timeZone: zone,
+              hourCycle: "h23",
+              year: "numeric", month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit", second: "2-digit"
+            })
+            const parts = dtf.formatToParts(new Date(ms)).reduce((acc, p) => {
+              acc[p.type] = p.value
+              return acc
+            }, {})
+            const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+            return Math.round((asUTC - ms) / 60000)
+          }
+
+          function partsInZone(ms, zone) {
+            const dtf = new Intl.DateTimeFormat("en-US", {
+              timeZone: zone, hourCycle: "h23",
+              year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+            })
+            const parts = dtf.formatToParts(new Date(ms)).reduce((acc, p) => {
+              acc[p.type] = p.value
+              return acc
+            }, {})
+            return { year: +parts.year, month: +parts.month, day: +parts.day, hour: +parts.hour, minute: +parts.minute }
+          }
+
+          function pad(n) { return String(n).padStart(2, "0") }
+
+          export default {
+            mounted() {
+              this.zone = effectiveZone()
+              this.date = this.el.querySelector("#schedule-date")
+              this.hourWheel = this.el.querySelector("#schedule-wheel-hour")
+              this.minuteWheel = this.el.querySelector("#schedule-wheel-minute")
+              this.localAt = this.el.querySelector('input[name="schedule[local_at]"]')
+              this.offset = this.el.querySelector('input[name="schedule[utc_offset_minutes]"]')
+
+              this.date.min = partsInZoneDate(this.zone)
+              this.date.addEventListener("change", () => this.refresh())
+              this.hourWheel.addEventListener("scroll", () => this.onScroll(this.hourWheel))
+              this.minuteWheel.addEventListener("scroll", () => this.onScroll(this.minuteWheel))
+
+              this.el.querySelectorAll(".schedule-pill").forEach((pill) => {
+                pill.addEventListener("click", () => this.applyInstant(Date.now() + deltaMs(pill.dataset.delta)))
+              })
+
+              this.applyInstant(Date.now())
+
+              function partsInZoneDate(zone) {
+                const { year, month, day } = partsInZone(Date.now(), zone)
+                return `${year}-${pad(month)}-${pad(day)}`
+              }
+
+              function deltaMs(code) {
+                const n = parseInt(code, 10)
+                if (code.endsWith("m")) return n * 60 * 1000
+                if (code.endsWith("h")) return n * 60 * 60 * 1000
+                return n * 24 * 60 * 60 * 1000
+              }
+            },
+            applyInstant(ms) {
+              // Round to the nearest 5-minute step by nudging the real
+              // instant, then let `Intl` recompute the calendar fields —
+              // that way an hour/day rollover (e.g. 23:58 -> 00:00) is
+              // handled correctly instead of clamping minute to 60.
+              const remainder = partsInZone(ms, this.zone).minute % 5
+              const roundedMs =
+                remainder < 3 ? ms - remainder * 60000 : ms + (5 - remainder) * 60000
+              const { year, month, day, hour, minute } = partsInZone(roundedMs, this.zone)
+
+              this.date.value = `${year}-${pad(month)}-${pad(day)}`
+              this.scrollTo(this.hourWheel, hour)
+              this.scrollTo(this.minuteWheel, minute / 5)
+              this.refresh()
+            },
+            scrollTo(wheel, index) {
+              wheel.scrollTo({ top: index * ITEM_HEIGHT, behavior: "instant" })
+            },
+            onScroll(wheel) {
+              clearTimeout(wheel._settleTimer)
+              wheel._settleTimer = setTimeout(() => this.refresh(), 120)
+            },
+            centeredValue(wheel) {
+              const index = Math.round(wheel.scrollTop / ITEM_HEIGHT)
+              const items = wheel.querySelectorAll("li")
+              const item = items[Math.max(0, Math.min(index, items.length - 1))]
+              return item ? +item.dataset.value : 0
+            },
+            refresh() {
+              const hour = this.centeredValue(this.hourWheel)
+              const minute = this.centeredValue(this.minuteWheel)
+              const localAt = `${this.date.value}T${pad(hour)}:${pad(minute)}`
+              const guessMs = new Date(`${localAt}:00Z`).getTime()
+
+              this.localAt.value = localAt
+              this.offset.value = offsetMinutesFor(guessMs, this.zone)
+            }
+          }
+        </script>
       </div>
     </div>
     """
