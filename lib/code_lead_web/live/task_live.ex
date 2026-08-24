@@ -1257,12 +1257,7 @@ defmodule CodeLeadWeb.TaskLive do
 
       <.feedback_modal :if={@show_feedback?} />
 
-      <.schedule_modal
-        :if={@schedule_form}
-        form={@schedule_form}
-        task_title={@task.title}
-        min={ScheduleForm.now_input_value()}
-      />
+      <.schedule_modal :if={@schedule_form} form={@schedule_form} task_title={@task.title} />
     </Layouts.app>
     """
   end

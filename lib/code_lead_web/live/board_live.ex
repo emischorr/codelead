@@ -307,7 +307,6 @@ defmodule CodeLeadWeb.BoardLive do
         :if={@scheduling_task}
         form={@schedule_form}
         task_title={@scheduling_task.title}
-        min={ScheduleForm.now_input_value()}
       />
     </Layouts.app>
     """

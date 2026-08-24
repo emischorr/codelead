@@ -1,11 +1,15 @@
 defmodule CodeLeadWeb.ScheduleForm do
   @moduledoc """
-  The "start at" field behind the schedule-run modal, as a schemaless
+  The "start at" fields behind the schedule-run modal, as a schemaless
   changeset so `<.input>` can render its errors.
 
-  Times are UTC end to end — entered, stored and displayed — matching
-  every other timestamp the app shows (`CodeLeadWeb.Format.absolute/1`
-  suffixes them all with `UTC`).
+  The date/time is entered in the viewer's own timezone (the `.SchedulePicker`
+  hook resolves it client-side, same as `.LocalTime` does for display) but
+  stored in UTC (`CodeLeadWeb.Format.absolute/1` suffixes every other
+  timestamp the app shows with `UTC`). There's no timezone database in this
+  project, so the browser is trusted for the UTC offset — `local_at` carries
+  the picked wall-clock time and `utc_offset_minutes` the offset to apply;
+  `parse/1` does the actual local-to-UTC conversion.
 
   A time already in the past is deliberately allowed through: the
   scheduler treats `scheduled_at` as a "not before" bound, so it
@@ -14,23 +18,31 @@ defmodule CodeLeadWeb.ScheduleForm do
 
   import Ecto.Changeset
 
-  @types %{scheduled_at: :utc_datetime}
+  @types %{local_at: :naive_datetime, utc_offset_minutes: :integer}
 
   @doc """
-  A form for the modal, optionally seeded with submitted params.
+  A form for the modal, defaulting to "now" until the `.SchedulePicker`
+  hook overrides it, or seeded with submitted params on re-render.
   """
   @spec new(map()) :: Phoenix.HTML.Form.t()
-  def new(params \\ %{}), do: params |> changeset() |> Phoenix.Component.to_form(as: :schedule)
+  def new(params \\ now_seed()),
+    do: params |> changeset() |> Phoenix.Component.to_form(as: :schedule)
 
   @doc """
-  The submitted time, or a re-rendered form carrying the error.
+  The submitted time converted to UTC, or a re-rendered form carrying the
+  error.
   """
   @spec parse(map()) :: {:ok, DateTime.t()} | {:error, Phoenix.HTML.Form.t()}
   def parse(params) do
     changeset = changeset(params)
 
     case apply_action(changeset, :validate) do
-      {:ok, %{scheduled_at: scheduled_at}} ->
+      {:ok, %{local_at: local_at, utc_offset_minutes: offset_minutes}} ->
+        scheduled_at =
+          local_at
+          |> DateTime.from_naive!("Etc/UTC")
+          |> DateTime.add(-offset_minutes * 60, :second)
+
         {:ok, scheduled_at}
 
       {:error, changeset} ->
@@ -39,17 +51,21 @@ defmodule CodeLeadWeb.ScheduleForm do
   end
 
   @doc """
-  Value for an input's `min` attribute — a nudge towards a future time,
-  not a validation.
+  Seed values for the form before the `.SchedulePicker` hook takes over —
+  "now" at a UTC offset of zero, a reasonable fallback if a submit races
+  ahead of the hook's `mounted()`.
   """
-  @spec now_input_value() :: String.t()
-  def now_input_value do
-    Calendar.strftime(DateTime.utc_now(), "%Y-%m-%dT%H:%M")
+  @spec now_seed() :: %{local_at: String.t(), utc_offset_minutes: integer()}
+  def now_seed do
+    %{
+      local_at: Calendar.strftime(DateTime.utc_now(), "%Y-%m-%dT%H:%M"),
+      utc_offset_minutes: 0
+    }
   end
 
   defp changeset(params) do
     {%{}, @types}
-    |> cast(params, [:scheduled_at])
-    |> validate_required([:scheduled_at])
+    |> cast(params, [:local_at, :utc_offset_minutes])
+    |> validate_required([:local_at, :utc_offset_minutes])
   end
 end
