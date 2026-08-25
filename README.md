@@ -166,6 +166,7 @@ Each step commits as you submit it, so reloading resumes where you left off.
 
 - **A git remote you can push to**, and a token for it: GitHub fine-grained PATs need *Contents: Read and write*, GitLab needs `write_repository`. Store it per project in the encrypted environment store — the same token handles git transport *and* opens the PR at Done. SSH remotes ignore it and use the server's key instead.
 - **A model provider credential** for at least one provider.
+- **Nothing from the repositories you point it at** — planning, execution, diff review and the PR work on an unmodified repo. Two optional things pay for themselves: honoring `PREVIEW_BASE_PATH`/`PREVIEW_PORT` so the Review tab can preview the running app, and a `.devcontainer` so tasks run in the project's own toolchain. Both are a checklist plus drop-in templates — a `CLAUDE.md`/`AGENTS.md` snippet and a `codelead-ready` skill — in [`docs/project-readiness.md`](docs/project-readiness.md).
 - **The Claude Code harness is bundled** in the image. **Codex is bring-your-own** — the `codex` binary must be on the PATH of the process running CodeLead. A missing harness fails the run at dispatch with a message naming the executable, before anything is cloned.
 
 ---

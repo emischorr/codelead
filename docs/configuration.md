@@ -170,6 +170,11 @@ commands should bind it rather than hardcode one). Terminal sessions
 additionally export `CODELEAD_TTY_FILE`, which is CodeLead's own
 resize channel and not something to set or rely on (ADR-0010):
 
+The project-side view of all this — collected as a checklist, with
+drop-in templates for a repository's `CLAUDE.md`/`AGENTS.md` and a
+`codelead-ready` skill — is in
+[`project-readiness.md`](project-readiness.md).
+
 | Stack | Recipe |
 |---|---|
 | Vite | `vite --port "$PREVIEW_PORT" --base "$PREVIEW_BASE_PATH/"` |
@@ -331,6 +336,11 @@ the first — a probe cannot tell the two apart, and the older one wins
 the port.
 
 ### Serving a preview from a container task
+
+What a *repository* has to do about everything in this section, including
+its `.devcontainer`, is collected in
+[`project-readiness.md`](project-readiness.md); this is the mechanism
+behind it.
 
 The base path above is what the *browser* needs. A **container** task's
 dev server carries further constraints, all consequences of the

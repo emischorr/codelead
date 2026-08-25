@@ -12,6 +12,7 @@ Map of the repo's documentation. Design notes describe how things work
 ## Getting started
 
 - [`console-api.md`](console-api.md) — the IEx walkthrough of the full workflow.
+- [`project-readiness.md`](project-readiness.md) — the *project owner's* half, for repositories you develop **with** CodeLead (none of it needed to run tasks, all of it needed for a working live preview): the three variables a project is handed (`PREVIEW_PORT`/`PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN`, and their values under each gateway), the four rules — bind the declared port, bind `0.0.0.0`, honor the base path, never hand-write a root-absolute URL — and the failure each one prevents; what makes a `.devcontainer` work for *agents* as well as for VS Code (toolchain and package-manager state out of `$HOME` because CodeLead overrides it per task, build output off the shared workspace mount, `remoteUser`, installs in lifecycle hooks) and the keys CodeLead ignores outright (`forwardPorts`/`appPort`, `workspaceFolder` as authoritative, `overrideCommand`); what no project change can fix (double-submit CSRF under the path gateway, the reserved `_clp_session` cookie); and the drop-in templates in [`../templates/project-readiness/`](../templates/project-readiness) — a `CLAUDE.md`/`AGENTS.md` snippet and a `codelead-ready` Claude Skill.
 
 ## Operations
 
