@@ -94,6 +94,65 @@ defmodule CodeLead.FindingsTest do
       assert Report.extract("```json\nnot json\n```") == :error
       assert Report.extract(nil) == :error
     end
+
+    test "recovers a fence glued to the narrative with the payload on the same line" do
+      content =
+        ~S(Nothing in the docs covers this.```json { "findings": [{"title": "Glued"}], "prior": [] })
+
+      assert {:ok, payload, narrative} = Report.extract(content)
+      assert [%{title: "Glued"}] = Report.new_findings(payload)
+      assert narrative == "Nothing in the docs covers this."
+    end
+
+    test "recovers a block that is never closed" do
+      content = """
+      Narrative first.
+
+      ```json
+      {"findings": [{"title": "Unterminated"}]}
+      """
+
+      assert {:ok, payload, "Narrative first."} = Report.extract(content)
+      assert [%{title: "Unterminated"}] = Report.new_findings(payload)
+    end
+
+    test "tolerates trailing text after the block" do
+      content = """
+      Narrative first.
+
+      ```json
+      {"findings": [{"title": "Then chatter"}]}
+      ```
+
+      Let me know if you want more detail.
+      """
+
+      assert {:ok, payload, narrative} = Report.extract(content)
+      assert [%{title: "Then chatter"}] = Report.new_findings(payload)
+      assert narrative =~ "Let me know if you want more detail."
+    end
+
+    test "escapes stray double quotes inside string values" do
+      content = ~S"""
+      Narrative first.
+
+      ```json
+      {"findings": [{"title": "Quoted", "body": "The task says "if it is a fork" without saying which."}], "prior": []}
+      ```
+      """
+
+      assert {:ok, payload, "Narrative first."} = Report.extract(content)
+      assert [%{title: "Quoted", body: body}] = Report.new_findings(payload)
+      assert body == ~S(The task says "if it is a fork" without saying which.)
+    end
+
+    test "never mistakes a nested item object for the whole report" do
+      # The outer object is unrecoverable (an unterminated string runs
+      # to EOF), so no candidate may stand in for it.
+      content = ~S({"findings": [{"title": "Inner", "body": "unterminated)
+
+      assert Report.extract(content) == :error
+    end
   end
 
   describe "apply_report/5" do
@@ -150,6 +209,23 @@ defmodule CodeLead.FindingsTest do
                :error
 
       assert Findings.list(task.id, :planning) == []
+    end
+
+    test "writes rows for a report recovered from a malformed tail", %{
+      task: task,
+      agent: agent,
+      step: step
+    } do
+      content =
+        ~S(Survey done.```json { "findings": [{"title": "Recovered", "severity": "high", "body": "It says "maybe" here.", "paths": ["lib/pay.ex"]}], "prior": [] })
+
+      assert {:ok, %{new: 1}} = Findings.apply_report(task, :planning, step, agent, content)
+
+      [finding] = Findings.list(task.id, :planning)
+      assert finding.title == "Recovered"
+      assert finding.severity == :high
+      assert finding.body == ~S(It says "maybe" here.)
+      assert finding.paths == ["lib/pay.ex"]
     end
 
     test "prior classifications bump the observation, omissions stay untouched", %{

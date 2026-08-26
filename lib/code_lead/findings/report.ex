@@ -3,20 +3,47 @@ defmodule CodeLead.Findings.Report do
   Parses an advisory run's report into structured findings.
 
   The output contract is a text convention, not a provider feature: a
-  markdown narrative followed by exactly one fenced ```json block (a
-  bare trailing JSON object is accepted as a fallback). Parsing is
+  markdown narrative followed by a fenced ```json block. Parsing is
   deliberately lenient — an advisory run must never fail because the
-  model got the tail wrong, so invalid items are dropped rather than
-  rejecting the report, and an unparseable report yields `:error` with
-  no side effects.
+  model got the tail wrong — so extraction runs three tiers and only
+  gives up when none of them yields a report-shaped object:
+
+    1. the last ```json marker, then a balanced-brace scan from there;
+    2. every `{` in the report, outermost objects, latest first;
+    3. the same candidates run through a repair pass that escapes
+       stray double quotes inside string values.
+
+  Neither the fence's position nor its closing half is required, so a
+  block glued to the end of a sentence, opened with its payload on the
+  same line, or left unterminated still parses.
+
+  A candidate is only accepted when it carries a `"findings"` or
+  `"prior"` key, which keeps a nested item object from being mistaken
+  for the whole report when the outer object is the malformed one.
+
+  Tier 3 is a heuristic: inside a string, a `"` closes it only when the
+  next non-whitespace byte is `,`, `:`, `}` or `]`. A body carrying a
+  quoted phrase immediately followed by a comma (`he said "yes", then`)
+  is therefore still misread. It is a strict improvement over failing,
+  not a guarantee.
+
+  Invalid items are dropped rather than rejecting the report, and an
+  unparseable report yields `:error` with no side effects.
 
   Phase-agnostic: surveys use it today, reviews can in a later
   iteration.
   """
 
+  require Logger
+
   alias CodeLead.Findings.Finding
 
-  @fence ~r/^```json[ \t]*$\n(.*?)^```[ \t]*$/ims
+  @fence_marker ~r/```[ \t]*json\b/i
+  @open_fence_tail ~r/```[ \t]*json\b\s*\z/i
+  @close_fence_head ~r/\A\s*```[ \t]*/
+
+  @whitespace ~c" \t\n\r"
+  @string_terminators ~c",:}]"
 
   @severities %{"high" => :high, "medium" => :medium, "low" => :low}
   @prior_statuses %{
@@ -27,14 +54,14 @@ defmodule CodeLead.Findings.Report do
 
   @doc """
   Splits a report into its JSON payload and the surrounding narrative.
-  Takes the *last* fenced json block; the narrative is the report with
-  that block removed.
+  Takes the *last* report-shaped object; the narrative is the report
+  with that object and its fence removed.
   """
   @spec extract(String.t() | nil) :: {:ok, map(), String.t()} | :error
   def extract(content) when is_binary(content) do
-    case last_fenced_block(content) do
-      {json, narrative} -> decode(json, narrative)
-      nil -> bare_trailing_object(content)
+    with :error <- from_fence(content),
+         :error <- from_objects(content, 0, &decode/1) do
+      from_objects(content, 0, &repair_decode/1)
     end
   end
 
@@ -107,49 +134,170 @@ defmodule CodeLead.Findings.Report do
 
   defp prior_id(_id), do: :error
 
-  defp last_fenced_block(content) do
-    case Regex.scan(@fence, content, return: :index) do
-      [] ->
-        nil
-
-      matches ->
-        [[{block_start, block_len}, {json_start, json_len}]] = Enum.take(matches, -1)
-        json = binary_part(content, json_start, json_len)
-
-        narrative =
-          binary_part(content, 0, block_start) <>
-            binary_part(
-              content,
-              block_start + block_len,
-              byte_size(content) - block_start - block_len
-            )
-
-        {json, String.trim(narrative)}
+  # Tier 1: the fence marker is only a hint about where to look. Its
+  # closing half is never required.
+  defp from_fence(content) do
+    case Regex.scan(@fence_marker, content, return: :index) do
+      [] -> :error
+      matches -> matches |> List.last() |> then(fn [{start, len}] -> start + len end)
+    end
+    |> case do
+      :error -> :error
+      offset -> from_objects(content, offset, &decode/1)
     end
   end
 
-  defp decode(json, narrative) do
+  # Outermost decodable objects at or after `min_offset`, latest first.
+  # An accepted object masks the candidates nested inside it; a
+  # rejected one masks nothing, so a stray `{` in the narrative cannot
+  # swallow the real payload.
+  defp from_objects(content, min_offset, decoder) do
+    content
+    |> object_starts(min_offset)
+    |> Enum.reduce({[], 0}, fn start, {acc, consumed_until} = state ->
+      with true <- start >= consumed_until,
+           {:ok, json} <- object_at(content, start),
+           {:ok, payload} <- decoder.(json),
+           true <- report_payload?(payload) do
+        {[{start, byte_size(json), payload} | acc], start + byte_size(json)}
+      else
+        _skip -> state
+      end
+    end)
+    |> elem(0)
+    |> case do
+      [] -> :error
+      [{start, len, payload} | _rest] -> {:ok, payload, narrative(content, start, len)}
+    end
+  end
+
+  defp object_starts(content, min_offset) do
+    ~r/\{/
+    |> Regex.scan(content, return: :index)
+    |> Enum.flat_map(fn [{start, _len}] -> if start >= min_offset, do: [start], else: [] end)
+  end
+
+  # Guards against a nested item object standing in for the whole
+  # report when the outer object is the one that failed to decode.
+  defp report_payload?(payload) when is_map(payload) do
+    Map.has_key?(payload, "findings") or Map.has_key?(payload, "prior")
+  end
+
+  defp report_payload?(_payload), do: false
+
+  defp narrative(content, start, len) do
+    prefix = binary_part(content, 0, start)
+    stop = start + len
+    suffix = binary_part(content, stop, byte_size(content) - stop)
+
+    String.trim(
+      String.replace(prefix, @open_fence_tail, "") <>
+        String.replace(suffix, @close_fence_head, "")
+    )
+  end
+
+  defp decode(json) do
     case Jason.decode(json) do
-      {:ok, payload} when is_map(payload) -> {:ok, payload, narrative}
+      {:ok, payload} when is_map(payload) -> {:ok, payload}
       _invalid -> :error
     end
   end
 
-  # Fallback for a model that skipped the fence: a JSON object opening
-  # at the start of a line and running to the end of the report.
-  defp bare_trailing_object(content) do
-    trimmed = String.trim_trailing(content)
+  defp repair_decode(json) do
+    case decode(repair_quotes(json)) do
+      {:ok, payload} ->
+        Logger.info("findings report: recovered after escaping stray quotes in the payload")
+        {:ok, payload}
 
-    ~r/^\{/m
-    |> Regex.scan(trimmed, return: :index)
-    |> Enum.reverse()
-    |> Enum.find_value(:error, fn [{start, _len}] ->
-      json = binary_part(trimmed, start, byte_size(trimmed) - start)
+      :error ->
+        :error
+    end
+  end
 
-      case decode(json, String.trim(binary_part(trimmed, 0, start))) do
-        {:ok, _payload, _narrative} = ok -> ok
-        :error -> nil
-      end
-    end)
+  # Byte-level scans are safe on UTF-8: `{`, `}`, `"` and `\` are all
+  # ASCII and never appear as continuation bytes, so multi-byte
+  # characters in report bodies pass through untouched.
+  defp object_at(content, start) do
+    case scan_object(content, byte_size(content), start + 1, 1, false, false) do
+      {:ok, stop} -> {:ok, binary_part(content, start, stop - start)}
+      :error -> :error
+    end
+  end
+
+  defp scan_object(_content, size, pos, _depth, _in_string, _escaped) when pos >= size, do: :error
+
+  defp scan_object(content, size, pos, depth, in_string, true),
+    do: scan_object(content, size, pos + 1, depth, in_string, false)
+
+  defp scan_object(content, size, pos, depth, true, false) do
+    case :binary.at(content, pos) do
+      ?\\ -> scan_object(content, size, pos + 1, depth, true, true)
+      ?" -> scan_object(content, size, pos + 1, depth, false, false)
+      _other -> scan_object(content, size, pos + 1, depth, true, false)
+    end
+  end
+
+  defp scan_object(content, size, pos, depth, false, false) do
+    case :binary.at(content, pos) do
+      ?" -> scan_object(content, size, pos + 1, depth, true, false)
+      ?{ -> scan_object(content, size, pos + 1, depth + 1, false, false)
+      ?} when depth == 1 -> {:ok, pos + 1}
+      ?} -> scan_object(content, size, pos + 1, depth - 1, false, false)
+      _other -> scan_object(content, size, pos + 1, depth, false, false)
+    end
+  end
+
+  defp repair_quotes(json) do
+    json
+    |> repair_scan(0, byte_size(json), false, false, [])
+    |> IO.iodata_to_binary()
+  end
+
+  defp repair_scan(_json, pos, size, _in_string, _escaped, acc) when pos >= size,
+    do: Enum.reverse(acc)
+
+  defp repair_scan(json, pos, size, in_string, true, acc),
+    do: repair_scan(json, pos + 1, size, in_string, false, [:binary.at(json, pos) | acc])
+
+  defp repair_scan(json, pos, size, true, false, acc) do
+    case :binary.at(json, pos) do
+      ?\\ -> repair_scan(json, pos + 1, size, true, true, [?\\ | acc])
+      ?" -> repair_quote(json, pos, size, acc)
+      byte -> repair_scan(json, pos + 1, size, true, false, [byte | acc])
+    end
+  end
+
+  defp repair_scan(json, pos, size, false, false, acc) do
+    case :binary.at(json, pos) do
+      ?" -> repair_scan(json, pos + 1, size, true, false, [?" | acc])
+      byte -> repair_scan(json, pos + 1, size, false, false, [byte | acc])
+    end
+  end
+
+  # A quote inside a string closes it only when the next non-whitespace
+  # byte is one that may follow a value. Anything else is content the
+  # model failed to escape.
+  defp repair_quote(json, pos, size, acc) do
+    if string_ends?(json, pos + 1, size) do
+      repair_scan(json, pos + 1, size, false, false, [?" | acc])
+    else
+      repair_scan(json, pos + 1, size, true, false, ["\\\"" | acc])
+    end
+  end
+
+  defp string_ends?(json, pos, size) do
+    case skip_whitespace(json, pos, size) do
+      :eof -> true
+      byte -> byte in @string_terminators
+    end
+  end
+
+  defp skip_whitespace(_json, pos, size) when pos >= size, do: :eof
+
+  defp skip_whitespace(json, pos, size) do
+    case :binary.at(json, pos) do
+      byte when byte in @whitespace -> skip_whitespace(json, pos + 1, size)
+      byte -> byte
+    end
   end
 end

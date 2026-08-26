@@ -96,13 +96,34 @@ narrative followed by exactly one fenced ```json block, which
 severity-labelled rows (`findings` table, `CodeLead.Findings` context),
 one per item, keyed to the task and the producing `:plan` step. The raw
 turn stays on `planning_messages` exactly as before; findings are parsed
-*from* it, not instead of it. Parsing is deliberately lenient: items
-without a title are dropped, unknown severity defaults to `:medium`, a
-bare trailing JSON object is accepted without its fence, and a report
-with no parseable block writes nothing — the turn renders as markdown
-behind a "could not parse findings" hint. An advisory run never fails
-because the model got the tail wrong (the same graceful degradation as
-the reviewers' trailing-verdict convention in
+*from* it, not instead of it.
+
+Parsing is deliberately lenient, because the contract is a text
+convention rather than a provider feature — CodeLead speaks ACP to
+harnesses whose structured-output support differs, so the parser, not
+the protocol, absorbs formatting drift. Extraction runs three tiers and
+gives up only when none yields a report-shaped object:
+
+1. the last ```json marker, then a balanced-brace scan from there;
+2. every `{` in the report — outermost objects, latest first;
+3. the same candidates run through a repair pass that escapes stray
+   double quotes inside string values (logged at `:info` when it fires).
+
+Neither the fence's position nor its closing half is required, so a
+block glued to the end of a sentence, opened with its payload on the
+same line, or left unterminated still parses. A candidate is accepted
+only when it carries a `"findings"` or `"prior"` key, which stops a
+nested item object from standing in for the whole report when the outer
+object is the malformed one. Tier 3 is a heuristic — a body carrying a
+quoted phrase immediately followed by a comma is still misread — so it
+is a strict improvement over failing, not a guarantee.
+
+Within an accepted payload, items without a title are dropped and
+unknown severity defaults to `:medium`. A report that survives none of
+the tiers writes nothing, logs a warning, and renders the turn as
+markdown behind a "could not parse findings" hint. An advisory run never
+fails because the model got the tail wrong (the same graceful
+degradation as the reviewers' trailing-verdict convention in
 [`reviews.md`](reviews.md)).
 
 There is deliberately no gap/contradiction/assumption taxonomy on the

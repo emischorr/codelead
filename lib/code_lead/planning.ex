@@ -348,7 +348,8 @@ defmodule CodeLead.Planning do
     No process narration, no restating the task.
 
     Part 2 — exactly one fenced ```json block, the last thing in your \
-    output, in this shape:
+    output. Open the fence on a line of its own, with the JSON object \
+    starting on the next line. Use this shape:
 
     {
       "findings": [
@@ -363,6 +364,9 @@ defmodule CodeLead.Planning do
         { "id": 12, "status": "still_open" | "resolved" | "not_applicable" }
       ]
     }
+
+    Inside "body", write quoted phrases with backticks or single \
+    quotes — never raw double quotes, which break the JSON.
 
     Severity: high = must be decided before this task can run; medium = \
     should be decided, an implementer could guess wrong; low = worth \

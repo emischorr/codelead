@@ -17,6 +17,8 @@ defmodule CodeLead.Findings do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodeLead.Findings.Finding
   alias CodeLead.Findings.Report
   alias CodeLead.Repo
@@ -74,6 +76,10 @@ defmodule CodeLead.Findings do
         {:ok, Map.put(prior_counts, :new, new)}
 
       :error ->
+        Logger.warning(
+          "findings report for task #{task.id} (#{phase}) carried no parseable findings block"
+        )
+
         :error
     end
   end
