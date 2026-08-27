@@ -1,6 +1,11 @@
 services:
   app:
-    build: .
+    # Context is the repo root, not .devcontainer/, so the image build can
+    # COPY mix.exs/mix.lock/config to prewarm deps. The root .dockerignore
+    # already keeps deps/, _build/ and workspace/ out of the context.
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
     command: sleep infinity
     volumes:
       - ..:/workspace:cached

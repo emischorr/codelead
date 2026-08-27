@@ -22,6 +22,13 @@
   },
   // deps + create/migrate/seed the dev DB + tailwind/esbuild standalone
   // binaries (no Node). Seeds the admin login, so a preview is usable
-  // immediately. Needs network on first run.
-  "postCreateCommand": "mix setup"
+  // immediately. Cheap: the Dockerfile already prewarmed deps and the
+  // asset binaries into the image, so this reconciles a delta and
+  // compiles the app.
+  "postCreateCommand": "mix setup",
+  // Runs on every start, not only on creation: catches migrations the
+  // branch gained mid-task and a container restarted after the instance
+  // was. Deliberately non-fatal — a bad migration must not lock you out
+  // of the Terminal you would fix it from.
+  "postStartCommand": "mix deps.get && mix ecto.create --quiet && mix ecto.migrate || echo 'devcontainer: setup failed — run mix ecto.migrate by hand'"
 }

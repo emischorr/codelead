@@ -3,7 +3,11 @@ const fs = require("fs")
 const path = require("path")
 
 module.exports = plugin(function({matchComponents, theme}) {
-  let iconsDir = path.join(__dirname, "../../deps/heroicons/optimized")
+  // MIX_DEPS_PATH when Mix keeps deps somewhere other than ./deps — the
+  // devcontainer does, to keep dependency source off the shared workspace
+  // mount. Unset everywhere else, so this stays the default path.
+  let depsDir = process.env.MIX_DEPS_PATH || path.join(__dirname, "../../deps")
+  let iconsDir = path.resolve(depsDir, "heroicons/optimized")
   let values = {}
   let icons = [
     ["", "/24/outline"],

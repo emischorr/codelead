@@ -37,6 +37,12 @@ progress() {
   printf '{"type":"text","level":3,"text":"%s"}\n' "$1" >&2
 }
 
+# A lifecycle milestone, the shape the real CLI emits around
+# postCreateCommand and friends.
+milestone() {
+  printf '{"type":"progress","name":"%s","status":"%s"}\n' "$1" "$2" >&2
+}
+
 case "$scenario" in
   success)
     progress "Resolving Remote"
@@ -59,8 +65,9 @@ case "$scenario" in
     ;;
   slow)
     progress "Installing feature ghcr.io/devcontainers/features/node:1"
-    progress "Running the postCreateCommand"
-    progress "Done"
+    milestone "Running postCreateCommand..." "running"
+    progress "mix setup"
+    milestone "Running postCreateCommand..." "succeeded"
     printf '{"outcome":"success","containerId":"%s","remoteUser":"vscode","remoteWorkspaceFolder":"/workspaces/x"}\n' "$container_id"
     ;;
   *)

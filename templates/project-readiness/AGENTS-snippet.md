@@ -45,10 +45,15 @@ The rest holds whether or not those variables are set:
   urls relative to where the *bundle* lands. A hardcoded socket path is the
   worst case — it makes the preview reload itself in a loop.
 
-- **The dev server must be a single process.** Dependency installs, database
-  setup and seeds belong in `.devcontainer` lifecycle hooks
-  (`postCreateCommand` / `postStartCommand`), never chained onto the start
-  command with `&&`.
+- **The dev server must be a single process.** Database setup and seeds belong
+  in `.devcontainer` lifecycle hooks (`postCreateCommand` / `postStartCommand`),
+  never chained onto the start command with `&&`.
+
+- **Don't re-install what the image already has.** The devcontainer installs
+  dependencies at image-build time, keyed on the lockfile, and the hooks have
+  already run setup and migrations by the time you get a shell. Re-running the
+  project's setup command at the start of a task costs minutes and tokens for
+  nothing — do it only after you change the manifest or lockfile.
 
 - **Keep toolchain state out of `$HOME`.** CodeLead overrides `HOME` per task,
   so anything installed under `~` (nvm, rustup, pyenv, cargo, hex) is invisible

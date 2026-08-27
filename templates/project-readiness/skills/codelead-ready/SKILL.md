@@ -100,8 +100,19 @@ a plain `"image"` when the project needs no companion services, a
 - Build output is **off the shared workspace mount** (`MIX_BUILD_ROOT`,
   cargo `target-dir`, …) — the worktree is bind-shared with the host, so
   host-built and Linux-built artifacts poison each other.
-- Dependency installs, migrations and seeds are in `postCreateCommand` /
-  `postStartCommand`, not in the start command.
+- Dependency installs are **in the image, keyed on the lockfile** — `COPY` the
+  manifest + lockfile alone, install in a `RUN` above the source. Every task is
+  a fresh container, and the host's layer cache is the only thing shared
+  between them; an install left to a hook is paid per task, in wall-clock and
+  in agent tokens. **This is the gap that costs most.**
+- Lifecycle hooks reconcile the *delta*: `postCreateCommand` for the
+  lockfile-drift install, seeds and an initial build; `postStartCommand` for
+  migrations, because it re-runs on every start while `postCreateCommand` runs
+  only on creation. Make `postStartCommand` non-fatal (`… || echo …`) so a bad
+  migration cannot lock you out of the Terminal. Neither belongs in the start
+  command.
+- The project's `CLAUDE.md`/`AGENTS.md` says the environment arrives
+  provisioned, so agents don't re-run setup out of habit.
 - Companion services come from `dockerComposeFile`. CodeLead has no services
   model of its own.
 - `PATH` additions are in `/etc/profile.d/*.sh` — the preview command runs

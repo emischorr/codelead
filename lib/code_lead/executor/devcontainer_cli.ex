@@ -6,9 +6,11 @@ defmodule CodeLead.Executor.DevcontainerCli do
 
   `up/2` runs `devcontainer up` as a Port. With `--log-format json` the
   result object is the single stdout line while progress events stream
-  on stderr; both are merged here, progress is logged, a bounded tail is
-  kept for error detail, and the result is parsed off the one line
-  carrying an `"outcome"` key.
+  on stderr; both are merged here, a bounded tail is kept for error
+  detail, and the result is parsed off the one line carrying an
+  `"outcome"` key. Lifecycle milestones (`postCreateCommand` and
+  friends) are logged at `:info`, their per-step detail and the raw
+  command output at `:debug`.
   """
 
   require Logger
@@ -113,6 +115,10 @@ defmodule CodeLead.Executor.DevcontainerCli do
       {:ok, %{"outcome" => _outcome} = decoded} ->
         decoded
 
+      {:ok, %{"type" => "progress", "name" => name} = event} ->
+        log_progress(name, event["status"], event["stepDetail"])
+        result
+
       {:ok, %{"text" => text}} when is_binary(text) and text != "" ->
         Logger.debug("devcontainer up: #{String.trim_trailing(text)}")
         result
@@ -122,8 +128,26 @@ defmodule CodeLead.Executor.DevcontainerCli do
     end
   end
 
+  # Whether the repository's lifecycle hooks ran is the one thing an
+  # operator needs from a *successful* up: a task that starts without its
+  # dependencies installed is otherwise indistinguishable from one whose
+  # hook never ran. Milestones go to :info; the per-step detail the CLI
+  # emits while a hook runs would drown them, so it joins the raw output
+  # on :debug.
+  defp log_progress(name, status, detail) when is_binary(detail) and detail != "" do
+    Logger.debug("devcontainer up: #{name} #{status} — #{detail}")
+  end
+
+  defp log_progress(name, nil, _detail), do: Logger.info("devcontainer up: #{name}")
+
+  defp log_progress(name, status, _detail) do
+    Logger.info("devcontainer up: #{name} #{status}")
+  end
+
   defp finish(0, %{"outcome" => "success", "containerId" => container_id} = result, _tail)
        when is_binary(container_id) and container_id != "" do
+    Logger.info("devcontainer up: environment ready (#{String.slice(container_id, 0, 12)})")
+
     {:ok,
      %{
        container_id: container_id,

@@ -3,6 +3,8 @@ defmodule CodeLead.Executor.DevcontainerCliTest do
   # env vars the fake devcontainer script reads.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias CodeLead.Executor.DevcontainerCli
 
   @fake Path.expand("../../support/fake_devcontainer.sh", __DIR__)
@@ -98,5 +100,23 @@ defmodule CodeLead.Executor.DevcontainerCliTest do
 
     assert {:ok, %{container_id: "f4k3devc0ntainer", remote_user: "vscode"}} =
              DevcontainerCli.up("/ws/task-1")
+  end
+
+  test "lifecycle milestones and the outcome are logged at :info" do
+    use_devcontainer("slow")
+
+    # The suite runs at :warning, so raise it for the one test that is
+    # about what a successful `up` tells the operator.
+    level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: level) end)
+
+    log = capture_log([level: :info], fn -> DevcontainerCli.up("/ws/task-1") end)
+
+    assert log =~ "Running postCreateCommand... running"
+    assert log =~ "Running postCreateCommand... succeeded"
+    assert log =~ "environment ready (f4k3devc0nta)"
+    # The raw command output stays on :debug so it cannot drown them.
+    refute log =~ "mix setup"
   end
 end

@@ -372,8 +372,11 @@ changing `preview_port` needs no container recreate — the relay is
 beside the app belongs in the repo's `.devcontainer` setup —
 `dockerComposeFile` services come up with the environment, and
 dependency installs or seeds run in its lifecycle hooks
-(`postCreateCommand`/`postStartCommand`). The executor never invents a
-services model of its own (ADR-0009).
+(`postCreateCommand`/`postStartCommand`) — though the installs
+themselves belong in the image, keyed on the lockfile, so the host's
+layer cache serves every task instead of each one paying for them
+again (see [`project-readiness.md`](project-readiness.md#making-the-devcontainer-work-for-agents-too)).
+The executor never invents a services model of its own (ADR-0009).
 
 **One-click preview.** With a `preview_command` declared on the
 repository, the Review tab grows a Start preview button: the command
@@ -703,7 +706,10 @@ modal — a `devcontainer` badge confirms it), set a task's Execution to
 Container, and Start. The first `devcontainer up` for a repo may build
 images and install features (minutes, streamed to the log while the
 task sits dispatched); later ups reuse the environment and are
-near-instant. The **first** container run per libc family additionally
+near-instant. This repo's own `.devcontainer` prewarms deps and the
+asset binaries into the image, so once the layer cache is warm a fresh
+task's `up` costs a container start and an app compile, not a
+`deps.get`. The **first** container run per libc family additionally
 stages the matching harness runtime in a one-shot bun container
 (ADR-0005/0007) — a few minutes, logged as `staging container harness
 …`; it needs docker-side network access to the npm registry, and a

@@ -46,6 +46,15 @@ mix ecto.reset                # wipe per-task workspace state + drop + create + 
 
 Note that `docker-compose.yml` only declares `code_lead_dev`; the test database (`code_lead_test`) is created by the `mix test` alias against the same server.
 
+### Inside a CodeLead container task
+
+The devcontainer has already provisioned itself before you get a shell: deps
+are prewarmed into the image at `$MIX_DEPS_PATH` (`/opt/deps`, **not**
+`./deps`), build output is `$MIX_BUILD_ROOT` (`/opt/build`), and
+`postCreateCommand`/`postStartCommand` have run `mix setup` and
+`mix ecto.migrate`. Do **not** open a task by running `mix setup` or
+`mix deps.get` — only after you change `mix.exs` / `mix.lock`.
+
 Toolchain is pinned in `.tool-versions` (Erlang 27.3.4.14, Elixir 1.18.4-otp-27). Secrets for local dev live in `.envrc` (gitignored, direnv).
 
 ## Design principles

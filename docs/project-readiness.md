@@ -1,4 +1,4 @@
-# Project readiness (last updated: 2026-08-25)
+# Project readiness (last updated: 2026-08-27)
 
 What a repository has to do to be pleasant to work on **with** CodeLead. This
 is the project owner's half; the operator's half — DNS, TLS, the reverse
@@ -96,7 +96,7 @@ config fails the run visibly.
   flavor is chosen from that probe ([ADR-0006](adr/0006-harness-libc-flavors.md)).
 - `git` on `PATH`, and an exec user that can write the worktree.
 
-**Strongly recommended — the two at the top are the ones that actually bite.**
+**Strongly recommended — the three at the top are the ones that actually bite.**
 
 - **Keep toolchain and package-manager state out of `$HOME`.** CodeLead
   overrides `HOME` per task (each task gets its own agent home on the
@@ -107,12 +107,36 @@ config fails the run visibly.
 - **Keep build output off the shared workspace mount** (`MIX_BUILD_ROOT`,
   cargo's `target-dir`, …). The worktree is bind-shared with the host, so
   host-built and Linux-built artifacts otherwise poison each other.
+- **Install dependencies in the image, keyed on the lockfile — not in the
+  hook.** Every task is its own worktree and its own container, so a
+  lifecycle hook that installs from scratch pays minutes and a network
+  round-trip *per task*, and an agent that finds nothing installed will
+  install it again on your token budget. The host's Docker layer cache is
+  shared by every task container, so `COPY` the manifest and lockfile alone
+  and install in a `RUN` above the source: the layer is built once per
+  lockfile change and reused by every task afterwards. This repo's own
+  `.devcontainer/Dockerfile` is the worked example — `mix.exs`/`mix.lock` +
+  `config/`, then `deps.get` + `deps.compile` into `MIX_DEPS_PATH` and
+  `MIX_BUILD_ROOT`. Then say so in the project's `CLAUDE.md`/`AGENTS.md`, or
+  agents will keep re-running setup out of habit.
 - Set `remoteUser` (or `containerUser`). It is read from the container's
   `devcontainer.metadata` label and passed to every exec; without it agents run
   as the image default — usually root — and root-owned files in the worktree
   surface later as teardown leftovers.
-- Put dependency installs, migrations and seeds in `postCreateCommand` /
-  `postStartCommand`. The preview command must be a single process.
+- Leave the hooks reconciling the *delta*: `postCreateCommand` for what the
+  image could not bake (a dependency install against the branch's lockfile,
+  seeds, an initial build), `postStartCommand` for migrations — it re-runs on
+  every start, so it also catches migrations the branch gained mid-task and a
+  container restarted after the instance was. `postCreateCommand` runs once
+  per container *creation*, so anything only there is missed by a restart —
+  and the CLI marks it done *before* running it, so one that fails is never
+  retried: the run fails, the container survives, and every later `up`
+  succeeds without it. That is the failure mode a `postStartCommand` quietly
+  repairs. A failing hook fails the run, which is right for
+  `postCreateCommand` and wrong for `postStartCommand` — end that one with
+  `|| echo …` unless
+  you want a bad migration to lock you out of the Terminal you would fix it
+  from. The preview command must be a single process.
 - Bring companion services in through `dockerComposeFile`. The executor never
   invents a services model of its own.
 - Put `PATH` additions in `/etc/profile.d/*.sh` — the preview command runs
@@ -161,7 +185,8 @@ gateway's auth handshake. A previewed app must not use it.
 This repository is its own. `config/dev.exs` reads `PREVIEW_BASE_PATH` into
 `url: [path: …]` and flips the bind to `0.0.0.0` when the devcontainer sets
 `DEVCONTAINER`; `.devcontainer/` carries the compose services, the `remoteUser`,
-and the out-of-`$HOME` toolchain env. Point a CodeLead instance at this repo
+the out-of-`$HOME` toolchain env, the lockfile-keyed dep prewarm, and hooks
+that only reconcile the delta. Point a CodeLead instance at this repo
 with Container execution enabled and it dogfoods the whole contract —
 [*Container execution in dev*](configuration.md#container-execution-in-dev)
 walks through it.

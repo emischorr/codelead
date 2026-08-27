@@ -40,7 +40,9 @@ server: { allowedHosts: true }   // dev config only
   "name": "app",
   "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
   "remoteUser": "node",
-  // Installs belong here, never in the preview command.
+  // Reconciles lockfile drift only — the image already ran `npm ci` against
+  // a COPY'd package.json + package-lock.json (see the Dockerfile note in
+  // the Phoenix section; the same lockfile-keyed layer applies here).
   "postCreateCommand": "npm ci"
 }
 ```
@@ -142,7 +144,13 @@ absolute `url("/fonts/…")` in CSS (make it relative to where the bundle lands
   "service": "app",
   "workspaceFolder": "/workspace",
   "remoteUser": "dev",
-  "postCreateCommand": "mix setup"
+  // The image already fetched and compiled deps, so this reconciles
+  // lockfile drift, sets up the DB and builds assets.
+  "postCreateCommand": "mix setup",
+  // Re-runs on every start, unlike postCreateCommand — catches migrations
+  // the branch gained mid-task. Non-fatal on purpose: a bad migration must
+  // not lock you out of the Terminal you would fix it from.
+  "postStartCommand": "mix ecto.create --quiet && mix ecto.migrate || echo 'migration failed — run it by hand'"
 }
 ```
 
@@ -151,7 +159,10 @@ absolute `url("/fonts/…")` in CSS (make it relative to where the bundle lands
 ```yaml
 services:
   app:
-    build: .
+    # Context is the repo root so the image build can COPY mix.exs/mix.lock.
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
     command: sleep infinity
     volumes:
       - ..:/workspace:cached
@@ -200,11 +211,25 @@ RUN useradd -m -u 1000 -s /bin/bash dev
 # Build artifacts off the shared workspace mount: a host checkout's _build
 # holds host-compiled artifacts (NIFs, esbuild/tailwind binaries) that would
 # poison Linux builds, and vice versa.
-ENV MIX_HOME=/opt/mix HEX_HOME=/opt/hex MIX_BUILD_ROOT=/opt/build LANG=C.UTF-8
-RUN mkdir -p /opt/mix /opt/hex /opt/build && chown -R dev:dev /opt/mix /opt/hex /opt/build
+ENV MIX_HOME=/opt/mix HEX_HOME=/opt/hex MIX_BUILD_ROOT=/opt/build \
+    MIX_DEPS_PATH=/opt/deps LANG=C.UTF-8
+RUN mkdir -p /opt/mix /opt/hex /opt/build /opt/deps /opt/src \
+    && chown -R dev:dev /opt/mix /opt/hex /opt/build /opt/deps /opt/src
 
 USER dev
 RUN mix local.hex --force && mix local.rebar --force
+
+# The layer that pays for itself: keyed on mix.lock alone, so the host's
+# Docker cache serves every task container instead of each one spending
+# minutes on deps.get + deps.compile. config/ comes along because dep
+# compilation reads compile-time config.
+WORKDIR /opt/src
+COPY --chown=dev:dev mix.exs mix.lock ./
+COPY --chown=dev:dev config config
+RUN mix deps.get \
+    && MIX_ENV=dev mix deps.compile \
+    && MIX_ENV=test mix deps.compile \
+    && mix assets.setup
 ```
 
 ---
@@ -241,7 +266,9 @@ ENV PATH=/opt/gems/bin:$PATH
 RUN echo 'export PATH=/opt/gems/bin:$PATH' > /etc/profile.d/gems.sh
 ```
 
-and `"postCreateCommand": "bundle install && bin/rails db:prepare"`.
+with `COPY Gemfile Gemfile.lock ./` + `RUN bundle install` in the image, and
+`"postCreateCommand": "bundle install && bin/rails db:prepare"` left to
+reconcile the drift.
 
 ---
 
@@ -279,7 +306,9 @@ RUN python -m venv /opt/venv && chown -R vscode:vscode /opt/venv
 RUN echo 'export PATH=/opt/venv/bin:$PATH' > /etc/profile.d/venv.sh
 ```
 
-and `"postCreateCommand": "pip install -r requirements.txt && python manage.py migrate"`.
+with `COPY requirements.txt ./` + `RUN pip install -r requirements.txt` in the
+image, and `"postCreateCommand": "pip install -r requirements.txt && python
+manage.py migrate"` left to reconcile the drift.
 
 ---
 
