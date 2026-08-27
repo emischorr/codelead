@@ -31,7 +31,7 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
         id="terminal"
         phx-hook=".Terminal"
         phx-update="ignore"
-        class="flex min-h-0 flex-1 flex-col bg-term-bg"
+        class="relative flex min-h-0 flex-1 flex-col bg-term-bg"
       >
         <div
           data-role="status"
@@ -49,6 +49,19 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
           </button>
         </div>
         <div data-role="xterm" class="min-h-0 flex-1 px-2 py-1.5"></div>
+
+        <div class="absolute top-2 right-2 z-10 lg:hidden">
+          <button
+            data-role="ctrl-c"
+            hidden
+            type="button"
+            aria-label="Send Ctrl+C"
+            title="Send Ctrl+C"
+            class="size-6 items-center justify-center rounded-[6px] border border-border/60 bg-term-bg/90 font-mono text-[10px] font-semibold text-term-text hover:bg-white/10 [&:not([hidden])]:flex"
+          >
+            ^C
+          </button>
+        </div>
       </div>
 
       <div :if={!@path} class="min-h-0 flex-1 bg-term-bg p-4 sm:p-5">
@@ -75,6 +88,7 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
           this.statusBar = this.el.querySelector("[data-role=status]")
           this.statusText = this.el.querySelector("[data-role=status-text]")
           this.restart = this.el.querySelector("[data-role=restart]")
+          this.ctrlC = this.el.querySelector("[data-role=ctrl-c]")
 
           this.term = new Terminal({
             convertEol: true,
@@ -118,6 +132,14 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
             this.connect()
           })
 
+          this.ctrlC.addEventListener("click", () => {
+            this.pushEvent("terminal_input", { data: toB64("\x03") })
+            // The click blurs xterm's input capture (and, on mobile,
+            // dismisses the on-screen keyboard) — reclaim focus right
+            // away so it can be reopened without an extra tap.
+            this.term.focus()
+          })
+
           this.connect()
         },
 
@@ -132,6 +154,11 @@ defmodule CodeLeadWeb.TaskLive.TerminalTab do
                 return
               }
               if (reply.scrollback) { this.term.write(fromB64(reply.scrollback)) }
+              // Ctrl+C only reaches the shell as a signal when a real PTY is
+              // allocated (see CodeLead.Terminal.Command); in plain-pipe
+              // mode the byte would just be inserted as ordinary input, so
+              // keep the button hidden there.
+              this.ctrlC.hidden = reply.pty === false
               if (reply.pty === false) {
                 this.showStatus("plain-pipe mode — no prompt echo or line editing (no `script` binary found)")
               }
