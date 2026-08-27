@@ -24,17 +24,68 @@ defmodule CodeLeadWeb.SettingsLive.ProjectsTest do
   end
 
   describe "create" do
-    test "opens the detail page", %{conn: conn} do
+    test "a plain name opens the detail page", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/settings/projects/new")
 
       assert {:ok, _detail, html} =
                view
-               |> form("#project-form", project: %{name: "Apollo"})
+               |> form("#project-form", project: %{source: "Apollo"})
                |> render_submit()
                |> follow_redirect(conn)
 
       assert html =~ "Apollo"
       assert Enum.any?(Projects.list_projects(), &(&1.name == "Apollo"))
+    end
+
+    test "a github.com URL creates the project with its repository linked", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/new")
+
+      assert {:ok, _detail, html} =
+               view
+               |> form("#project-form", project: %{source: "https://github.com/acme/widgets"})
+               |> render_submit()
+               |> follow_redirect(conn)
+
+      assert html =~ "widgets"
+
+      project = Enum.find(Projects.list_projects(), &(&1.name == "widgets"))
+      assert project
+
+      assert [%{name: "widgets", git_url: "https://github.com/acme/widgets"}] =
+               Projects.list_repositories(project.id)
+    end
+
+    test "a gitlab.com URL creates the project with its repository linked", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/new")
+
+      assert {:ok, _detail, _html} =
+               view
+               |> form("#project-form", project: %{source: "https://gitlab.com/acme/widgets"})
+               |> render_submit()
+               |> follow_redirect(conn)
+
+      project = Enum.find(Projects.list_projects(), &(&1.name == "widgets"))
+      assert project
+
+      assert [%{git_url: "https://gitlab.com/acme/widgets"}] =
+               Projects.list_repositories(project.id)
+    end
+
+    test "an unrecognized URL is rejected instead of becoming the name", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/new")
+
+      html =
+        view
+        |> form("#project-form", project: %{source: "https://example.com/acme/widgets"})
+        |> render_change()
+
+      assert html =~ "only github.com and gitlab.com repository URLs are auto-detected"
+
+      view
+      |> form("#project-form", project: %{source: "https://example.com/acme/widgets"})
+      |> render_submit()
+
+      refute Enum.any?(Projects.list_projects(), &(&1.name == "widgets"))
     end
   end
 
