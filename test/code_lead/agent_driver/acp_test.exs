@@ -225,7 +225,13 @@ defmodule CodeLead.AgentDriver.AcpTest do
     assert result.content =~ "exited with status 3"
   end
 
-  test "a stored session id is resumed via session/load", ctx do
+  # ACP's session/load replays the whole prior conversation as
+  # session/update notifications before responding (agent chunks and
+  # tool calls alike — see fake_acp_agent.exs); the driver must not
+  # forward that replay to the runner, since the human already has that
+  # history in the persisted transcript from earlier runs. Only updates
+  # from the live session/prompt turn that follows should surface.
+  test "a stored session id is resumed via session/load, without forwarding the replay", ctx do
     use_scenario("resume")
 
     task = put_context!(ctx.task, acp_session_id: "prior-sess-1")
@@ -234,8 +240,12 @@ defmodule CodeLead.AgentDriver.AcpTest do
     {events, result} = collect_until_result(handle)
 
     assert {:session_started, "prior-sess-1"} in events
+
     chunks = for {:message_chunk, text} <- events, do: text
-    assert Enum.join(chunks) =~ "continuing where we left off"
+    assert chunks == ["continuing where we left off"]
+
+    refute Enum.any?(events, &match?({:tool_call, %{id: "tc-replay"}}, &1))
+
     assert result.status == :ok
     assert result.session_id == "prior-sess-1"
   end

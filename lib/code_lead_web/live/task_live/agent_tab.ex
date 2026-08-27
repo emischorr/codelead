@@ -181,6 +181,27 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
     """
   end
 
+  # The request-changes feedback that became the rework prompt — styled
+  # apart from the agent's own messages (accent border/chip) so the human
+  # can tell at a glance which turn is theirs.
+  defp feed_block(%{block: %{kind: :human_message}} = assigns) do
+    assigns = assign(assigns, :row, hd(assigns.block.rows))
+
+    ~H"""
+    <div id={@id} class="rounded-[11px] border border-accent/40 bg-accent-soft p-3.5">
+      <div class="mb-1.5 flex items-center gap-2">
+        <span class="rounded-[5px] bg-accent px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-white">
+          REQUEST CHANGES
+        </span>
+        <span class="ml-auto shrink-0 font-mono text-[10px] text-text3">
+          {Format.time(@row.inserted_at)}
+        </span>
+      </div>
+      <p class="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-text" phx-no-format>{@row.text}</p>
+    </div>
+    """
+  end
+
   # A question is the one row a human is expected to act on, so it grows
   # a form instead of a pair of buttons.
   defp feed_block(%{block: %{rows: [%{kind: :question} | _rest]}} = assigns) do

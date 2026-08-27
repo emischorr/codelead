@@ -13,6 +13,11 @@ defmodule CodeLead.AgentFeed.AgentEvent do
   the human is asked to fill plus the `"answers"` that went back).
   `streaming` marks the message row the runner is still appending to.
 
+  `:human_message` is the one kind the agent never writes itself — the
+  runner records it for a rework dispatch, so the request-changes
+  feedback that became the next prompt shows up in the transcript as
+  what it is, instead of only being inferable from the agent's reply.
+
   `data` is a jsonb column and only its top level is stringified on
   write, so anything nested — a question's fields — must be written
   string-keyed by the producer or a live viewer and a reload will
@@ -25,7 +30,7 @@ defmodule CodeLead.AgentFeed.AgentEvent do
 
   @type t :: %__MODULE__{}
 
-  @kinds [:run_started, :message, :tool_call, :question, :permission, :result]
+  @kinds [:run_started, :human_message, :message, :tool_call, :question, :permission, :result]
 
   schema "agent_events" do
     field :task_id, :id

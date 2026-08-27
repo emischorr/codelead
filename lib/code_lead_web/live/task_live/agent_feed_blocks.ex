@@ -13,7 +13,7 @@ defmodule CodeLeadWeb.TaskLive.AgentFeedBlocks do
 
   @type block :: %{
           id: pos_integer(),
-          kind: :tools | :message | :notice,
+          kind: :tools | :message | :human_message | :notice,
           rows: [AgentEvent.t()],
           expanded?: boolean(),
           pinned?: boolean()
@@ -85,6 +85,7 @@ defmodule CodeLeadWeb.TaskLive.AgentFeedBlocks do
 
   defp block_kind(:tool_call), do: :tools
   defp block_kind(:message), do: :message
+  defp block_kind(:human_message), do: :human_message
   defp block_kind(_kind), do: :notice
 
   defp expand_last(blocks, false), do: blocks

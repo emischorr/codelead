@@ -203,6 +203,20 @@ defmodule CodeLead.AgentDriver.Acp do
 
   def handle_info({:acp_response, _stale_ref, _reply}, state), do: {:noreply, state}
 
+  # Per the ACP spec, `session/load` replays the whole prior conversation
+  # as `session/update` notifications before responding — the human
+  # already has that history in the persisted transcript from earlier
+  # runs, so forwarding it here would duplicate every message in the
+  # Agent tab. Dropped outright rather than merged into driver state:
+  # the live prompt's own updates (usage included) are complete on
+  # their own.
+  def handle_info(
+        {:acp_notification, "session/update", _params},
+        %{stage: {:loading_session, _ref}} = state
+      ) do
+    {:noreply, state}
+  end
+
   def handle_info({:acp_notification, "session/update", params}, state) do
     {:noreply, handle_session_update(params["update"] || %{}, state)}
   end

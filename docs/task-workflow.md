@@ -257,6 +257,17 @@ model latency, background interleaving does not. Rows closed by a
 question, permission, result, or shutdown are never reopened — those are
 real interruptions.
 
+A rework dispatch (`request_changes/2`, `context_policy: :carry`) sends
+the human's feedback as the whole next prompt (`TaskRunner.build_prompt/1`)
+and resumes the carried ACP session via `session/load`. Two
+consequences land in the transcript: the runner records the feedback
+itself as a `:human_message` row right after `:run_started`, so the
+Agent tab shows what the human actually asked for; and the driver drops
+every `session/update` the harness emits while `session/load` is still
+pending, because the ACP spec has it replay the whole prior
+conversation before responding, and that history is already in the
+transcript from earlier runs (see `docs/agent-drivers.md`).
+
 `send_back_to_planning/1` discards the worktree, branch, and ACP
 session, but **keeps** the transcript: history the human may still want
 to read is not context the next run would inherit. The discard runs

@@ -53,10 +53,24 @@ defmodule FakeAcpAgent do
     state
   end
 
+  # Mirrors the real spec: `session/load` MUST replay the entire prior
+  # conversation as `session/update` notifications — messages and tool
+  # calls alike — before responding to the request itself.
   defp handle(state, %{"method" => "session/load", "id" => id}) do
     notify("session/update", %{
       sessionId: "resumed",
       update: %{sessionUpdate: "agent_message_chunk", content: %{type: "text", text: "replayed"}}
+    })
+
+    notify("session/update", %{
+      sessionId: "resumed",
+      update: %{
+        sessionUpdate: "tool_call",
+        toolCallId: "tc-replay",
+        title: "Read README",
+        kind: "read",
+        status: "completed"
+      }
     })
 
     respond(id, nil)
