@@ -189,6 +189,44 @@ defmodule CodeLead.RuntimeTest do
     end
   end
 
+  describe "request-changes rework dispatch" do
+    # End to end: a fresh run lands in Review, request-changes sends it
+    # back to Running with feedback, and the resumed ACP session replays
+    # its prior turn (per spec, session/load streams the whole
+    # conversation back before responding — see fake_acp_agent.exs). The
+    # Agent tab must show the human's feedback, not the replay.
+    test "shows the feedback as its own row and drops the session/load replay" do
+      use_scenario("happy")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      assert {:ok, _task} = Runtime.start_task(task)
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      task = Tasks.get_task!(task.id)
+      assert task.state == :review
+      assert task.acp_session_id == "fake-sess-happy"
+
+      use_scenario("resume")
+      assert {:ok, task} = Runtime.request_changes(task, "please add tests")
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+
+      events = AgentFeed.list_run(task.id)
+      assert [:run_started, :human_message, :message, :result] = Enum.map(events, & &1.kind)
+
+      human_row = Enum.find(events, &(&1.kind == :human_message))
+      assert human_row.text == "please add tests"
+
+      message_row = Enum.find(events, &(&1.kind == :message))
+      assert message_row.text == "continuing where we left off"
+      refute message_row.text =~ "replayed"
+
+      refute Enum.any?(events, &(&1.kind == :tool_call))
+    end
+  end
+
   describe "scheduler holds" do
     test "budget hold keeps the task queued" do
       use_scenario("happy")

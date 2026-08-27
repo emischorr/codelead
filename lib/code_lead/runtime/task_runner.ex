@@ -267,6 +267,18 @@ defmodule CodeLead.Runtime.TaskRunner do
         text: "#{agent.name} started"
       })
 
+      # A rework dispatch's whole prompt is the human's feedback verbatim
+      # (see build_prompt/1) — record it as its own row so the Agent tab
+      # shows what the human actually asked for, instead of only the
+      # agent's reply to a prompt the human never sees.
+      if task.next_prompt do
+        AgentFeed.record_event(task.id, %{
+          kind: :human_message,
+          task_step_id: step.id,
+          text: task.next_prompt
+        })
+      end
+
       broadcast_event(task, {:run_started, agent.name})
 
       {:noreply,

@@ -1132,6 +1132,16 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert has_element?(view, "#{block_id(row)} .md li", "two")
     end
 
+    test "a request-changes message renders as its own bubble, not an agent message", ctx do
+      %{conn: conn, project: project, task: task} = ctx
+      row = feed_row(task, kind: :human_message, text: "Tighten the lock scope")
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "agent"))
+
+      assert has_element?(view, "#{block_id(row)}", "REQUEST CHANGES")
+      assert has_element?(view, "#{block_id(row)}", "Tighten the lock scope")
+    end
+
     test "a shell tool call reads as description then command, each once", ctx do
       %{conn: conn, project: project, task: task} = ctx
 

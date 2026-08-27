@@ -69,6 +69,14 @@ output — needs its own payload budget) and `agent_thought_chunk`
   fall back to a fresh session) → `session/prompt`, and translates
   `session/update` notifications into normalized events. Extra event:
   `{:session_started, id}` for the runner to persist.
+  - **Session/load replay is dropped, not forwarded.** Per the ACP
+    spec, `session/load` replays the entire prior conversation as
+    `session/update` notifications before it responds — the human
+    already has that history in the persisted transcript from earlier
+    runs (see `docs/task-workflow.md`), so the driver ignores every
+    `session/update` that arrives while still in the `:loading_session`
+    stage. Only updates from the `session/prompt` turn that follows are
+    translated into events.
   - **Permission policy:** in-sandbox requests are auto-granted. A
     request whose tool-call locations all sit under the context path
     passes regardless of kind; a location-less request passes only for
