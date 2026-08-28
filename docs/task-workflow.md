@@ -74,6 +74,21 @@ or failed task is in the Running stage with nothing to hand to Review.
   nothing clears it, and `archive/1` deliberately leaves it intact —
   archiving hides a card, it does not un-do the work. Any future reopen
   transition must set `completed_at: nil` or throughput double-counts.
+- **`task_state_transitions` table (addition):** a general history of
+  every Kanban-column move (`from_state`/`to_state`/`inserted_at`),
+  written by `transition/3` whenever `changes` carries `:state` — i.e.
+  every `apply_transition/3` call, never the direct `transition/3`
+  calls that only move `run_state` within a stage (`begin_dispatch/1`,
+  `mark_executing/2`, `retry_run/1`, `clear_schedule/1`). Added because
+  Running is re-enterable (cancel→retry, request-changes rework) and no
+  column captures "first entered Running" — `Tasks.avg_cycle_time_ms/1`
+  reads it as `min(inserted_at)` per task, filtered to `to_state:
+  :running`, so a rework re-entry never reads as a fresh start. Unlike
+  `completed_at`, this is a table rather than another one-off column:
+  the same shape answers any future per-stage timing question without
+  another migration. No backfill — tasks completed before this table
+  existed have no rows and are excluded from the cycle-time average
+  rather than counted wrong.
 - `attention := :review_ready` is set by the review fan-out once the
   cycle completes (Step 11); until reviewers exist, entry into Review
   carries no attention.

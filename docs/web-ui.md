@@ -279,7 +279,16 @@ whose id has no runner process has lost it.
 
 The lead-time tile is labelled **"Avg lead time · created → approved"**,
 not cycle time — `Tasks.avg_lead_time_ms/1` includes however long the
-task sat in Planning waiting on a human.
+task sat in Planning waiting on a human. The cycle-time tile below it
+is the actual Running → Done figure, `Tasks.avg_cycle_time_ms/1`,
+reading a task's *first* entry into Running from the
+`task_state_transitions` history table (see
+[`task-workflow.md`](task-workflow.md)) — a re-enterable stage, so the
+latest entry would understate rework. The spend tile next to both
+shows the same 14-day window as the chart above it
+(`Costs.daily_series/1`, already loaded by `load_dashboard/1`) with
+tokens and run count as its subtitle; there is no longer a separate
+token-count tile.
 
 Panels live in `CodeLeadWeb.DashboardLive.Widgets`. Both charts are the
 same `bar_chart/1`: pure CSS, no library and no asset. The bar *is* the

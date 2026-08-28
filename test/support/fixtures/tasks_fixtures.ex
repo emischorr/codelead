@@ -8,6 +8,7 @@ defmodule CodeLead.TasksFixtures do
 
   alias CodeLead.Repo
   alias CodeLead.Tasks
+  alias CodeLead.Tasks.TaskStateTransition
 
   def task_fixture(project_id, attrs \\ %{}) do
     {:ok, task} =
@@ -62,5 +63,19 @@ defmodule CodeLead.TasksFixtures do
   """
   def put_context!(task, attrs) do
     task |> Ecto.Changeset.change(attrs) |> Repo.update!()
+  end
+
+  @doc """
+  Backdates a state-transition history row directly, for tests that need
+  to control "when did this task first enter Running" independently of
+  `put_context!/2` (which only touches the `tasks` row itself).
+  """
+  def put_state_transition!(task, from_state, to_state, at) do
+    Repo.insert!(%TaskStateTransition{
+      task_id: task.id,
+      from_state: from_state,
+      to_state: to_state,
+      inserted_at: DateTime.truncate(at, :second)
+    })
   end
 end
