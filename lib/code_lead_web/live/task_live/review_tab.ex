@@ -25,6 +25,11 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :finding_expanded, :any, default: nil
   attr :finding_action, :map, default: nil
   attr :review_raw_expanded, :any, default: nil, doc: "MapSet of review ids showing raw"
+
+  attr :review_narrative_expanded, :any,
+    default: nil,
+    doc: "MapSet of review ids with the narrative toggled from its default"
+
   attr :forge, :any, default: :other
   attr :default_branch, :string, default: nil
   attr :diff_files, :list, default: nil
@@ -85,6 +90,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
           finding_expanded={@finding_expanded}
           finding_action={@finding_action}
           review_raw_expanded={@review_raw_expanded}
+          review_narrative_expanded={@review_narrative_expanded}
           forge={@forge}
           default_branch={@default_branch}
           diff_files={@diff_files}
@@ -185,6 +191,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :finding_expanded, :any, default: nil
   attr :finding_action, :map, default: nil
   attr :review_raw_expanded, :any, default: nil
+  attr :review_narrative_expanded, :any, default: nil
   attr :forge, :any, default: :other
   attr :default_branch, :string, default: nil
   attr :diff_files, :list, default: nil
@@ -226,6 +233,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
             finding_expanded={@finding_expanded}
             finding_action={@finding_action}
             review_raw_expanded={@review_raw_expanded}
+            review_narrative_expanded={@review_narrative_expanded}
             forge={@forge}
             default_branch={@default_branch}
           />
@@ -420,6 +428,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :finding_expanded, :any, default: nil
   attr :finding_action, :map, default: nil
   attr :review_raw_expanded, :any, default: nil
+  attr :review_narrative_expanded, :any, default: nil
   attr :forge, :any, default: :other
   attr :default_branch, :string, default: nil
 
@@ -441,6 +450,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         finding_expanded={@finding_expanded}
         finding_action={@finding_action}
         review_raw_expanded={@review_raw_expanded}
+        review_narrative_expanded={@review_narrative_expanded}
         forge={@forge}
         default_branch={@default_branch}
       />
@@ -456,6 +466,7 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   attr :finding_expanded, :any, default: nil
   attr :finding_action, :map, default: nil
   attr :review_raw_expanded, :any, default: nil
+  attr :review_narrative_expanded, :any, default: nil
   attr :forge, :any, default: :other
   attr :default_branch, :string, default: nil
 
@@ -468,13 +479,25 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
       assigns.review_raw_expanded != nil and
         MapSet.member?(assigns.review_raw_expanded, review.id)
 
+    narrative_toggled? =
+      assigns.review_narrative_expanded != nil and
+        MapSet.member?(assigns.review_narrative_expanded, review.id)
+
+    findings = Enum.filter(assigns.review_findings, &(&1.agent_id == review.agent_id))
+
+    # Collapsed by default when findings exist to review; open by
+    # default when there's nothing else to look at. A click flips it
+    # away from that default, tracked per review id.
+    narrative_open_by_default? = findings == []
+
     assigns =
       assign(assigns,
-        findings: Enum.filter(assigns.review_findings, &(&1.agent_id == review.agent_id)),
+        findings: findings,
         parse_failed?: parse_failed?,
         raw?: parse_failed? or raw_toggled?,
         raw_toggled?: raw_toggled?,
-        narrative: report && report.narrative
+        narrative: report && report.narrative,
+        narrative_expanded?: narrative_open_by_default? != narrative_toggled?
       )
 
     ~H"""
@@ -500,6 +523,16 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
             Could not parse this report — showing it raw.
           </p>
           <button
+            :if={!@raw? && @narrative not in [nil, ""]}
+            type="button"
+            id={"toggle-review-narrative-#{@review.id}"}
+            phx-click="toggle_review_narrative"
+            phx-value-id={@review.id}
+            class="cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            {if @narrative_expanded?, do: "Hide summary", else: "Show summary"}
+          </button>
+          <button
             :if={!@parse_failed?}
             type="button"
             id={"toggle-review-raw-#{@review.id}"}
@@ -519,7 +552,8 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         />
 
         <.markdown
-          :if={!@raw? && @narrative not in [nil, ""]}
+          :if={!@raw? && @narrative not in [nil, ""] && @narrative_expanded?}
+          id={"review-narrative-#{@review.id}"}
           text={@narrative}
           class="text-[13px]"
         />
