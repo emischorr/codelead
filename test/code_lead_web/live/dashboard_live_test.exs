@@ -275,7 +275,7 @@ defmodule CodeLeadWeb.DashboardLiveTest do
 
       html = view |> element("#global-search-results") |> render()
       assert html =~ "2 more results"
-      assert LazyHTML.from_fragment(html) |> LazyHTML.query("a") |> length() == 5
+      assert LazyHTML.from_fragment(html) |> LazyHTML.query("a") |> Enum.count() == 5
     end
   end
 end

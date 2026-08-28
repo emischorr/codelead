@@ -158,6 +158,149 @@ defmodule CodeLead.ReviewsTest do
     assert review_prompt =~ "- Retry policy: retry 3x, then hold"
   end
 
+  test "a structured report yields the verdict, finding rows, and the raw store" do
+    %{task: task, reviewers: [reviewer]} = content_task_with_reviewers(1)
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+
+    test_pid = self()
+
+    report = """
+    The copy reads well but the CTA is weak.
+
+    ```json
+    {"verdict": "concerns", "findings": [{"title": "CTA is passive", "severity": "high", "body": "Use an imperative.", "paths": ["output.md"]}], "prior": []}
+    ```
+    """
+
+    stub_llm(fn conn, body ->
+      if body["system"] in [nil, ""] do
+        reply(conn, "Executor output.")
+      else
+        send(test_pid, {:review_prompt, hd(body["messages"])["content"]})
+        reply(conn, report)
+      end
+    end)
+
+    {:ok, _} = Runtime.start_task(task)
+    await_review_ready(task.id)
+
+    # the prompt carries the shared two-part contract with the verdict key
+    assert_receive {:review_prompt, prompt}
+    assert prompt =~ "Write your report in two parts."
+    assert prompt =~ ~s("verdict": "pass" | "concerns" | "block")
+
+    assert [review] = Reviews.list_reviews(task.id)
+    assert review.verdict == :concerns
+    # the raw report is stored verbatim; structure is derived on read
+    assert review.findings =~ "CTA is weak"
+    assert review.findings =~ ~s("verdict")
+
+    assert [finding] = Findings.list(task.id, :review)
+    assert finding.phase == :review
+    assert finding.title == "CTA is passive"
+    assert finding.severity == :high
+    assert finding.agent_id == reviewer.id
+    assert finding.first_seen_step_id == review.task_step_id
+  end
+
+  test "a verdict-only reply records the verdict and no finding rows" do
+    %{task: task} = content_task_with_reviewers(1)
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+
+    stub_llm(fn conn, body ->
+      if body["system"] in [nil, ""] do
+        reply(conn, "Executor output.")
+      else
+        reply(conn, ~s({"verdict": "concerns"}))
+      end
+    end)
+
+    {:ok, _} = Runtime.start_task(task)
+    await_review_ready(task.id)
+
+    assert [review] = Reviews.list_reviews(task.id)
+    assert review.verdict == :concerns
+    assert review.findings == ~s({"verdict": "concerns"})
+    assert Findings.list(task.id, :review) == []
+  end
+
+  test "cycle two prompts list only the reviewer's own prior findings" do
+    project = project_fixture()
+    executor = agent_fixture(%{driver: :llm_api, work_type: :content, roles: [:execute]})
+
+    reviewer_one =
+      agent_fixture(%{
+        driver: :llm_api,
+        work_type: :content,
+        roles: [:review],
+        system_prompt: "Reviewer One"
+      })
+
+    reviewer_two =
+      agent_fixture(%{
+        driver: :llm_api,
+        work_type: :content,
+        roles: [:review],
+        system_prompt: "Reviewer Two"
+      })
+
+    task =
+      task_fixture(project.id, %{
+        title: "Hero copy",
+        work_type: :content,
+        target: :folder,
+        agent_id: executor.id
+      })
+
+    :ok = Tasks.set_reviewers(task, [reviewer_one.id, reviewer_two.id])
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+
+    test_pid = self()
+
+    structured = fn title, severity ->
+      """
+      Report.
+
+      ```json
+      {"verdict": "concerns", "findings": [{"title": "#{title}", "severity": "#{severity}"}], "prior": []}
+      ```
+      """
+    end
+
+    stub_llm(fn conn, body ->
+      case body["system"] do
+        system when system in [nil, ""] ->
+          reply(conn, "Executor output.")
+
+        "Reviewer One" = system ->
+          send(test_pid, {:prompt, system, hd(body["messages"])["content"]})
+          reply(conn, structured.("Intro finding one", "medium"))
+
+        "Reviewer Two" = system ->
+          send(test_pid, {:prompt, system, hd(body["messages"])["content"]})
+          reply(conn, structured.("CTA finding two", "low"))
+      end
+    end)
+
+    {:ok, _} = Runtime.start_task(task)
+    assert await_review_ready(task.id) == 1
+    assert_receive {:prompt, "Reviewer One", _first}
+    assert_receive {:prompt, "Reviewer Two", _first}
+
+    task = Tasks.get_task!(task.id)
+    {:ok, _task} = Runtime.request_changes(task, "Tighten it.")
+    assert await_review_ready(task.id) == 2
+
+    assert_receive {:prompt, "Reviewer One", prompt_one}, 20_000
+    assert prompt_one =~ "## Prior findings"
+    assert prompt_one =~ "Intro finding one"
+    refute prompt_one =~ "CTA finding two"
+
+    assert_receive {:prompt, "Reviewer Two", prompt_two}, 20_000
+    assert prompt_two =~ "CTA finding two"
+    refute prompt_two =~ "Intro finding one"
+  end
+
   test "a crashing reviewer records a failed review and never blocks the cycle" do
     %{task: task} = content_task_with_reviewers(1)
     Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")

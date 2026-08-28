@@ -39,6 +39,7 @@ defmodule CodeLead.Planning do
   alias CodeLead.Costs
   alias CodeLead.Executor.Context
   alias CodeLead.Findings
+  alias CodeLead.Findings.Report
   alias CodeLead.Git
   alias CodeLead.Planning.PlanningMessage
   alias CodeLead.Projects
@@ -325,8 +326,9 @@ defmodule CodeLead.Planning do
   defp findings(%{status: :ok} = result), do: result[:content] || "The run returned nothing."
   defp findings(%{status: status} = result), do: "Refinement #{status}: #{result[:content]}"
 
-  # The report contract shared by both refinement depths: the lenses,
-  # the two-part output shape, and the prior-classification rules.
+  # The report contract shared by both refinement depths: the planning
+  # lenses around the phase-agnostic output shape
+  # (`Findings.Report.output_contract/1`).
   defp report_contract do
     """
     Look for three things: requirements gaps (what someone implementing \
@@ -341,41 +343,7 @@ defmodule CodeLead.Planning do
     structure, the fact that code exists. Report only things someone \
     scoping this specific task would act on.
 
-    Write your report in two parts.
-
-    Part 1 — a short markdown narrative: what exists today that is \
-    relevant to this task, with file paths. Be specific and cite paths. \
-    No process narration, no restating the task.
-
-    Part 2 — exactly one fenced ```json block, the last thing in your \
-    output. Open the fence on a line of its own, with the JSON object \
-    starting on the next line. Use this shape:
-
-    {
-      "findings": [
-        {
-          "title": "one line, imperative or noun phrase, ≤ 120 chars",
-          "severity": "high" | "medium" | "low",
-          "body": "markdown; why it matters and what has to be decided",
-          "paths": ["lib/foo.ex", "lib/bar.ex:42"]
-        }
-      ],
-      "prior": [
-        { "id": 12, "status": "still_open" | "resolved" | "not_applicable" }
-      ]
-    }
-
-    Inside "body", write quoted phrases with backticks or single \
-    quotes — never raw double quotes, which break the JSON.
-
-    Severity: high = must be decided before this task can run; medium = \
-    should be decided, an implementer could guess wrong; low = worth \
-    clarifying, low risk either way.
-
-    Do not repeat a prior finding as a new one. If a prior finding is \
-    now covered by the spec or the decisions, mark it "resolved". If \
-    the task changed so it no longer applies, mark it "not_applicable". \
-    "prior" may be empty when there are no prior findings.
+    #{Report.output_contract(narrative: "what exists today that is relevant to this task, with file paths. Be specific and cite paths. No process narration, no restating the task.", body: "why it matters and what has to be decided", severity: "high = must be decided before this task can run; medium = should be decided, an implementer could guess wrong; low = worth clarifying, low risk either way.", prior: ~s(If a prior finding is now covered by the spec or the decisions, mark it "resolved". If the task changed so it no longer applies, mark it "not_applicable".))}
 
     This report is advisory: the human rewrites the spec, not you.\
     """
@@ -395,29 +363,8 @@ defmodule CodeLead.Planning do
   # All prior findings — every state — so the agent classifies instead
   # of re-reporting, and never re-adds a dismissed item as new.
   defp prior_findings_section(%Task{} = task) do
-    case Findings.prior_for_prompt(task.id, :planning) do
-      [] ->
-        ""
-
-      prior ->
-        lines = Enum.map_join(prior, "\n", &prior_line/1)
-        "\n## Prior findings (classify each in \"prior\")\n" <> lines <> "\n"
-    end
+    task.id |> Findings.prior_for_prompt(:planning) |> Findings.prior_section()
   end
-
-  defp prior_line(%{id: id, title: title} = finding) do
-    "- [#{id}] (#{prior_status(finding)}) #{title}"
-  end
-
-  defp prior_status(%{resolution: resolution, resolution_note: note})
-       when resolution in [:addressed, :dismissed] do
-    label = "#{resolution} by human"
-    if note, do: ~s(#{label}: "#{note}"), else: label
-  end
-
-  defp prior_status(%{observed: :not_applicable}), do: "marked not applicable in an earlier run"
-  defp prior_status(%{observed: :resolved}), do: "an earlier run considered this resolved"
-  defp prior_status(_finding), do: "open"
 
   defp decisions_section(%Task{} = task) do
     case Findings.decisions_block(task.id) do

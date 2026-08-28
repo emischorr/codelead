@@ -4,15 +4,18 @@ defmodule CodeLead.Findings do
   resolutions on them.
 
   Two owners, one row: an agent run writes the observation side
-  (`apply_report/5` — insert new findings, reclassify prior ones), a
+  (`apply_report/6` — insert new findings, reclassify prior ones), a
   human writes the resolution side (`resolve/4`, `reopen/1`). An agent
   never clears, sets, or changes a resolution; reconciliation across
   runs is done by the agent classifying prior findings in its report,
   never by fuzzy matching here.
 
-  Resolutions with a note flow into agent prompts via
-  `decisions_block/1` — addressed items as decisions, dismissed items
-  as out-of-scope. A resolution without a note flows nowhere.
+  Resolutions flow downstream per phase. Planning resolutions with a
+  note feed agent prompts via `decisions_block/1` — addressed items as
+  decisions, dismissed items as out-of-scope; a resolution without a
+  note flows nowhere. Review resolutions feed the request-changes
+  prefill via `review_feedback_block/1` — addressed items become the
+  suggested rework feedback, note optional.
   """
 
   import Ecto.Query
@@ -58,19 +61,33 @@ defmodule CodeLead.Findings do
   Parses a run's report and applies it: prior classifications bump the
   observation side, new items become rows. Returns the run's delta, or
   `:error` (writing nothing) when no findings block parses.
+
+  With `prior_scope: :agent`, prior classifications only touch rows
+  this agent reported — reviewers run fanned out per cycle and must
+  not reclassify each other's findings. The default `:task` scope
+  keeps planning's hand-off between survey depths working.
   """
   @spec apply_report(
           Tasks.Task.t(),
           atom(),
           TaskStep.t(),
           CodeLead.Agents.Agent.t(),
-          String.t() | nil
+          String.t() | nil,
+          keyword()
         ) ::
           {:ok, delta()} | :error
-  def apply_report(task, phase, step, agent, content) do
+  def apply_report(task, phase, step, agent, content, opts \\ []) do
     case Report.extract(content) do
       {:ok, payload, _narrative} ->
-        prior_counts = apply_prior(task.id, phase, step.id, Report.prior(payload))
+        prior_agent_id =
+          case Keyword.get(opts, :prior_scope, :task) do
+            :agent -> agent.id
+            :task -> nil
+          end
+
+        prior_counts =
+          apply_prior(task.id, phase, step.id, Report.prior(payload), prior_agent_id)
+
         new = insert_new(task.id, phase, step.id, agent.id, Report.new_findings(payload))
         broadcast(task.id, phase)
         {:ok, Map.put(prior_counts, :new, new)}
@@ -129,10 +146,19 @@ defmodule CodeLead.Findings do
   The prompt-injected Decisions block: noted `:addressed` resolutions
   under `## Decisions`, noted `:dismissed` ones under `## Out of
   scope`. `""` when there is nothing to say — callers append nothing.
+
+  Planning-phase only: a review "addressed" means "fix this next run"
+  and flows through `review_feedback_block/1`, not into decisions.
   """
   @spec decisions_block(pos_integer()) :: String.t()
   def decisions_block(task_id) do
-    findings = Repo.all(from f in Finding, where: f.task_id == ^task_id, order_by: [asc: f.id])
+    findings =
+      Repo.all(
+        from f in Finding,
+          where: f.task_id == ^task_id and f.phase == :planning,
+          order_by: [asc: f.id]
+      )
+
     decisions_block_from(findings)
   end
 
@@ -152,16 +178,63 @@ defmodule CodeLead.Findings do
 
   @doc """
   Prior findings — every state — for injection into a re-run's prompt,
-  so the agent classifies them instead of re-reporting them.
+  so the agent classifies them instead of re-reporting them. Pass
+  `agent_id:` to restrict to one agent's own findings (review cycles
+  fan reviewers out; each classifies only what it reported).
   """
-  @spec prior_for_prompt(pos_integer(), atom()) :: [map()]
-  def prior_for_prompt(task_id, phase) do
-    Repo.all(
+  @spec prior_for_prompt(pos_integer(), atom(), keyword()) :: [map()]
+  def prior_for_prompt(task_id, phase, opts \\ []) do
+    query =
       from f in Finding,
         where: f.task_id == ^task_id and f.phase == ^phase,
         order_by: [asc: f.id],
         select: map(f, [:id, :title, :observed, :resolution, :resolution_note])
-    )
+
+    query =
+      case Keyword.get(opts, :agent_id) do
+        nil -> query
+        agent_id -> where(query, [f], f.agent_id == ^agent_id)
+      end
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Renders `prior_for_prompt/3` results as the prompt section the agent
+  classifies against. `""` when there are none.
+  """
+  @spec prior_section([map()]) :: String.t()
+  def prior_section([]), do: ""
+
+  def prior_section(prior) do
+    lines = Enum.map_join(prior, "\n", &prior_line/1)
+    "\n## Prior findings (classify each in \"prior\")\n" <> lines <> "\n"
+  end
+
+  @doc """
+  The request-changes prefill: review-phase findings the human marked
+  `:addressed` and no later cycle has observed as resolved, one line
+  each, severity-first. `""` when there is nothing to fix.
+  """
+  @spec review_feedback_block(pos_integer()) :: String.t()
+  def review_feedback_block(task_id) do
+    findings =
+      Repo.all(
+        from f in Finding,
+          where:
+            f.task_id == ^task_id and f.phase == :review and
+              f.resolution == :addressed and f.observed == :open,
+          order_by: [asc: f.id]
+      )
+
+    findings
+    |> Enum.sort_by(&{@severity_order[&1.severity], &1.id})
+    |> Enum.map_join("\n", fn f ->
+      case presence(f.resolution_note) do
+        nil -> "- #{f.title}"
+        note -> "- #{f.title}: #{note}"
+      end
+    end)
   end
 
   @doc """
@@ -180,13 +253,18 @@ defmodule CodeLead.Findings do
     )
   end
 
-  defp apply_prior(task_id, phase, step_id, entries) do
+  defp apply_prior(task_id, phase, step_id, entries, agent_id) do
     counts = %{resolved: 0, not_applicable: 0, still_open: 0}
 
     Enum.reduce(entries, counts, fn %{id: id, observed: observed}, acc ->
+      query =
+        from(f in Finding, where: f.id == ^id and f.task_id == ^task_id and f.phase == ^phase)
+
+      query = if agent_id, do: where(query, [f], f.agent_id == ^agent_id), else: query
+
       updated =
         Repo.update_all(
-          from(f in Finding, where: f.id == ^id and f.task_id == ^task_id and f.phase == ^phase),
+          query,
           set: [
             observed: observed,
             last_seen_step_id: step_id,
@@ -222,6 +300,20 @@ defmodule CodeLead.Findings do
 
     length(items)
   end
+
+  defp prior_line(%{id: id, title: title} = finding) do
+    "- [#{id}] (#{prior_status(finding)}) #{title}"
+  end
+
+  defp prior_status(%{resolution: resolution, resolution_note: note})
+       when resolution in [:addressed, :dismissed] do
+    label = "#{resolution} by human"
+    if note, do: ~s(#{label}: "#{note}"), else: label
+  end
+
+  defp prior_status(%{observed: :not_applicable}), do: "marked not applicable in an earlier run"
+  defp prior_status(%{observed: :resolved}), do: "an earlier run considered this resolved"
+  defp prior_status(_finding), do: "open"
 
   defp noted(findings, resolution) do
     for f <- findings,

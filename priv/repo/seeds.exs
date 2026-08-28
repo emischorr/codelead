@@ -140,7 +140,19 @@ seed_agent.(%{
     "You write clear, concise product copy in the project's voice. Prefer short sentences and concrete benefits."
 })
 
-IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 5 agents")
+seed_agent.(%{
+  name: "Style Editor",
+  scope: :org,
+  roles: [:review],
+  work_type: :content,
+  driver: :llm_api,
+  provider_id: anthropic.id,
+  model_variant: "claude-haiku-4-5-20251001",
+  system_prompt:
+    "You review copy for tone, clarity, and consistency with the style guide. Be direct and quote the lines you would change."
+})
+
+IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 6 agents")
 
 # Demo project with tasks across the board (skipped if it exists).
 alias CodeLead.Projects
@@ -207,6 +219,8 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
 
   alias CodeLead.AgentFeed
   alias CodeLead.Costs
+  alias CodeLead.Findings.Finding
+  alias CodeLead.Planning.PlanningMessage
   alias CodeLead.Repo
   alias CodeLead.Reviews.Review
 
@@ -257,7 +271,9 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       run_state: :failed
     )
 
-  {:ok, failed} = Tasks.set_attention(failed, :run_failed, "mix test exited with status 1")
+  {:ok, failed} =
+    Tasks.set_attention(failed, :run_failed, "mix test exited with status 1", :executor)
+
   fake_run.(failed, judy, 122_000, 141, 45, 214_000)
   Tasks.record_step(failed.id, :transition, :human, "human", "moved to Running (queued)")
   Tasks.record_step(failed.id, :run, :agent, judy.name, "run started")
@@ -288,7 +304,12 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   :ok = Tasks.set_reviewers(review, [auditor.id, judy.id])
 
   {:ok, review} =
-    Tasks.set_attention(review, :review_ready, "2 reviewers finished · 1 pass, 1 concerns")
+    Tasks.set_attention(
+      review,
+      :review_ready,
+      "2 reviewers finished · 1 pass, 1 concerns",
+      :advisory
+    )
 
   fake_run.(review, judy, 412_300, 342, 120, 1_284_000)
   fake_run.(review, auditor, 44_200, 46, 60, 47_500)
@@ -367,26 +388,194 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   ]
   |> Enum.each(&AgentFeed.record_event(review.id, &1))
 
+  # Reviews in the shared two-part contract: narrative + fenced JSON
+  # payload carrying the verdict, itemized as `phase: :review` findings.
+  auditor_step =
+    Tasks.record_step(
+      review.id,
+      :review,
+      :agent,
+      auditor.name,
+      "review cycle 1: pass",
+      Integer.to_string(auditor.id)
+    )
+
   Repo.insert!(%Review{
     task_id: review.id,
+    task_step_id: auditor_step.id,
     cycle: 1,
     agent_id: auditor.id,
     verdict: :pass,
-    findings:
-      "No injection risks or secret leakage in the changed files. Lock scoping looks correct."
+    findings: """
+    No injection risks or secret leakage in the changed files. Lock
+    scoping looks correct.
+
+    ```json
+    {"verdict": "pass", "findings": [], "prior": []}
+    ```
+    """
   })
+
+  judy_step =
+    Tasks.record_step(
+      review.id,
+      :review,
+      :agent,
+      judy.name,
+      "review cycle 1: concerns",
+      Integer.to_string(judy.id)
+    )
 
   Repo.insert!(%Review{
     task_id: review.id,
+    task_step_id: judy_step.id,
     cycle: 1,
     agent_id: judy.id,
     verdict: :concerns,
-    findings:
-      "1. acquire_lock/2 retries swallow the abort reason — log it.\n2. schedule_retry/1 has no backoff cap; a stuck tree retries forever."
+    findings: """
+    The lock scoping is right, but two details of the retry path worry
+    me — see the findings.
+
+    ```json
+    {"verdict": "concerns", "findings": [{"title": "Cap the retry backoff in schedule_retry/1", "severity": "high", "body": "A stuck tree retries forever; add a max attempts or ceiling.", "paths": ["lib/code_lead/workspace.ex"]}, {"title": "Log the abort reason in acquire_lock/2 retries", "severity": "low", "body": "Retries swallow the abort reason, which makes stuck locks hard to debug.", "paths": ["lib/code_lead/workspace.ex:88"]}], "prior": []}
+    ```
+    """
   })
 
-  # Done column: approved with a finalizer note.
+  Repo.insert!(%Finding{
+    task_id: review.id,
+    phase: :review,
+    agent_id: judy.id,
+    first_seen_step_id: judy_step.id,
+    last_seen_step_id: judy_step.id,
+    severity: :high,
+    title: "Cap the retry backoff in schedule_retry/1",
+    body: "A stuck tree retries forever; add a max attempts or ceiling.",
+    paths: ["lib/code_lead/workspace.ex"],
+    observed: :open
+  })
+
+  Repo.insert!(%Finding{
+    task_id: review.id,
+    phase: :review,
+    agent_id: judy.id,
+    first_seen_step_id: judy_step.id,
+    last_seen_step_id: judy_step.id,
+    severity: :low,
+    title: "Log the abort reason in acquire_lock/2 retries",
+    body: "Retries swallow the abort reason, which makes stuck locks hard to debug.",
+    paths: ["lib/code_lead/workspace.ex:88"],
+    observed: :open
+  })
+
+  # Planning column: a task whose repo survey already reported findings —
+  # one addressed (feeds the Decisions block), one dismissed, one open.
+  surveyor = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Survey (Repo-aware Planner)")
+
+  {:ok, surveyed} =
+    Tasks.create_task(project.id, %{
+      title: "CSV export for cost rollups",
+      description: "Let the owner download the monthly cost rollup as CSV.",
+      work_type: :code,
+      agent_id: judy.id
+    })
+
+  survey_step = Tasks.record_step(surveyed.id, :plan, :agent, surveyor.name, "repo survey: ok")
+
+  survey_report = """
+  Cost rollups live in `lib/code_lead/costs.ex` (nightly Oban job, one
+  row per day and provider). There is no export path and no controller
+  that streams a download yet; the dashboard reads the rollups through
+  `Costs.project_spend_month/1`.
+
+  ```json
+  {"findings": [{"title": "Decide the CSV column set and date range", "severity": "high", "body": "The rollup table carries more than the dashboard shows; the spec has to pick columns.", "paths": ["lib/code_lead/costs.ex"]}, {"title": "Choose streaming vs. one-shot download", "severity": "medium", "body": "A year of rollups is small; a plain controller response is probably enough.", "paths": []}, {"title": "Filename convention for the download", "severity": "low", "body": "Pick something stable for spreadsheets, e.g. costs-<project>-<month>.csv.", "paths": []}], "prior": []}
+  ```
+  """
+
+  Repo.insert!(%PlanningMessage{
+    task_id: surveyed.id,
+    agent_id: surveyor.id,
+    role: :assistant,
+    kind: :survey,
+    content: survey_report
+  })
+
+  survey_finding = fn severity, title, body, paths ->
+    Repo.insert!(%Finding{
+      task_id: surveyed.id,
+      phase: :planning,
+      agent_id: surveyor.id,
+      first_seen_step_id: survey_step.id,
+      last_seen_step_id: survey_step.id,
+      severity: severity,
+      title: title,
+      body: body,
+      paths: paths,
+      observed: :open
+    })
+  end
+
+  columns_finding =
+    survey_finding.(
+      :high,
+      "Decide the CSV column set and date range",
+      "The rollup table carries more than the dashboard shows; the spec has to pick columns.",
+      ["lib/code_lead/costs.ex"]
+    )
+
+  streaming_finding =
+    survey_finding.(
+      :medium,
+      "Choose streaming vs. one-shot download",
+      "A year of rollups is small; a plain controller response is probably enough.",
+      []
+    )
+
+  _open_finding =
+    survey_finding.(
+      :low,
+      "Filename convention for the download",
+      "Pick something stable for spreadsheets, e.g. costs-<project>-<month>.csv.",
+      []
+    )
+
   now = DateTime.utc_now(:second)
+
+  columns_finding
+  |> Ecto.Changeset.change(
+    resolution: :addressed,
+    resolution_note: "Day, provider, tokens, cost. Current month only for now.",
+    resolved_by_id: admin.id,
+    resolved_at: now
+  )
+  |> Repo.update!()
+
+  streaming_finding
+  |> Ecto.Changeset.change(
+    resolution: :dismissed,
+    resolution_note: "One-shot is fine at this size.",
+    resolved_by_id: admin.id,
+    resolved_at: now
+  )
+  |> Repo.update!()
+
+  # Running column: a task admitted but still waiting on the scheduler.
+  queued =
+    fabricate.(
+      %{
+        title: "Board column virtualization",
+        description: "Windowed rendering once a column passes ~200 cards.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :running,
+      run_state: :queued
+    )
+
+  Tasks.record_step(queued.id, :transition, :human, "human", "moved to Running (queued)")
+
+  # Done column: approved with a finalizer note.
 
   done =
     fabricate.(
@@ -454,6 +643,162 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   end)
 
   IO.puts(
-    "Seeded demo project ##{project.id}: 2 planning, 1 failed run, 1 review, #{length(history) + 1} done"
+    "Seeded demo project ##{project.id}: 3 planning (1 with survey findings), " <>
+      "1 failed run, 1 queued, 1 review (structured findings), #{length(history) + 1} done"
+  )
+end
+
+# Second project: content work without a repository — planning with and
+# without findings, and a review cycle that demos the degradation paths
+# (a verdict-only reply and a failed reviewer). Skipped if it exists.
+unless Enum.any?(Projects.list_projects(), &(&1.name == "Marketing Site")) do
+  alias CodeLead.Costs
+  alias CodeLead.Repo
+  alias CodeLead.Reviews.Review
+
+  {:ok, marketing} = Projects.create_project(%{name: "Marketing Site"})
+
+  copywriter = Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
+  style = Repo.get_by!(CodeLead.Agents.Agent, name: "Style Editor")
+
+  :ok = CodeLead.Agents.set_default_reviewers(marketing.id, :content, [style.id])
+
+  fabricate = fn attrs, extra ->
+    {:ok, task} = Tasks.create_task(marketing.id, attrs)
+    task |> Ecto.Changeset.change(extra) |> Repo.update!()
+  end
+
+  fake_run = fn task, agent, tokens, cents, minutes_ago, duration_ms ->
+    started = DateTime.add(DateTime.utc_now(:second), -minutes_ago * 60, :second)
+
+    {:ok, _run} =
+      Costs.record_run(%{
+        task_id: task.id,
+        agent_id: agent.id,
+        provider_id: agent.provider_id,
+        usage: %{
+          prompt_tokens: div(tokens * 2, 10),
+          completion_tokens: div(tokens, 10),
+          cached_read_tokens: tokens - div(tokens * 2, 10) - div(tokens, 10),
+          cached_write_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: tokens,
+          cost_cents: cents
+        },
+        status: :ok,
+        started_at: started,
+        finished_at: DateTime.add(started, div(duration_ms, 1000), :second),
+        duration_ms: duration_ms
+      })
+  end
+
+  # Planning column: no findings yet on either.
+  {:ok, _launch} =
+    Tasks.create_task(marketing.id, %{
+      title: "Q4 launch announcement",
+      description: "Blog post plus the social snippets, in the launch voice.",
+      work_type: :content,
+      priority: :high,
+      agent_id: copywriter.id
+    })
+
+  {:ok, _faq} =
+    Tasks.create_task(marketing.id, %{
+      title: "Pricing FAQ refresh",
+      description: "Fold in the new tier names and the yearly discount.",
+      work_type: :content,
+      agent_id: copywriter.id
+    })
+
+  # Review column: one reviewer replied with the bare verdict JSON (the
+  # UI shows "No findings recorded." with the raw report behind the
+  # toggle) and one failed outright (verdict-less row, raw fallback).
+  emails =
+    fabricate.(
+      %{
+        title: "Onboarding email rewrite",
+        description: "Three-step drip; shorter, one CTA per mail.",
+        work_type: :content,
+        agent_id: copywriter.id
+      },
+      state: :review,
+      run_state: :idle
+    )
+
+  :ok = Tasks.set_reviewers(emails, [copywriter.id, style.id])
+
+  {:ok, emails} =
+    Tasks.set_attention(
+      emails,
+      :review_ready,
+      "2 reviewers finished · 1 concerns, 1 failed",
+      :advisory
+    )
+
+  fake_run.(emails, copywriter, 38_400, 0, 90, 41_000)
+  Tasks.record_step(emails.id, :transition, :human, "human", "moved to Running (queued)")
+  Tasks.record_step(emails.id, :run, :agent, copywriter.name, "run completed")
+  Tasks.record_step(emails.id, :transition, :system, "system", "run completed — moved to Review")
+
+  style_step =
+    Tasks.record_step(
+      emails.id,
+      :review,
+      :agent,
+      style.name,
+      "review cycle 1: concerns",
+      Integer.to_string(style.id)
+    )
+
+  Repo.insert!(%Review{
+    task_id: emails.id,
+    task_step_id: style_step.id,
+    cycle: 1,
+    agent_id: style.id,
+    verdict: :concerns,
+    findings: ~s({"verdict": "concerns"})
+  })
+
+  copy_step =
+    Tasks.record_step(
+      emails.id,
+      :review,
+      :agent,
+      copywriter.name,
+      "review cycle 1: no verdict",
+      Integer.to_string(copywriter.id)
+    )
+
+  Repo.insert!(%Review{
+    task_id: emails.id,
+    task_step_id: copy_step.id,
+    cycle: 1,
+    agent_id: copywriter.id,
+    verdict: nil,
+    findings: "review failed: reviewer timed out after 15 minutes"
+  })
+
+  # Done column.
+  now = DateTime.utc_now(:second)
+
+  renamed =
+    fabricate.(
+      %{
+        title: "Rename tiers across the site",
+        description: "Starter/Team/Scale everywhere the old names appear.",
+        work_type: :content,
+        agent_id: copywriter.id
+      },
+      state: :done,
+      run_state: :idle,
+      completed_at: DateTime.add(now, -3 * 24 * 3600, :second),
+      inserted_at: DateTime.add(now, -4 * 24 * 3600, :second)
+    )
+
+  fake_run.(renamed, copywriter, 21_700, 0, 3 * 24 * 60, 18_000)
+  Tasks.record_step(renamed.id, :transition, :human, "human", "approved — Done")
+
+  IO.puts(
+    "Seeded marketing project ##{marketing.id}: 2 planning, 1 review (degradation demos), 1 done"
   )
 end

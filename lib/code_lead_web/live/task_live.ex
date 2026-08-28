@@ -70,7 +70,9 @@ defmodule CodeLeadWeb.TaskLive do
         finding_action: nil,
         show_raw_report?: false,
         hide_resolved?: false,
+        review_raw_expanded: MapSet.new(),
         show_feedback?: false,
+        feedback_prefill: "",
         editing?: false,
         schedule_form: nil,
         diff_files: nil,
@@ -196,8 +198,18 @@ defmodule CodeLeadWeb.TaskLive do
     socket.assigns.task |> Runtime.send_back_to_planning() |> after_action(socket)
   end
 
+  # Opening the modal collects the addressed review findings as the
+  # suggested feedback; the human edits or replaces it before sending.
   def handle_event("toggle_feedback", _params, socket) do
-    {:noreply, assign(socket, show_feedback?: !socket.assigns.show_feedback?)}
+    if socket.assigns.show_feedback? do
+      {:noreply, assign(socket, show_feedback?: false)}
+    else
+      {:noreply,
+       assign(socket,
+         show_feedback?: true,
+         feedback_prefill: Findings.review_feedback_block(socket.assigns.task.id)
+       )}
+    end
   end
 
   def handle_event("submit_feedback", %{"feedback" => feedback}, socket) do
@@ -478,9 +490,12 @@ defmodule CodeLeadWeb.TaskLive do
       finding ->
         user = socket.assigns.current_scope.user
         note = params["note"]
-        add_to_spec? = params["add_to_spec"] == "true"
+        add_to_spec? = params["add_to_spec"] == "true" and finding.phase == :planning
 
-        if resolution == "addressed" and String.trim(note || "") == "" do
+        # Planning notes are the decision itself and required; a review
+        # "addressed" already names the fix, so its note is optional.
+        if resolution == "addressed" and finding.phase == :planning and
+             String.trim(note || "") == "" do
           {:noreply, socket}
         else
           resolve_and_reload(
@@ -525,6 +540,18 @@ defmodule CodeLeadWeb.TaskLive do
 
   def handle_event("toggle_raw_report", _params, socket) do
     {:noreply, assign(socket, show_raw_report?: !socket.assigns.show_raw_report?)}
+  end
+
+  def handle_event("toggle_review_raw", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    expanded = socket.assigns.review_raw_expanded
+
+    expanded =
+      if MapSet.member?(expanded, id),
+        do: MapSet.delete(expanded, id),
+        else: MapSet.put(expanded, id)
+
+    {:noreply, assign(socket, review_raw_expanded: expanded)}
   end
 
   def handle_event("toggle_hide_resolved", _params, socket) do
@@ -643,6 +670,7 @@ defmodule CodeLeadWeb.TaskLive do
     runs = Costs.task_runs(task.id)
     messages = Planning.list_messages(task.id)
     findings = Findings.list(task.id, :planning)
+    reviews = Reviews.list_reviews(task.id)
 
     socket
     |> assign(
@@ -661,7 +689,10 @@ defmodule CodeLeadWeb.TaskLive do
       steps: steps,
       run_started_at: last_run_started_at(steps),
       reviewers: Tasks.reviewers(task.id),
-      reviews: Reviews.list_reviews(task.id),
+      reviews: reviews,
+      review_findings: Findings.list(task.id, :review),
+      review_reports: review_reports(reviews),
+      review_steps: review_steps(reviews, steps),
       task_spend: Costs.task_spend(task.id),
       task_duration_ms: Costs.task_duration_ms(task.id),
       cost_mode: runs |> Enum.map(& &1.provider_kind) |> Agents.billing_mode(),
@@ -730,6 +761,32 @@ defmodule CodeLeadWeb.TaskLive do
     |> Enum.max_by(& &1.id, fn -> nil end)
   end
 
+  # Latest-cycle review reports, split like `survey_report/1` but per
+  # review — each reviewer degrades to its own raw report on a parse
+  # failure.
+  defp review_reports([]), do: %{}
+
+  defp review_reports([%{cycle: latest} | _rest] = reviews) do
+    reviews
+    |> Enum.filter(&(&1.cycle == latest))
+    |> Map.new(fn review ->
+      report =
+        case Report.extract(review.findings) do
+          {:ok, _payload, narrative} -> %{narrative: narrative, parse_failed?: false}
+          :error -> %{narrative: nil, parse_failed?: true}
+        end
+
+      {review.id, report}
+    end)
+  end
+
+  # Each review's own task_step, for `Finding.still_flagged?/2` inside
+  # its reviewer box.
+  defp review_steps(reviews, steps) do
+    by_id = Map.new(steps, &{&1.id, &1})
+    Map.new(reviews, &{&1.id, &1.task_step_id && by_id[&1.task_step_id]})
+  end
+
   defp resolve_and_reload(socket, finding, user, resolution, note, add_to_spec?) do
     case Findings.resolve(finding, user, resolution, note) do
       {:ok, resolved_finding} ->
@@ -772,9 +829,15 @@ defmodule CodeLeadWeb.TaskLive do
 
   defp refinement_step?(_step), do: false
 
-  # Findings act only while the task is in Planning and only on rows of
-  # this task — afterwards they are a read-only record.
+  # Findings act only while the task sits in their phase's own column
+  # and only on rows of this task — afterwards they are a read-only
+  # record.
   defp actionable_finding(%{assigns: %{task: %{state: :planning}, findings: findings}}, id) do
+    id = String.to_integer(id)
+    Enum.find(findings, &(&1.id == id))
+  end
+
+  defp actionable_finding(%{assigns: %{task: %{state: :review}, review_findings: findings}}, id) do
     id = String.to_integer(id)
     Enum.find(findings, &(&1.id == id))
   end
@@ -1386,6 +1449,14 @@ defmodule CodeLeadWeb.TaskLive do
           :if={@tab == :review}
           task={@task}
           reviews={@reviews}
+          review_findings={@review_findings}
+          review_reports={@review_reports}
+          review_steps={@review_steps}
+          finding_expanded={@finding_expanded}
+          finding_action={@finding_action}
+          review_raw_expanded={@review_raw_expanded}
+          forge={(@repository && Git.forge(@repository.git_url)) || :other}
+          default_branch={@repository && @repository.default_branch}
           diff_files={@diff_files}
           diff_stats={@diff_stats}
           diff_error={@diff_error}
@@ -1421,7 +1492,7 @@ defmodule CodeLeadWeb.TaskLive do
         />
       </div>
 
-      <.feedback_modal :if={@show_feedback?} />
+      <.feedback_modal :if={@show_feedback?} prefill={@feedback_prefill} />
 
       <.schedule_modal :if={@schedule_form} form={@schedule_form} task_title={@task.title} />
     </Layouts.app>
@@ -1583,6 +1654,8 @@ defmodule CodeLeadWeb.TaskLive do
   defp start_hint(:ok), do: nil
   defp start_hint({:error, reason}), do: FlashMessages.transition_error(reason)
 
+  attr :prefill, :string, default: ""
+
   defp feedback_modal(assigns) do
     ~H"""
     <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/45 p-4 pt-[16vh]">
@@ -1592,13 +1665,16 @@ defmodule CodeLeadWeb.TaskLive do
         <p class="mb-4 text-[13px] text-text2">
           Your feedback becomes the agent's next prompt. The worktree, branch, and session are kept —
           commits accumulate.
+          <span :if={@prefill != ""}>
+            Findings you marked as addressed are prefilled — edit freely.
+          </span>
         </p>
         <form id="feedback-form" phx-submit="submit_feedback">
           <.input
             type="textarea"
             name="feedback"
-            value=""
-            rows="4"
+            value={@prefill}
+            rows={if @prefill == "", do: "4", else: "8"}
             placeholder="What should change?"
             autofocus
           />

@@ -17,9 +17,10 @@ defmodule CodeLead.Findings.Report do
   block glued to the end of a sentence, opened with its payload on the
   same line, or left unterminated still parses.
 
-  A candidate is only accepted when it carries a `"findings"` or
-  `"prior"` key, which keeps a nested item object from being mistaken
-  for the whole report when the outer object is the malformed one.
+  A candidate is only accepted when it carries a `"findings"`,
+  `"prior"`, or `"verdict"` key, which keeps a nested item object from
+  being mistaken for the whole report when the outer object is the
+  malformed one.
 
   Tier 3 is a heuristic: inside a string, a `"` closes it only when the
   next non-whitespace byte is `,`, `:`, `}` or `]`. A body carrying a
@@ -30,8 +31,8 @@ defmodule CodeLead.Findings.Report do
   Invalid items are dropped rather than rejecting the report, and an
   unparseable report yields `:error` with no side effects.
 
-  Phase-agnostic: surveys use it today, reviews can in a later
-  iteration.
+  Phase-agnostic: planning surveys and reviews both write reports in
+  this convention; reviews additionally carry a `"verdict"` key.
   """
 
   require Logger
@@ -46,11 +47,45 @@ defmodule CodeLead.Findings.Report do
   @string_terminators ~c",:}]"
 
   @severities %{"high" => :high, "medium" => :medium, "low" => :low}
+  @verdicts %{"pass" => :pass, "concerns" => :concerns, "block" => :block}
   @prior_statuses %{
     "still_open" => :open,
     "resolved" => :resolved,
     "not_applicable" => :not_applicable
   }
+
+  @doc """
+  The shared two-part output-shape contract injected into advisory
+  prompts. The caller supplies the phase-specific wording; the shape —
+  narrative plus one fenced JSON block — stays identical across phases
+  so `extract/1` can parse every report the same way.
+
+  Options: `:narrative` and `:body` and `:severity` and `:prior`
+  (phase-specific wording, all required), `:verdict?` (include the
+  `"verdict"` key in the shape, default `false`).
+  """
+  @spec output_contract(keyword()) :: String.t()
+  def output_contract(opts) do
+    """
+    Write your report in two parts.
+
+    Part 1 — a short markdown narrative: #{Keyword.fetch!(opts, :narrative)}
+
+    Part 2 — exactly one fenced ```json block, the last thing in your \
+    output. Open the fence on a line of its own, with the JSON object \
+    starting on the next line. Use this shape:
+
+    #{payload_shape(Keyword.get(opts, :verdict?, false), Keyword.fetch!(opts, :body))}
+
+    Inside "body", write quoted phrases with backticks or single \
+    quotes — never raw double quotes, which break the JSON.
+
+    Severity: #{Keyword.fetch!(opts, :severity)}
+
+    Do not repeat a prior finding as a new one. #{Keyword.fetch!(opts, :prior)} \
+    "prior" may be empty when there are no prior findings.\
+    """
+  end
 
   @doc """
   Splits a report into its JSON payload and the surrounding narrative.
@@ -89,6 +124,33 @@ defmodule CodeLead.Findings.Report do
   end
 
   def prior(_payload), do: []
+
+  @doc """
+  The payload's `"verdict"`, or `nil` when absent or unknown.
+  """
+  @spec verdict(map()) :: :pass | :concerns | :block | nil
+  def verdict(payload) when is_map(payload), do: Map.get(@verdicts, payload["verdict"])
+
+  defp payload_shape(verdict?, body) do
+    verdict_line =
+      if verdict?, do: ~s(  "verdict": "pass" | "concerns" | "block",\n), else: ""
+
+    """
+    {
+    #{verdict_line}  "findings": [
+        {
+          "title": "one line, imperative or noun phrase, ≤ 120 chars",
+          "severity": "high" | "medium" | "low",
+          "body": "markdown; #{body}",
+          "paths": ["lib/foo.ex", "lib/bar.ex:42"]
+        }
+      ],
+      "prior": [
+        { "id": 12, "status": "still_open" | "resolved" | "not_applicable" }
+      ]
+    }\
+    """
+  end
 
   defp normalize_finding(%{"title" => title} = item) when is_binary(title) do
     case String.trim(title) do
@@ -180,7 +242,8 @@ defmodule CodeLead.Findings.Report do
   # Guards against a nested item object standing in for the whole
   # report when the outer object is the one that failed to decode.
   defp report_payload?(payload) when is_map(payload) do
-    Map.has_key?(payload, "findings") or Map.has_key?(payload, "prior")
+    Map.has_key?(payload, "findings") or Map.has_key?(payload, "prior") or
+      Map.has_key?(payload, "verdict")
   end
 
   defp report_payload?(_payload), do: false

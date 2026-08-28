@@ -1,4 +1,4 @@
-# Planning surface (last updated: 2026-08-24, task-level refinement, no chat UI)
+# Planning surface (last updated: 2026-08-28, shared report contract with reviews)
 
 Implemented in `CodeLead.Planning`, rendered by the Task tab's Planning
 agent card (`CodeLeadWeb.TaskLive.TaskTab`). A one-shot agent
@@ -112,9 +112,9 @@ gives up only when none yields a report-shaped object:
 Neither the fence's position nor its closing half is required, so a
 block glued to the end of a sentence, opened with its payload on the
 same line, or left unterminated still parses. A candidate is accepted
-only when it carries a `"findings"` or `"prior"` key, which stops a
-nested item object from standing in for the whole report when the outer
-object is the malformed one. Tier 3 is a heuristic — a body carrying a
+only when it carries a `"findings"`, `"prior"`, or `"verdict"` key,
+which stops a nested item object from standing in for the whole report
+when the outer object is the malformed one. Tier 3 is a heuristic — a body carrying a
 quoted phrase immediately followed by a comma is still misread — so it
 is a strict improvement over failing, not a guarantee.
 
@@ -122,9 +122,15 @@ Within an accepted payload, items without a title are dropped and
 unknown severity defaults to `:medium`. A report that survives none of
 the tiers writes nothing, logs a warning, and renders the turn as
 markdown behind a "could not parse findings" hint. An advisory run never
-fails because the model got the tail wrong (the same graceful
-degradation as the reviewers' trailing-verdict convention in
-[`reviews.md`](reviews.md)).
+fails because the model got the tail wrong (reviews degrade the same
+way, per reviewer box — see [`reviews.md`](reviews.md)).
+
+The prompt-side half of the convention lives next to the parser:
+`Findings.Report.output_contract/1` emits the shared two-part output
+shape (narrative wording, finding-body wording, severity scale, and
+prior-classification guidance are per-phase options; reviews add
+`verdict?: true`), and `Planning.report_contract/0` wraps it in the
+planning lenses.
 
 There is deliberately no gap/contradiction/assumption taxonomy on the
 row. The prompt also scopes the report: the agent is told to assume
@@ -132,9 +138,9 @@ general knowledge of the project and to skip broad or obvious
 observations — only things someone scoping this specific task would
 act on. The three lenses live only in the prompt; the classification axes
 are `severity` (`:high | :medium | :low`, agent-assigned) and `phase`
-(`:planning | :review`, system-assigned — reviewers reuse the same table
-in a later iteration, which is why the parser and renderer are
-phase-agnostic).
+(`:planning | :review`, system-assigned — reviewers write the same
+table through the same parser and finding-row component; see
+[`reviews.md`](reviews.md) for what differs per phase).
 
 **Two owners, one row.** The agent owns the observation side —
 `observed` (`:open | :resolved | :not_applicable`) plus
@@ -160,11 +166,15 @@ omission means nothing.
 
 **Resolutions flow into prompts.** `Findings.decisions_block/1` renders
 noted `:addressed` resolutions under `## Decisions` and noted
-`:dismissed` ones under `## Out of scope`; a resolution without a note
+`:dismissed` ones under `## Out of scope` — **planning-phase rows
+only**: a review "addressed" means "fix this next run" and flows into
+the request-changes prefill instead (`Findings.review_feedback_block/1`,
+see [`reviews.md`](reviews.md)). A resolution without a note
 flows nowhere, and an empty block injects nothing. That is why the UI
-requires a note to address (Save stays disabled, and the LiveView
-refuses a blank one) but leaves it optional to dismiss — an addressed
-finding without a decision text would be a tick that changes nothing. The block is appended
+requires a note to address a planning finding (Save stays disabled, and
+the LiveView refuses a blank one) but leaves it optional to dismiss — an
+addressed finding without a decision text would be a tick that changes
+nothing. The block is appended
 to the fresh-dispatch executor prompt (`TaskRunner.build_prompt/1` —
 not the request-changes rework prompt, whose carried session already saw
 it), the review prompt, and both refinement prompts (survey and

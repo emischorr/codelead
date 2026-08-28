@@ -153,6 +153,32 @@ defmodule CodeLead.FindingsTest do
 
       assert Report.extract(content) == :error
     end
+
+    test "accepts a verdict-only object and strips it from the narrative" do
+      # The terse-reviewer case, and the legacy trailing verdict line:
+      # both must never surface as the rendered body.
+      assert {:ok, %{"verdict" => "concerns"}, ""} =
+               Report.extract(~S({"verdict": "concerns"}))
+
+      content = """
+      The change looks solid overall.
+
+      {"verdict": "pass"}
+      """
+
+      assert {:ok, %{"verdict" => "pass"}, "The change looks solid overall."} =
+               Report.extract(content)
+    end
+  end
+
+  describe "Report.verdict/1" do
+    test "reads a valid verdict and rejects the rest" do
+      assert Report.verdict(%{"verdict" => "pass"}) == :pass
+      assert Report.verdict(%{"verdict" => "concerns"}) == :concerns
+      assert Report.verdict(%{"verdict" => "block"}) == :block
+      assert Report.verdict(%{"verdict" => "ship it"}) == nil
+      assert Report.verdict(%{"findings" => []}) == nil
+    end
   end
 
   describe "apply_report/5" do
@@ -403,6 +429,105 @@ defmodule CodeLead.FindingsTest do
       block = Findings.decisions_block(task.id)
       assert block =~ "## Decisions"
       refute block =~ "## Out of scope"
+    end
+
+    test "review-phase resolutions never enter the decisions", %{
+      task: task,
+      agent: agent,
+      step: step
+    } do
+      {:ok, _delta} =
+        Findings.apply_report(task, :review, step, agent, report([finding_item()]))
+
+      [finding] = Findings.list(task.id, :review)
+      {:ok, _} = Findings.resolve(finding, nil, :addressed, "fix the retry loop")
+
+      assert Findings.decisions_block(task.id) == ""
+    end
+  end
+
+  describe "review phase" do
+    setup :survey_setup
+
+    setup %{task: task, step: step} do
+      reviewer = agent_fixture(%{driver: :llm_api, roles: [:review], name: "Reviewer A"})
+      other = agent_fixture(%{driver: :llm_api, roles: [:review], name: "Reviewer B"})
+
+      {:ok, _delta} =
+        Findings.apply_report(
+          task,
+          :review,
+          step,
+          reviewer,
+          report([finding_item(%{title: "Mine"})]),
+          prior_scope: :agent
+        )
+
+      [finding] = Findings.list(task.id, :review)
+      %{reviewer: reviewer, other: other, finding: finding}
+    end
+
+    test "prior_for_prompt filters to one agent's findings", %{
+      task: task,
+      reviewer: reviewer,
+      other: other,
+      finding: finding
+    } do
+      assert [%{id: id}] = Findings.prior_for_prompt(task.id, :review, agent_id: reviewer.id)
+      assert id == finding.id
+      assert Findings.prior_for_prompt(task.id, :review, agent_id: other.id) == []
+      # unfiltered still sees everything
+      assert [_finding] = Findings.prior_for_prompt(task.id, :review)
+    end
+
+    test "prior_scope: :agent ignores another reviewer's finding id", %{
+      task: task,
+      other: other,
+      finding: finding
+    } do
+      step = Tasks.record_step(task.id, :review, :agent, other.name, "review cycle 2: pass")
+      rerun = report([], [%{id: finding.id, status: "resolved"}])
+
+      assert {:ok, delta} =
+               Findings.apply_report(task, :review, step, other, rerun, prior_scope: :agent)
+
+      assert delta == %{new: 0, resolved: 0, not_applicable: 0, still_open: 0}
+      assert %{observed: :open} = Repo.get!(Finding, finding.id)
+    end
+
+    test "review_feedback_block collects addressed-and-open findings", %{
+      task: task,
+      step: step,
+      reviewer: reviewer,
+      finding: finding
+    } do
+      assert Findings.review_feedback_block(task.id) == ""
+
+      # a note-less addressed finding degrades to its title alone
+      {:ok, addressed} = Findings.resolve(finding, nil, :addressed, nil)
+
+      {:ok, _delta} =
+        Findings.apply_report(
+          task,
+          :review,
+          step,
+          reviewer,
+          report([finding_item(%{title: "Low nit", severity: "low"})]),
+          prior_scope: :agent
+        )
+
+      [nit] = Enum.reject(Findings.list(task.id, :review), &(&1.id == finding.id))
+      {:ok, _} = Findings.resolve(nit, nil, :addressed, "rename the helper")
+
+      assert Findings.review_feedback_block(task.id) == """
+             - Mine
+             - Low nit: rename the helper\
+             """
+
+      # dismissed and agent-resolved findings stay out
+      {:ok, _} = Findings.reopen(addressed)
+      {:ok, _} = Findings.resolve(addressed, nil, :dismissed, nil)
+      assert Findings.review_feedback_block(task.id) == "- Low nit: rename the helper"
     end
   end
 

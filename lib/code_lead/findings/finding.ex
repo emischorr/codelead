@@ -1,15 +1,15 @@
 defmodule CodeLead.Findings.Finding do
   @moduledoc """
   One itemized, severity-labelled observation from an advisory run —
-  today only planning surveys (`phase: :planning`); reviews reuse the
-  same table in a later iteration.
+  planning surveys (`phase: :planning`) and review reports
+  (`phase: :review`) share the table.
 
   Two independently owned column groups:
 
   - **Agent observation** — `observed` plus `first_seen_step_id` /
     `last_seen_step_id`. A later run may reclassify a finding as
     `:resolved` or `:not_applicable`, but only via
-    `CodeLead.Findings.apply_report/5`.
+    `CodeLead.Findings.apply_report/6`.
   - **Human resolution** — `resolution`, `resolution_note`,
     `resolved_by_id`, `resolved_at`. Set only by a human (or the
     console); never written or cleared by an agent run.

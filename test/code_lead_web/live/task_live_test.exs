@@ -15,6 +15,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
   alias CodeLead.Executor.LocalSubprocess
   alias CodeLead.Findings.Finding
   alias CodeLead.Repo
+  alias CodeLead.Reviews.Review
   alias CodeLead.Tasks
   alias CodeLeadWeb.DiffComponents
 
@@ -745,6 +746,102 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert task.state == :planning
       assert task.branch_name == nil
       assert task.acp_session_id == nil
+    end
+  end
+
+  describe "review findings" do
+    defp review_fixture(task, agent, attrs \\ %{}) do
+      step = Tasks.record_step(task.id, :review, :agent, agent.name, "review cycle 1: concerns")
+
+      review =
+        Repo.insert!(
+          struct!(
+            %Review{
+              task_id: task.id,
+              agent_id: agent.id,
+              task_step_id: step.id,
+              cycle: 1,
+              verdict: :concerns,
+              findings: """
+              The CTA needs work.
+
+              ```json
+              {"verdict": "concerns", "findings": [], "prior": []}
+              ```
+              """
+            },
+            attrs
+          )
+        )
+
+      %{review: review, step: step}
+    end
+
+    defp reviewed_task(_conn) do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = task |> executing_task() |> put_context!(%{state: :review, run_state: :idle})
+      reviewer = agent_fixture(%{roles: [:review], work_type: :code})
+      %{task: task, project: project, reviewer: reviewer}
+    end
+
+    test "findings render in the reviewer box and address needs no note", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+      review_fixture(task, reviewer)
+
+      finding =
+        finding_fixture(task, %{phase: :review, agent_id: reviewer.id, title: "CTA is passive"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#reviewer-findings")
+      assert has_element?(view, "#finding-#{finding.id}")
+
+      view |> element("#finding-check-#{finding.id}") |> render_click()
+      view |> form("#finding-note-form-#{finding.id}", %{note: ""}) |> render_submit()
+
+      assert Repo.get!(Finding, finding.id).resolution == :addressed
+
+      # the addressed finding is prefilled into the Request-changes modal
+      view |> element("#action-request-changes") |> render_click()
+      assert view |> element("#feedback-form textarea") |> render() =~ "CTA is passive"
+    end
+
+    test "a verdict-only review shows no raw JSON as its body", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+      %{review: review} = review_fixture(task, reviewer, %{findings: ~s({"verdict": "concerns"})})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert view |> element("#reviewer-findings") |> render() =~ "No findings recorded."
+      refute has_element?(view, "#review-raw-#{review.id}")
+
+      view |> element("#toggle-review-raw-#{review.id}") |> render_click()
+      assert has_element?(view, "#review-raw-#{review.id}")
+    end
+
+    test "an unparseable report degrades to the raw view with a hint", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+
+      %{review: review} =
+        review_fixture(task, reviewer, %{verdict: nil, findings: "review error: backend down"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#review-parse-hint-#{review.id}")
+      assert has_element?(view, "#review-raw-#{review.id}")
+    end
+
+    test "outside Review the findings render read-only", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+      review_fixture(task, reviewer)
+      finding = finding_fixture(task, %{phase: :review, agent_id: reviewer.id})
+
+      put_context!(task, %{state: :done, run_state: :idle})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#finding-#{finding.id}")
+      refute has_element?(view, "#finding-check-#{finding.id}")
     end
   end
 

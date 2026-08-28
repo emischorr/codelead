@@ -4,9 +4,16 @@ defmodule CodeLead.Reviews do
   selected reviewer is fanned out concurrently through the ordinary
   agent drivers — `llm_api` reviewers get the artifact in-prompt, `acp`
   reviewers work read-only in the worktree. Each reviewer writes a
-  `reviews` row, an `agent_runs` row, and a `task_step`. Verdicts are
-  advisory: nothing gates the human decision. When the cycle completes
-  the task gets `attention: :review_ready`.
+  `reviews` row (the raw report), an `agent_runs` row, and a
+  `task_step`; the report's itemized findings land as `phase: :review`
+  rows through `CodeLead.Findings`. Verdicts are advisory: nothing
+  gates the human decision. When the cycle completes the task gets
+  `attention: :review_ready`.
+
+  The report follows the shared two-part contract
+  (`Findings.Report.output_contract/1`) with a `"verdict"` key in the
+  JSON payload; a trailing verdict-only JSON line is still honored as
+  fallback for reviewers on the old contract.
 
   The run itself is `CodeLead.AdvisoryRun` — the same read-only
   primitive the planning survey uses. This module owns only the
@@ -22,6 +29,7 @@ defmodule CodeLead.Reviews do
   alias CodeLead.Costs
   alias CodeLead.Executor.Context
   alias CodeLead.Findings
+  alias CodeLead.Findings.Report
   alias CodeLead.Git
   alias CodeLead.Projects
   alias CodeLead.Repo
@@ -131,7 +139,7 @@ defmodule CodeLead.Reviews do
   defp run_reviewer(task, %Agent{} = reviewer, cycle, artifact) do
     started_at = DateTime.utc_now(:second)
     monotonic_start = System.monotonic_time(:millisecond)
-    prompt = review_prompt(task, artifact)
+    prompt = review_prompt(task, reviewer, artifact)
     context = review_context(task, reviewer)
 
     result =
@@ -147,7 +155,7 @@ defmodule CodeLead.Reviews do
       case result do
         %{status: :ok} = result ->
           text = result[:content] || ""
-          {parse_verdict(text), text}
+          {review_verdict(text), text}
 
         %{status: status} = result ->
           {nil, "review #{status}: #{result[:content]}"}
@@ -176,6 +184,13 @@ defmodule CodeLead.Reviews do
     })
 
     review = record_review(task, reviewer, cycle, verdict, findings, step.id)
+
+    # A report whose findings block does not parse writes no rows and
+    # degrades to the raw report in the UI — never a review failure.
+    if result.status == :ok do
+      Findings.apply_report(task, :review, step, reviewer, findings, prior_scope: :agent)
+    end
+
     broadcast(task, {:review_completed, %{agent: reviewer.name, verdict: verdict}})
     review
   end
@@ -231,22 +246,33 @@ defmodule CodeLead.Reviews do
     "## Task folder artifact\n\nFiles: #{Enum.join(files, ", ")}\n\n#{contents}"
   end
 
-  defp review_prompt(task, artifact) do
+  defp review_prompt(task, reviewer, artifact) do
     """
-    You are reviewing the work below. Be specific; cite files and lines
-    where possible. This review is advisory — a human makes the final
-    decision.
+    You are reviewing the work below against the task's spec and the
+    human's decisions. This review is advisory — a human makes the
+    final decision.
 
     ## Task
     Title: #{task.title}
     Description: #{task.description || "(none)"}
     Spec / acceptance criteria: #{task.spec || "(none)"}
-    #{decisions_section(task)}
+    #{prior_findings_section(task, reviewer)}#{decisions_section(task)}
     #{artifact}
 
-    End your review with a single line containing only JSON in the form
-    {"verdict": "pass" | "concerns" | "block"}
+    #{Report.output_contract(narrative: "your overall judgement of the work: what it does well and what concerns you, with file paths and lines. Be specific.", body: "why it matters and what should change", severity: "high = must be fixed before this ships; medium = should be fixed, a human could knowingly accept it; low = a nit, polish, or optional improvement.", prior: ~s(If a prior finding is now fixed in the work, mark it "resolved". If the work changed so it no longer applies, mark it "not_applicable".), verdict?: true)}
+
+    Verdict: "block" when any high finding stands, "concerns" when you \
+    report findings worth reading first, "pass" when the work can ship \
+    as is.
     """
+  end
+
+  # Each reviewer classifies only its own prior findings — cycles fan
+  # reviewers out, and one must not reclassify another's rows.
+  defp prior_findings_section(task, reviewer) do
+    task.id
+    |> Findings.prior_for_prompt(:review, agent_id: reviewer.id)
+    |> Findings.prior_section()
   end
 
   # Reviewers judge the artifact against the human's planning
@@ -280,6 +306,15 @@ defmodule CodeLead.Reviews do
   end
 
   defp review_context(%Task{}, %Agent{driver: :llm_api}), do: nil
+
+  # Verdict from the report payload; the trailing-line scan remains as
+  # fallback for reviewers following the old contract.
+  defp review_verdict(text) do
+    case Report.extract(text) do
+      {:ok, payload, _narrative} -> Report.verdict(payload) || parse_verdict(text)
+      :error -> parse_verdict(text)
+    end
+  end
 
   defp parse_verdict(text) do
     text

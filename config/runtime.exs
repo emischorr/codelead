@@ -80,7 +80,7 @@ workspace_root =
 
 config :code_lead,
   workspace_root: workspace_root,
-  max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "3")),
+  max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "2")),
   # Image the workspace remover uses to delete root-owned leftovers of
   # container runs (a short-lived `docker run … rm -rf`). Any image with
   # a POSIX rm works; override for air-gapped registries.

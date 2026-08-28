@@ -13,11 +13,20 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
   use CodeLeadWeb, :html
 
   import CodeLeadWeb.DiffComponents
+  import CodeLeadWeb.TaskLive.FindingsComponents
 
   alias CodeLead.Git.DiffFile
 
   attr :task, :map, required: true
   attr :reviews, :list, required: true
+  attr :review_findings, :list, default: []
+  attr :review_reports, :map, default: %{}, doc: "review id => %{narrative, parse_failed?}"
+  attr :review_steps, :map, default: %{}, doc: "review id => its TaskStep"
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :review_raw_expanded, :any, default: nil, doc: "MapSet of review ids showing raw"
+  attr :forge, :any, default: :other
+  attr :default_branch, :string, default: nil
   attr :diff_files, :list, default: nil
   attr :diff_stats, :map, default: nil
   attr :diff_error, :string, default: nil
@@ -70,6 +79,14 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         <.diff_view
           task={@task}
           reviews={@reviews}
+          review_findings={@review_findings}
+          review_reports={@review_reports}
+          review_steps={@review_steps}
+          finding_expanded={@finding_expanded}
+          finding_action={@finding_action}
+          review_raw_expanded={@review_raw_expanded}
+          forge={@forge}
+          default_branch={@default_branch}
           diff_files={@diff_files}
           diff_stats={@diff_stats}
           diff_error={@diff_error}
@@ -162,6 +179,14 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
 
   attr :task, :map, required: true
   attr :reviews, :list, required: true
+  attr :review_findings, :list, default: []
+  attr :review_reports, :map, default: %{}
+  attr :review_steps, :map, default: %{}
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :review_raw_expanded, :any, default: nil
+  attr :forge, :any, default: :other
+  attr :default_branch, :string, default: nil
   attr :diff_files, :list, default: nil
   attr :diff_stats, :map, default: nil
   attr :diff_error, :string, default: nil
@@ -191,7 +216,19 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
         />
 
         <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 sm:p-6">
-          <.findings_section :if={@reviews != []} reviews={@reviews} />
+          <.findings_section
+            :if={@reviews != []}
+            task={@task}
+            reviews={@reviews}
+            review_findings={@review_findings}
+            review_reports={@review_reports}
+            review_steps={@review_steps}
+            finding_expanded={@finding_expanded}
+            finding_action={@finding_action}
+            review_raw_expanded={@review_raw_expanded}
+            forge={@forge}
+            default_branch={@default_branch}
+          />
 
           <div
             :if={@diff_loading? && is_nil(@diff_files)}
@@ -375,35 +412,142 @@ defmodule CodeLeadWeb.TaskLive.ReviewTab do
 
   defp empty_reason(_task), do: "No execution context yet."
 
+  attr :task, :map, required: true
   attr :reviews, :list, required: true
+  attr :review_findings, :list, default: []
+  attr :review_reports, :map, default: %{}
+  attr :review_steps, :map, default: %{}
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :review_raw_expanded, :any, default: nil
+  attr :forge, :any, default: :other
+  attr :default_branch, :string, default: nil
 
+  # One box per latest-cycle reviewer. Findings whose agent is absent
+  # from the latest cycle don't render in any box; they stay in the
+  # data and in the request-changes prefill.
   defp findings_section(assigns) do
     assigns = assign(assigns, :latest, latest_cycle_reviews(assigns.reviews))
 
     ~H"""
     <div class="flex flex-col gap-2.5" id="reviewer-findings">
-      <details
+      <.reviewer_box
         :for={review <- @latest}
-        class="group rounded-[14px] border border-border bg-surface"
-        open={review.verdict != :pass}
-      >
-        <summary class="flex cursor-pointer list-none items-center gap-2.5 p-4 [&::-webkit-details-marker]:hidden">
-          <.icon
-            name="hero-chevron-right"
-            class="size-3.5 text-text3 transition-transform group-open:rotate-90"
-          />
-          <span class="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-text">
-            {(review.agent && review.agent.name) || "Reviewer"}
-          </span>
-          <.badge variant={verdict_variant(review.verdict)}>
-            {review.verdict || "pending"}
-          </.badge>
-        </summary>
-        <div class="border-t border-border px-4 py-3.5">
-          <p class="whitespace-pre-wrap text-[13px] leading-relaxed text-text2" phx-no-format>{review.findings || "No findings recorded."}</p>
-        </div>
-      </details>
+        review={review}
+        task={@task}
+        review_findings={@review_findings}
+        report={@review_reports[review.id]}
+        step={@review_steps[review.id]}
+        finding_expanded={@finding_expanded}
+        finding_action={@finding_action}
+        review_raw_expanded={@review_raw_expanded}
+        forge={@forge}
+        default_branch={@default_branch}
+      />
     </div>
+    """
+  end
+
+  attr :review, :map, required: true
+  attr :task, :map, required: true
+  attr :review_findings, :list, default: []
+  attr :report, :map, default: nil
+  attr :step, :map, default: nil
+  attr :finding_expanded, :any, default: nil
+  attr :finding_action, :map, default: nil
+  attr :review_raw_expanded, :any, default: nil
+  attr :forge, :any, default: :other
+  attr :default_branch, :string, default: nil
+
+  defp reviewer_box(assigns) do
+    review = assigns.review
+    report = assigns.report
+    parse_failed? = report != nil and report.parse_failed?
+
+    raw_toggled? =
+      assigns.review_raw_expanded != nil and
+        MapSet.member?(assigns.review_raw_expanded, review.id)
+
+    assigns =
+      assign(assigns,
+        findings: Enum.filter(assigns.review_findings, &(&1.agent_id == review.agent_id)),
+        parse_failed?: parse_failed?,
+        raw?: parse_failed? or raw_toggled?,
+        raw_toggled?: raw_toggled?,
+        narrative: report && report.narrative
+      )
+
+    ~H"""
+    <details
+      class="group rounded-[14px] border border-border bg-surface"
+      open={@review.verdict != :pass}
+    >
+      <summary class="flex cursor-pointer list-none items-center gap-2.5 p-4 [&::-webkit-details-marker]:hidden">
+        <.icon
+          name="hero-chevron-right"
+          class="size-3.5 text-text3 transition-transform group-open:rotate-90"
+        />
+        <span class="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-text">
+          {(@review.agent && @review.agent.name) || "Reviewer"}
+        </span>
+        <.badge variant={verdict_variant(@review.verdict)}>
+          {@review.verdict || "pending"}
+        </.badge>
+      </summary>
+      <div class="flex flex-col gap-3 border-t border-border px-4 py-3.5">
+        <div :if={@review.findings} class="flex items-center gap-3">
+          <p :if={@parse_failed?} id={"review-parse-hint-#{@review.id}"} class="text-xs text-text3">
+            Could not parse this report — showing it raw.
+          </p>
+          <button
+            :if={!@parse_failed?}
+            type="button"
+            id={"toggle-review-raw-#{@review.id}"}
+            phx-click="toggle_review_raw"
+            phx-value-id={@review.id}
+            class="ml-auto cursor-pointer text-xs font-semibold text-accent hover:underline"
+          >
+            {if @raw_toggled?, do: "Hide raw report", else: "Show raw report"}
+          </button>
+        </div>
+
+        <.markdown
+          :if={@raw? && @review.findings}
+          id={"review-raw-#{@review.id}"}
+          text={@review.findings}
+          class="rounded-xl bg-surface2 px-3.5 py-2.5 text-[13px]"
+        />
+
+        <.markdown
+          :if={!@raw? && @narrative not in [nil, ""]}
+          text={@narrative}
+          class="text-[13px]"
+        />
+
+        <p
+          :if={!@raw? && @narrative in [nil, ""] && @findings == []}
+          class="text-[13px] text-text3"
+        >
+          No findings recorded.
+        </p>
+
+        <div :if={@findings != []} class="flex flex-col">
+          <.finding_row
+            :for={finding <- @findings}
+            finding={finding}
+            actionable?={@task.state == :review}
+            note_required?={false}
+            add_to_spec?={false}
+            note_hint="Notes are prefilled into the Request-changes feedback."
+            forge={@forge}
+            default_branch={@default_branch}
+            latest_step={@step}
+            expanded?={@finding_expanded && MapSet.member?(@finding_expanded, finding.id)}
+            action={@finding_action}
+          />
+        </div>
+      </div>
+    </details>
     """
   end
 
