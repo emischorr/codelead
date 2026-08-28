@@ -448,6 +448,49 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert has_element?(view_b, ~s(#finding-check-#{finding.id}[aria-checked="true"]))
     end
 
+    test "saving a resolution collapses the finding row", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      finding = finding_fixture(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#finding-check-#{finding.id}") |> render_click()
+      assert has_element?(view, "#finding-detail-#{finding.id}")
+
+      view
+      |> form("#finding-note-form-#{finding.id}", %{note: "retry 3x, then hold"})
+      |> render_submit()
+
+      refute has_element?(view, "#finding-detail-#{finding.id}")
+    end
+
+    test "saving with add to spec checked pre-fills the edit form and collapses the row", %{
+      conn: conn
+    } do
+      project = project_fixture()
+      task = task_fixture(project.id, %{spec: "Existing criteria."})
+      finding = finding_fixture(task)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      view |> element("#finding-check-#{finding.id}") |> render_click()
+
+      view
+      |> form("#finding-note-form-#{finding.id}", %{
+        note: "retry 3x, then hold",
+        add_to_spec: "true"
+      })
+      |> render_submit()
+
+      refute has_element?(view, "#finding-detail-#{finding.id}")
+      assert has_element?(view, "#task-edit-form")
+      assert render(view) =~ "Existing criteria.\n- Retry policy: retry 3x, then hold"
+
+      # nothing is written until the human saves through the normal path
+      assert Tasks.get_task!(task.id).spec == "Existing criteria."
+    end
+
     test "add to spec pre-fills the edit form without changing the task", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id, %{spec: "Existing criteria."})

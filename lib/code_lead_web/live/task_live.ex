@@ -477,11 +477,19 @@ defmodule CodeLeadWeb.TaskLive do
       finding ->
         user = socket.assigns.current_scope.user
         note = params["note"]
+        add_to_spec? = params["add_to_spec"] == "true"
 
         if resolution == "addressed" and String.trim(note || "") == "" do
           {:noreply, socket}
         else
-          resolve_and_reload(socket, finding, user, String.to_existing_atom(resolution), note)
+          resolve_and_reload(
+            socket,
+            finding,
+            user,
+            String.to_existing_atom(resolution),
+            note,
+            add_to_spec?
+          )
         end
     end
   end
@@ -505,15 +513,9 @@ defmodule CodeLeadWeb.TaskLive do
   # P9: pre-fill the edit form, never write the task directly — the
   # human saves through the normal path.
   def handle_event("add_finding_to_spec", %{"id" => id}, socket) do
-    task = socket.assigns.task
-
     case actionable_finding(socket, id) do
       %{resolution_note: note, title: title} when is_binary(note) ->
-        spec = String.trim_trailing(task.spec || "")
-        line = "- #{title}: #{note}"
-        appended = if spec == "", do: line, else: spec <> "\n" <> line
-        changeset = Task.planning_changeset(task, %{"spec" => appended})
-        {:noreply, assign(socket, editing?: true, edit_form: to_form(changeset))}
+        {:noreply, prefill_spec_with_finding(socket, title, note)}
 
       _no_note ->
         {:noreply, socket}
@@ -730,14 +732,39 @@ defmodule CodeLeadWeb.TaskLive do
     |> Enum.max_by(& &1.id, fn -> nil end)
   end
 
-  defp resolve_and_reload(socket, finding, user, resolution, note) do
+  defp resolve_and_reload(socket, finding, user, resolution, note, add_to_spec?) do
     case Findings.resolve(finding, user, resolution, note) do
-      {:ok, _finding} ->
-        {:noreply, socket |> assign(finding_action: nil) |> load_task()}
+      {:ok, resolved_finding} ->
+        socket =
+          socket
+          |> assign(
+            finding_action: nil,
+            finding_expanded: MapSet.delete(socket.assigns.finding_expanded, finding.id)
+          )
+          |> load_task()
+          |> maybe_prefill_spec(add_to_spec?, resolved_finding)
+
+        {:noreply, socket}
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, "Could not save the resolution.")}
     end
+  end
+
+  defp maybe_prefill_spec(socket, true, %{resolution_note: note, title: title})
+       when is_binary(note) do
+    prefill_spec_with_finding(socket, title, note)
+  end
+
+  defp maybe_prefill_spec(socket, _add_to_spec?, _finding), do: socket
+
+  defp prefill_spec_with_finding(socket, title, note) do
+    task = socket.assigns.task
+    spec = String.trim_trailing(task.spec || "")
+    line = "- #{title}: #{note}"
+    appended = if spec == "", do: line, else: spec <> "\n" <> line
+    changeset = Task.planning_changeset(task, %{"spec" => appended})
+    assign(socket, editing?: true, edit_form: to_form(changeset))
   end
 
   defp refinement_step?(%{kind: :plan, summary: summary}) do

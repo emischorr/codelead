@@ -570,7 +570,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
             phx-submit="resolve_finding"
             phx-change="validate_finding_note"
             id={"finding-note-form-#{@finding.id}"}
-            class="flex items-center gap-2"
+            class="flex flex-col gap-2"
           >
             <input type="hidden" name="finding_id" value={@finding.id} />
             <input type="hidden" name="resolution" value={@action.resolution} />
@@ -584,16 +584,33 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
                   else: "What was decided?"
               }
               autocomplete="off"
-              class="h-8 min-w-0 flex-1 rounded-lg border border-border bg-bg px-2.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none"
+              class="h-8 w-full rounded-lg border border-border bg-bg px-2.5 text-[13px] text-text placeholder:text-text3 focus:border-accent focus:outline-none"
             />
-            <.button
-              variant="primary"
-              type="submit"
-              disabled={@action.resolution == :addressed && !@action.note_present?}
-            >
-              Save
-            </.button>
-            <.button type="button" phx-click="cancel_finding_action">Cancel</.button>
+            <div class="flex items-center gap-3">
+              <label
+                for={"finding-add-to-spec-checkbox-#{@finding.id}"}
+                class="flex cursor-pointer items-center gap-1.5 text-[12px] text-text2"
+              >
+                <input type="hidden" name="add_to_spec" value="false" />
+                <input
+                  type="checkbox"
+                  id={"finding-add-to-spec-checkbox-#{@finding.id}"}
+                  name="add_to_spec"
+                  value="true"
+                  class="size-3.5 rounded border-border bg-surface text-accent accent-accent focus:ring-accent/40"
+                /> Add to spec
+              </label>
+              <div class="ml-auto flex items-center gap-2">
+                <.button
+                  variant="primary"
+                  type="submit"
+                  disabled={@action.resolution == :addressed && !@action.note_present?}
+                >
+                  Save
+                </.button>
+                <.button type="button" phx-click="cancel_finding_action">Cancel</.button>
+              </div>
+            </div>
           </form>
           <p class="text-[11px] text-text3">
             Add a note to carry this decision into the run.
