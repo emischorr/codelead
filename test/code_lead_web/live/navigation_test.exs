@@ -24,11 +24,12 @@ defmodule CodeLeadWeb.NavigationTest do
       refute has_element?(view, "#project-switcher[aria-disabled]")
     end
 
-    test "dashboard, board and settings all link out", %{conn: conn, project: project} do
+    test "dashboard, board, archive and settings all link out", %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
 
       assert has_element?(view, ~s{#nav-dashboard[href="/"]})
       assert has_element?(view, ~s{#nav-board[href="/projects/#{project.id}/board"]})
+      assert has_element?(view, ~s{#nav-archive[href="/projects/#{project.id}/archive"]})
       assert has_element?(view, ~s{#nav-settings[href="/settings"]})
     end
 
@@ -123,6 +124,15 @@ defmodule CodeLeadWeb.NavigationTest do
 
       assert has_element?(view, "#nav-board[aria-disabled]")
       refute has_element?(view, "a#nav-board")
+    end
+
+    test "archive is disabled when the instance has no projects", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      render_hook(view, "nav:restore_project", %{"id" => nil})
+
+      assert has_element?(view, "#nav-archive[aria-disabled]")
+      refute has_element?(view, "a#nav-archive")
     end
 
     test "the account page carries the same sidebar", %{conn: conn} do
@@ -236,6 +246,7 @@ defmodule CodeLeadWeb.NavigationTest do
       assert has_element?(view, "details#project-switcher")
       assert has_element?(view, ~s{#nav-dashboard[href="/"]})
       assert has_element?(view, ~s{#nav-board[href="/projects/#{project.id}/board"]})
+      assert has_element?(view, ~s{#nav-archive[href="/projects/#{project.id}/archive"]})
       assert has_element?(view, ~s{#nav-settings[href="/settings"]})
       assert has_element?(view, "#account-card")
       assert has_element?(view, "#m-nav-dashboard")

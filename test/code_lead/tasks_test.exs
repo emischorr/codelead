@@ -500,12 +500,6 @@ defmodule CodeLead.TasksTest do
 
       board = Tasks.board(task.project_id)
       assert board.done == []
-
-      assert {:ok, task} = Tasks.unarchive(task)
-      assert task.archived_at == nil
-      assert task.completed_at == completed_at
-      assert [%{id: id}] = Tasks.board(task.project_id).done
-      assert id == task.id
     end
   end
 
@@ -592,6 +586,126 @@ defmodule CodeLead.TasksTest do
       board = Tasks.board(project.id)
       assert length(board.planning) == 2
       assert board.running == []
+    end
+  end
+
+  describe "list_all/2" do
+    test "scopes to the given project" do
+      project = project_fixture()
+      other_project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+      task_fixture(other_project.id, %{work_type: :content})
+
+      assert [%{id: id}] = Tasks.list_all(project.id)
+      assert id == task.id
+    end
+
+    test "includes cancelled tasks — unlike board/1, this is the full record" do
+      project = project_fixture()
+      task = task_fixture(project.id, %{work_type: :content})
+      put_context!(task, state: :cancelled)
+
+      assert [%{id: id, state: :cancelled}] = Tasks.list_all(project.id)
+      assert id == task.id
+    end
+
+    test "filters by work_type" do
+      project = project_fixture()
+      code = task_fixture(project.id, %{work_type: :code})
+      task_fixture(project.id, %{work_type: :content})
+
+      assert [%{id: id}] = Tasks.list_all(project.id, work_type: :code)
+      assert id == code.id
+    end
+
+    test "filters by agent_id" do
+      project = project_fixture()
+      agent = agent_fixture(%{roles: [:execute], work_type: :code})
+      assigned = task_fixture(project.id, %{work_type: :code, agent_id: agent.id})
+      task_fixture(project.id, %{work_type: :code})
+
+      assert [%{id: id}] = Tasks.list_all(project.id, agent_id: agent.id)
+      assert id == assigned.id
+    end
+
+    test "filters by repository_id" do
+      project = project_fixture()
+      repository = repository_fixture(project.id)
+      other_repository = repository_fixture(project.id)
+
+      in_repo =
+        task_fixture(project.id, %{work_type: :code, repository_id: other_repository.id})
+
+      task_fixture(project.id, %{work_type: :code, repository_id: repository.id})
+
+      assert [%{id: id}] = Tasks.list_all(project.id, repository_id: other_repository.id)
+      assert id == in_repo.id
+    end
+
+    test "include_archived defaults to true, false excludes archived tasks" do
+      project = project_fixture()
+      archived = task_fixture(project.id, %{work_type: :content})
+      put_context!(archived, archived_at: DateTime.utc_now() |> DateTime.truncate(:second))
+      active = task_fixture(project.id, %{work_type: :content})
+
+      assert Tasks.list_all(project.id) |> Enum.map(& &1.id) |> Enum.sort() ==
+               Enum.sort([archived.id, active.id])
+
+      assert [%{id: id}] = Tasks.list_all(project.id, include_archived: false)
+      assert id == active.id
+    end
+
+    test "sorts by id" do
+      project = project_fixture()
+      first = task_fixture(project.id, %{work_type: :content})
+      second = task_fixture(project.id, %{work_type: :content})
+
+      assert Tasks.list_all(project.id, sort_by: :id, sort_dir: :asc) |> Enum.map(& &1.id) ==
+               [first.id, second.id]
+
+      assert Tasks.list_all(project.id, sort_by: :id, sort_dir: :desc) |> Enum.map(& &1.id) ==
+               [second.id, first.id]
+    end
+
+    test "sorts by priority rank, not alphabetically" do
+      project = project_fixture()
+      low = task_fixture(project.id, %{work_type: :content, priority: :low})
+      urgent = task_fixture(project.id, %{work_type: :content, priority: :urgent})
+      normal = task_fixture(project.id, %{work_type: :content, priority: :normal})
+      high = task_fixture(project.id, %{work_type: :content, priority: :high})
+
+      assert Tasks.list_all(project.id, sort_by: :priority, sort_dir: :desc)
+             |> Enum.map(& &1.id) ==
+               [urgent.id, high.id, normal.id, low.id]
+
+      assert Tasks.list_all(project.id, sort_by: :priority, sort_dir: :asc)
+             |> Enum.map(& &1.id) ==
+               [low.id, normal.id, high.id, urgent.id]
+    end
+
+    test "sorts by inserted_at" do
+      project = project_fixture()
+      older = task_fixture(project.id, %{work_type: :content})
+      put_context!(older, inserted_at: ~U[2026-01-01 00:00:00Z])
+      newer = task_fixture(project.id, %{work_type: :content})
+      put_context!(newer, inserted_at: ~U[2026-02-01 00:00:00Z])
+
+      assert Tasks.list_all(project.id, sort_by: :inserted_at, sort_dir: :asc)
+             |> Enum.map(& &1.id) ==
+               [older.id, newer.id]
+    end
+
+    test "sorts by completed_at, nulls last regardless of direction" do
+      project = project_fixture()
+      undone = task_fixture(project.id, %{work_type: :content})
+      done = task_fixture(project.id, %{work_type: :content})
+      put_context!(done, completed_at: ~U[2026-01-01 00:00:00Z])
+
+      assert Tasks.list_all(project.id, sort_by: :completed_at, sort_dir: :desc)
+             |> Enum.map(& &1.id) == [done.id, undone.id]
+
+      assert Tasks.list_all(project.id, sort_by: :completed_at, sort_dir: :asc)
+             |> Enum.map(& &1.id) == [done.id, undone.id]
     end
   end
 

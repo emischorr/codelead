@@ -125,6 +125,7 @@ defmodule CodeLeadWeb.Router do
 
       live "/projects/:project_id/board", BoardLive, :index
       live "/projects/:project_id/board/new", BoardLive, :new
+      live "/projects/:project_id/archive", ArchiveLive, :index
       live "/projects/:project_id/tasks/:id", TaskLive, :show
     end
 

@@ -123,6 +123,7 @@ defmodule CodeLeadWeb.NavContext do
       ["CodeLeadWeb", "DashboardLive" | _] -> :dashboard
       ["CodeLeadWeb", "BoardLive" | _] -> :board
       ["CodeLeadWeb", "TaskLive" | _] -> :board
+      ["CodeLeadWeb", "ArchiveLive" | _] -> :archive
       ["CodeLeadWeb", "SettingsLive" | _] -> :settings
       ["CodeLeadWeb", "UserLive", "Settings" | _] -> :account
       _ -> nil

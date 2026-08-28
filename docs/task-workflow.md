@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-24, execution_env derivation)
+# Task workflow (last updated: 2026-08-28, unarchive/1 removal)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -43,7 +43,7 @@ it transcribes spec §4 and fails if the definition drifts from it.
 | `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session — and the task container, which the rework reuses; feedback stored in `next_prompt` |
 | `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch, the task container, and the agent home. The transition commits even when file removal fails (root-owned leftovers of a container run) — the failure comes back as `{:ok, task, {:cleanup_failed, reason}}`, is flashed, and lands as a task step; the next dispatch refuses to build on the leftover with a host-side remedy |
 | `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned — the task container is removed either way (cattle) |
-| `archive/1` / `unarchive/1` | human | done | (state unchanged) | sets/clears `archived_at`; board/list exclude archived |
+| `archive/1` | human | done | (state unchanged) | sets `archived_at`; the board excludes archived tasks. Reversal is only possible as a raw `archived_at: nil` update — deliberately not a context function or UI action; see [`web-ui.md`](web-ui.md) |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 
 Every transition writes a `:transition` task step (denormalized actor).

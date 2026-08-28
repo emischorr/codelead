@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-19)
+# Web UI (last updated: 2026-08-28, ArchiveLive)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -11,6 +11,7 @@ what exists today.
 | `/` | `CodeLeadWeb.DashboardLive` (`:index`) | org-wide dashboard; the onboarding card when no projects exist |
 | `/projects/:project_id/board` | `CodeLeadWeb.BoardLive` (`:index`) | the Kanban board |
 | `/projects/:project_id/board/new` | `CodeLeadWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
+| `/projects/:project_id/archive` | `CodeLeadWeb.ArchiveLive` (`:index`) | full task history (archived and not, every state); filter/sort, no state-changing actions — see `## ArchiveLive` below |
 | `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
 | `/preview/launch/:task_id` | `CodeLeadWeb.PreviewLaunchController` | Open-preview target: redirects the new tab onto the active gateway's preview URL (minting the subdomain auth token when that gateway is active) |
 | `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets, path gateway); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing. Subdomain-gateway traffic bypasses the router entirely (host match in `Endpoint.call/2` → `CodeLeadWeb.PreviewHost`) |
@@ -353,6 +354,42 @@ Mobile: segmented one-column switcher + FAB (DOM ids
 prefixed `m-`); card button ids are derived from the card's own id so
 the two renderings do not collide. New-task modal validates work_type
 against `Agents.eligible_executors/2`.
+
+## ArchiveLive
+
+A project's full task history — every state, archived tasks included by
+default — for finding an old task rather than moving one through the
+workflow. This is a deliberately separate surface from the board, **not**
+a superset or a replacement:
+
+- The product spec's board-side list view (a *planned* toggle on
+  `BoardLive` itself, not yet built) is a different view of the **same
+  working set** the Kanban columns show — same exclusions (no archived, no
+  cancelled), same purpose (act on a task).
+- `ArchiveLive` is an independent page over the **entire historical
+  record**, including archived and (if one ever exists) cancelled tasks.
+  It carries no board-style actions — no Start, Archive, or column
+  buttons — only a filter/sort bar and rows that link straight to the
+  task page. Search, not action, is the point.
+
+Filters (work type, executor, repository, an "include archived" checkbox
+defaulting to checked) and sort (task id / priority / created / done,
+plus a direction toggle) all live in the query string via
+`push_patch` — same idiom as `BoardLive`'s `?column=` — so the view is
+bookmarkable and survives browser back/forward. `Tasks.list_all/2` backs
+it: unlike `Tasks.board/1` it does not exclude `:cancelled`, since "all
+tasks" means all states. Priority sorts by declared rank
+(`array_position` over `[low, normal, high, urgent]`), not
+alphabetically — `priority` is a plain string column, so a bare
+`order_by` would sort "high" ahead of "urgent". `completed_at` sorts
+nulls-last in both directions, so tasks that were never finished sink to
+the bottom instead of leading a descending sort.
+
+Archiving stays one-way in the UI: a row for an archived task shows a
+muted treatment and an "Archived" tag, never an unarchive control.
+Reversal remains technically possible — `archived_at` is just a nullable
+timestamp — but only as a direct data-level update, never a context
+function or a button; see [`task-workflow.md`](task-workflow.md).
 
 ## TaskLive
 
