@@ -899,7 +899,7 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
-  Mean time from task creation to approval over the last `days` days, in
+  Mean time from task creation to Done over the last `days` days, in
   milliseconds; nil when nothing completed. This is lead time, not agent
   time — it includes however long the task sat in Planning.
   """
@@ -925,7 +925,7 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
-  Mean time from a task's first entry into Running to approval over the
+  Mean time from a task's first entry into Running to Done over the
   last `days` days, in milliseconds; nil when nothing completed, or
   every completion in the window has no logged Running entry
   (pre-migration history). Uses the *first* entry — Running is
