@@ -92,7 +92,7 @@ CodeLead.Git.diff(task.worktree_path, repo.default_branch) |> elem(1) |> IO.puts
 
 ```elixir
 Tasks.board(project.id)                  # kanban columns
-Tasks.attention_tasks(project.id)        # attention counter
+Tasks.total_attention_count()            # attention counter — org-wide, not per project
 Tasks.steps(task.id)                     # audit trail
 Costs.task_spend(task.id)                # executor + reviewer runs
 Costs.project_spend(project.id)                               # lifetime

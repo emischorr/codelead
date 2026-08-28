@@ -9,6 +9,7 @@ defmodule CodeLead.AdvisoryRunTest do
   alias CodeLead.AdvisoryRun
   alias CodeLead.Executor.Context
   alias CodeLead.Tasks
+  alias CodeLead.Tasks.Attention
   alias CodeLead.Workspace
 
   @script Path.expand("../support/fake_acp_agent.exs", __DIR__)
@@ -59,6 +60,11 @@ defmodule CodeLead.AdvisoryRunTest do
     assert task.attention.type == :permission_request
     assert task.attention.detail =~ "Delete /etc/passwd"
     assert task.attention.ref
+    assert task.attention.source == :advisory
+
+    # Despite the ref, this doesn't block an agent: nothing routes an
+    # answer back to an advisory run, so the hand icon must stay off.
+    refute Attention.blocks_agent?(task.attention)
   end
 
   test "a failing preflight is an error, not a crash" do

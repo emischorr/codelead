@@ -8,7 +8,6 @@ defmodule CodeLead.TasksTest do
   alias CodeLead.Agents
   alias CodeLead.Repo
   alias CodeLead.Tasks
-  alias CodeLead.Tasks.Task
   alias CodeLead.Tasks.TaskStateTransition
 
   defp transitions(task) do
@@ -584,19 +583,15 @@ defmodule CodeLead.TasksTest do
     end
   end
 
-  describe "board and attention queries" do
-    test "board groups by state and excludes archived" do
+  describe "board/1" do
+    test "groups by state and excludes archived" do
       project = project_fixture()
-      t1 = task_fixture(project.id, %{work_type: :content})
-      _t2 = task_fixture(project.id, %{work_type: :content})
+      task_fixture(project.id, %{work_type: :content})
+      task_fixture(project.id, %{work_type: :content})
 
       board = Tasks.board(project.id)
       assert length(board.planning) == 2
       assert board.running == []
-
-      {:ok, _} = Tasks.set_attention(t1, :agent_question, "which color?")
-      assert [%Task{id: id}] = Tasks.attention_tasks(project.id)
-      assert id == t1.id
     end
   end
 

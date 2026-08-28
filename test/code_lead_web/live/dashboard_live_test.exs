@@ -53,16 +53,43 @@ defmodule CodeLeadWeb.DashboardLiveTest do
       {:ok, _} =
         project.id
         |> task_fixture()
-        |> Tasks.set_attention(:agent_question, "which retention window?")
+        |> Tasks.set_attention(:agent_question, "which retention window?", :executor)
 
       {:ok, _} =
         project.id
         |> task_fixture()
-        |> Tasks.set_attention(:permission_request, "allow network access?")
+        |> Tasks.set_attention(:permission_request, "allow network access?", :executor)
 
       {:ok, view, _html} = live(conn, ~p"/")
 
       assert tile_value(view, "tile-waiting-input") == "2"
+    end
+
+    test "shows the hand icon on the waiting-input tile once an agent is blocked",
+         %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, _} =
+        project.id
+        |> task_fixture()
+        |> Tasks.set_attention(:agent_question, "which retention window?", :advisory)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      # An advisory-run escalation (a reviewer or the planning survey) still
+      # counts, but nothing is actually stuck waiting on an executor.
+      assert tile_value(view, "tile-waiting-input") == "1"
+      refute has_element?(view, "#tile-waiting-input .hero-hand-raised")
+
+      {:ok, _} =
+        project.id
+        |> task_fixture()
+        |> Tasks.set_attention(:permission_request, "allow network access?", :executor)
+
+      send(view.pid, :refresh)
+
+      assert tile_value(view, "tile-waiting-input") == "2"
+      assert has_element?(view, "#tile-waiting-input .hero-hand-raised")
     end
 
     test "reports a task executing without a runner process as stalled", %{conn: conn} do
@@ -111,7 +138,7 @@ defmodule CodeLeadWeb.DashboardLiveTest do
       {:ok, waiting} =
         project.id
         |> task_fixture(%{title: "Needs a decision"})
-        |> Tasks.set_attention(:agent_question, "which retention window?")
+        |> Tasks.set_attention(:agent_question, "which retention window?", :executor)
 
       running =
         put_context!(task_fixture(project.id, %{title: "In flight"}),
@@ -157,7 +184,7 @@ defmodule CodeLeadWeb.DashboardLiveTest do
       {:ok, _task} =
         project.id
         |> task_fixture(%{title: "Arrived late"})
-        |> Tasks.set_attention(:agent_question, "which retention window?")
+        |> Tasks.set_attention(:agent_question, "which retention window?", :executor)
 
       refute render(view) =~ "Arrived late"
 

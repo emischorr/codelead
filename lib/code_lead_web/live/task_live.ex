@@ -24,6 +24,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Reviews
   alias CodeLead.Runtime
   alias CodeLead.Tasks
+  alias CodeLead.Tasks.Attention
   alias CodeLead.Tasks.Task
   alias CodeLead.Terminal
   alias CodeLead.Workspace
@@ -679,10 +680,7 @@ defmodule CodeLeadWeb.TaskLive do
     )
     |> maybe_reset_edit_form()
     |> load_planners(task, project.id, planning?)
-    |> NavContext.put_stats(
-      length(Tasks.attention_tasks(project.id)),
-      Costs.project_spend_month(project.id)
-    )
+    |> NavContext.put_stats(Costs.project_spend_month(project.id))
     |> drop_stale_live_usage()
     |> reschedule_tick()
   end
@@ -1436,7 +1434,7 @@ defmodule CodeLeadWeb.TaskLive do
         id: tab,
         label: tab_label(tab),
         patch: ~p"/projects/#{project.id}/tasks/#{task.id}?tab=#{tab}",
-        warn: tab == :agent and match?(%{type: t} when t != :review_ready, task.attention)
+        warn: tab == :agent and Attention.blocks_agent?(task.attention)
       }
     end
   end

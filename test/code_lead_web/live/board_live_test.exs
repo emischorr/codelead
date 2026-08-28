@@ -346,7 +346,7 @@ defmodule CodeLeadWeb.BoardLiveTest do
       badge_selector = ~s(#project-switcher a[href="/projects/#{other.id}/board"] span.bg-warn)
       refute has_element?(view, badge_selector)
 
-      {:ok, _task} = Tasks.set_attention(other_task, :run_failed, "boom")
+      {:ok, _task} = Tasks.set_attention(other_task, :run_failed, "boom", :executor)
       send(view.pid, {:board_changed, other.id, other_task.id})
 
       assert has_element?(view, badge_selector, "1")

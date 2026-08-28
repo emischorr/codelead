@@ -291,20 +291,26 @@ defmodule CodeLeadWeb.Layouts do
 
       <div class="h-3.5 collapsed:h-2" />
 
-      <.link
-        :if={@nav.project && @nav.attention_count > 0}
+      <div
+        :if={@nav.attention_count > 0}
         id={nav_id(@closable, "attention-pill")}
-        navigate={~p"/projects/#{@nav.project.id}/board"}
         title="Tasks needing attention"
         aria-label="Tasks needing attention"
         class="flex items-center gap-2.5 overflow-hidden whitespace-nowrap rounded-[10px] border border-warn-border bg-warn-soft px-2.5 py-2 text-[13px] font-semibold text-warn collapsed:size-[38px] collapsed:justify-center collapsed:gap-0 collapsed:rounded-full collapsed:border-0 collapsed:bg-transparent collapsed:p-0"
       >
         <span class="size-[7px] shrink-0 animate-pulse rounded-full bg-warn collapsed:hidden" />
         <span class="collapsed:hidden">Needs attention</span>
-        <span class="ml-auto rounded-[7px] bg-warn px-1.5 font-mono text-xs text-surface collapsed:ml-0 collapsed:flex collapsed:size-[26px] collapsed:items-center collapsed:justify-center collapsed:rounded-full collapsed:bg-warn-soft collapsed:px-0 collapsed:text-warn">
-          {@nav.attention_count}
+        <span class="ml-auto flex items-center gap-1.5 collapsed:ml-0">
+          <.icon
+            :if={@nav.agent_blocked?}
+            name="hero-hand-raised"
+            class="size-3.5 shrink-0 collapsed:hidden"
+          />
+          <span class="rounded-[7px] bg-warn px-1.5 font-mono text-xs text-surface collapsed:flex collapsed:size-[26px] collapsed:items-center collapsed:justify-center collapsed:rounded-full collapsed:bg-warn-soft collapsed:px-0 collapsed:text-warn">
+            {@nav.attention_count}
+          </span>
         </span>
-      </.link>
+      </div>
     </div>
 
     <.rate_limit_card

@@ -31,9 +31,10 @@ is rendered *deactivated* — same box, same position, muted, `aria-disabled`
 — never removed, so the sidebar has one stable shape and nothing shifts
 under the cursor when you move between the board and `/settings`.
 
-The exceptions are the two readouts that carry project data rather than
-navigation: the **budget tile** and the **attention pill**. Those are
-hidden outside a project, because a stale number is worse than no number.
+The exception is the **budget tile**, which carries project data rather
+than navigation and is hidden outside a project, because a stale number
+is worse than no number. The **attention pill** used to follow the same
+rule; it is now org-wide (see below) and shown on every page.
 
 ## `@nav`, the single contract
 
@@ -48,7 +49,8 @@ from — LiveViews never assemble navigation themselves:
   project: %Project{} | nil,  # the selected project
   scope: :project | :general, # is this page inside a project?
   current: :dashboard | :board | :settings | :account | nil,
-  attention_count: 0,
+  attention_count: 0,         # Tasks.total_attention_count/0 — org-wide
+  agent_blocked?: false,      # Tasks.agent_blocked?/0 — org-wide
   project_stats: %{},         # Tasks.project_summaries/0 — every project, not just the open one
   spend: nil,                 # month-to-date %{cost_cents: _, tokens: _} | nil
   rate_limit: nil             # subscription usage snapshot | nil — see below
@@ -66,11 +68,19 @@ from — LiveViews never assemble navigation themselves:
   (`DashboardLive` → `:dashboard`, `BoardLive`/`TaskLive` → `:board`,
   `SettingsLive.*` → `:settings`, `UserLive.Settings` → `:account`).
   Adding a settings page needs no wiring.
-- `attention_count` and `spend` start empty. The two pages that own live
-  project stats push their already-loaded values in with
-  `NavContext.put_stats/3` — the layout makes no context calls, and
-  `NavContext` stays free of the costs/tasks domains. `DashboardLive`
-  deliberately does not: it is org-wide, and both readouts are
+- `attention_count` and `agent_blocked?` are org-wide, exactly like
+  `rate_limit` below: `on_mount/4` reads them directly from
+  `Tasks.total_attention_count/0` and `Tasks.agent_blocked?/0`, and the
+  `{:board_changed, ...}` handler below refreshes them on every write
+  anywhere in the organization, alongside `project_stats`. `agent_blocked?`
+  is true when at least one task has an agent stuck on a human decision —
+  see `CodeLead.Tasks.Attention.blocks_agent?/1`, the single place that
+  rule is defined; it gates the pill's hand icon without splitting the
+  count itself.
+- `spend` starts empty. The two pages that own a live project spend push
+  their already-loaded value in with `NavContext.put_stats/2` — the layout
+  makes no context calls, and `NavContext` stays free of the costs domain.
+  `DashboardLive` deliberately does not: it is org-wide, and `spend` is
   project-scoped.
 - `project_stats` is the one exception to "`NavContext` stays free of the
   tasks domain" — it backs the project selector's dropdown, which lists
@@ -149,7 +159,7 @@ no width to spare.
 | Board | active, links to the project's board | links to the remembered project's board | deactivated |
 | Metrics | deactivated (not built) | deactivated | deactivated |
 | Settings | link | link, highlighted on `/settings/*` | link |
-| Attention pill | shown when count > 0 | hidden | hidden |
+| Attention pill | shown when count > 0 | shown when count > 0 | shown when count > 0 |
 | Budget tile | shown | hidden | hidden |
 | Account row (avatar · username · account · log out) | shown | shown | shown |
 
@@ -166,9 +176,10 @@ the leading dot renders in the project's chosen `color` (`Projects.Project`,
 page — orange is left out, it is `--warn`'s color), the same dot gets
 `animate-pulse` while the project has a task in the Running column, and a
 row with `attention > 0` gets a small `bg-warn` count badge pinned to the
-far right with `ml-auto`. The badge is per-project and additive to, not a
-replacement for, the sidebar's own project-scoped attention pill below —
-that one only ever reads the *open* project's count.
+far right with `ml-auto`. The badge is per-project; the sidebar's own
+attention pill below it is org-wide, so the two numbers aren't the same
+reading — the badge is what this one project owes, the pill is the whole
+organization's total.
 
 ## One sidebar, two widths
 
