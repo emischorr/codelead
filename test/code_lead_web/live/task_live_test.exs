@@ -74,6 +74,20 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "project/task scoping" do
+    test "redirects to the project board when the task doesn't belong to the project", %{
+      conn: conn
+    } do
+      project = project_fixture()
+      task = task_fixture(project.id)
+      other_project = project_fixture()
+
+      {:error, {:live_redirect, %{to: to}}} = live(conn, task_path(other_project, task))
+
+      assert to == ~p"/projects/#{other_project.id}/board"
+    end
+  end
+
   describe "back to board link" do
     test "defaults to the plain board URL when arriving without a column", %{conn: conn} do
       project = project_fixture()

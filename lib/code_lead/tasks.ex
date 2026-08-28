@@ -650,6 +650,14 @@ defmodule CodeLead.Tasks do
   def get_task(id), do: Repo.get(Task, id)
 
   @doc """
+  Scoped lookup for UI entry points that carry a project id in the URL.
+  Returns nil if the task doesn't exist or belongs to a different project,
+  so a mismatched URL fails honestly instead of leaking cross-project data.
+  """
+  @spec get_task(pos_integer(), pos_integer()) :: Task.t() | nil
+  def get_task(project_id, id), do: Repo.get_by(Task, id: id, project_id: project_id)
+
+  @doc """
   Titles for the given task ids, keyed by id. Ids without a row are
   simply absent — a live session can outlive the task it belongs to.
   """
