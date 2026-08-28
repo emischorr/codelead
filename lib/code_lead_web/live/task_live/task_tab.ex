@@ -215,12 +215,6 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           <span class="rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[11px] text-text2">
             {priority_label(@task.priority)}
           </span>
-          <span
-            :if={@task.ready_flag}
-            class="rounded-full bg-ok-soft px-2.5 py-0.5 font-mono text-[11px] font-semibold text-ok"
-          >
-            ✓ ready
-          </span>
         </div>
       </div>
 
@@ -232,7 +226,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         phx-submit="save_edit"
       >
         <.input field={@edit_form[:title]} type="text" label="Title" />
-        <.input field={@edit_form[:description]} type="textarea" label="Description" rows="3" />
+        <.input field={@edit_form[:description]} type="textarea" label="Description" rows="6" />
         <.input field={@edit_form[:spec]} type="textarea" label="Spec / acceptance criteria" rows="4" />
         <div class="grid grid-cols-2 gap-3">
           <.input
@@ -248,7 +242,6 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
             options={[Low: "low", Normal: "normal", High: "high", Urgent: "urgent"]}
           />
         </div>
-        <.input field={@edit_form[:ready_flag]} type="checkbox" label="Ready to run" />
         <div class="flex justify-end gap-2">
           <.button type="button" phx-click="toggle_edit" id="cancel-edit">Cancel</.button>
           <.button variant="primary" type="submit" phx-disable-with="Saving…">Save</.button>
