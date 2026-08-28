@@ -49,56 +49,64 @@ defmodule CodeLeadWeb.TaskLive do
   @impl true
   def mount(%{"project_id" => project_id, "id" => id}, _session, socket) do
     project = Projects.get_project!(project_id)
-    task = Tasks.get_task!(id)
 
-    if connected?(socket) do
-      Tasks.subscribe_task(task.id)
-      Tasks.subscribe_board(project.id)
+    case Tasks.get_task(project.id, id) do
+      nil ->
+        {:ok,
+         socket
+         |> put_flash(:error, "That task doesn't belong to this project.")
+         |> push_navigate(to: ~p"/projects/#{project.id}/board")}
+
+      task ->
+        if connected?(socket) do
+          Tasks.subscribe_task(task.id)
+          Tasks.subscribe_board(project.id)
+        end
+
+        socket =
+          socket
+          |> assign(
+            project: project,
+            task: task,
+            live_message: nil,
+            feed_blocks: [],
+            all_runs?: false,
+            survey_pending?: false,
+            survey_delta: nil,
+            finding_expanded: MapSet.new(),
+            finding_action: nil,
+            show_raw_report?: false,
+            hide_resolved?: false,
+            review_raw_expanded: MapSet.new(),
+            review_narrative_expanded: MapSet.new(),
+            show_feedback?: false,
+            feedback_prefill: "",
+            editing?: false,
+            schedule_form: nil,
+            diff_files: nil,
+            diff_stats: nil,
+            diff_error: nil,
+            diff_loading?: false,
+            diff_expanded: MapSet.new(),
+            diff_stale?: false,
+            diff_refresh_timer: nil,
+            following?: false,
+            follow_path: nil,
+            follow_anchor: nil,
+            folder_artifact: nil,
+            terminal_subscribed?: false,
+            live_usage: nil,
+            tick_timer: nil,
+            now: DateTime.utc_now(),
+            container_licensed?: License.feature_enabled?(:container_execution_env),
+            board_column: nil
+          )
+          |> load_task()
+          |> stream_configure(:feed, dom_id: &"agent-block-#{&1.id}")
+          |> load_feed()
+
+        {:ok, socket}
     end
-
-    socket =
-      socket
-      |> assign(
-        project: project,
-        task: task,
-        live_message: nil,
-        feed_blocks: [],
-        all_runs?: false,
-        survey_pending?: false,
-        survey_delta: nil,
-        finding_expanded: MapSet.new(),
-        finding_action: nil,
-        show_raw_report?: false,
-        hide_resolved?: false,
-        review_raw_expanded: MapSet.new(),
-        review_narrative_expanded: MapSet.new(),
-        show_feedback?: false,
-        feedback_prefill: "",
-        editing?: false,
-        schedule_form: nil,
-        diff_files: nil,
-        diff_stats: nil,
-        diff_error: nil,
-        diff_loading?: false,
-        diff_expanded: MapSet.new(),
-        diff_stale?: false,
-        diff_refresh_timer: nil,
-        following?: false,
-        follow_path: nil,
-        follow_anchor: nil,
-        folder_artifact: nil,
-        terminal_subscribed?: false,
-        live_usage: nil,
-        tick_timer: nil,
-        now: DateTime.utc_now(),
-        container_licensed?: License.feature_enabled?(:container_execution_env),
-        board_column: nil
-      )
-      |> load_task()
-      |> stream_configure(:feed, dom_id: &"agent-block-#{&1.id}")
-      |> load_feed()
-
-    {:ok, socket}
   end
 
   @impl true

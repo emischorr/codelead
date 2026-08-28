@@ -6,8 +6,8 @@ defmodule CodeLeadWeb.TaskArtifactController do
   The folder path is derived from the task's integer id alone, never
   from the request, so there is no traversal surface. The `project_id`
   in the path is checked only so a mismatched URL fails honestly; it is
-  not authorization. There is none anywhere in the app yet, and this
-  route is exactly as permissive as the LiveViews beside it.
+  not authorization — there still isn't any in the app. `TaskLive`
+  enforces the same project/task match.
   """
   use CodeLeadWeb, :controller
 
@@ -19,11 +19,8 @@ defmodule CodeLeadWeb.TaskArtifactController do
   Streams the task folder as `task-<id>-<slug>.zip`.
   """
   def download(conn, %{"project_id" => project_id, "id" => id}) do
-    task = Tasks.get_task!(id)
-    name = "task-#{task.id}-#{Workspace.slug(task.title)}"
-
-    with true <- to_string(task.project_id) == project_id,
-         %Task{target: :folder} <- task,
+    with %Task{target: :folder} = task <- Tasks.get_task(project_id, id),
+         name = "task-#{task.id}-#{Workspace.slug(task.title)}",
          {:ok, zip} <- Workspace.archive(Workspace.task_folder(task.id), name) do
       send_download(conn, {:binary, zip},
         filename: "#{name}.zip",
