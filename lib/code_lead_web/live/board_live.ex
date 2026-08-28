@@ -2,8 +2,8 @@ defmodule CodeLeadWeb.BoardLive do
   @moduledoc """
   The project Kanban board: Planning / Running / Review / Done. Desktop
   shows all four columns; mobile shows one at a time behind a segmented
-  switcher. Subscribes to the project's board topic and reloads on any
-  task change.
+  switcher, which a horizontal swipe on the pane can also step through.
+  Subscribes to the project's board topic and reloads on any task change.
   """
   use CodeLeadWeb, :live_view
 
@@ -278,17 +278,74 @@ defmodule CodeLeadWeb.BoardLive do
               </span>
             </button>
           </div>
-          <.board_column
-            id={"m-board-column-#{@mobile_column}"}
-            column={@mobile_column}
-            title={@columns[@mobile_column]}
-            tasks={@board[@mobile_column]}
-            ctx={board_ctx(assigns)}
-            id_prefix="m-"
-            headerless
-          />
+          <div
+            id="mobile-board-pane"
+            phx-hook=".SwipeColumn"
+            data-column={@mobile_column}
+            data-columns={Enum.map_join(@columns, ",", fn {column, _title} -> column end)}
+          >
+            <.board_column
+              id={"m-board-column-#{@mobile_column}"}
+              column={@mobile_column}
+              title={@columns[@mobile_column]}
+              tasks={@board[@mobile_column]}
+              ctx={board_ctx(assigns)}
+              id_prefix="m-"
+              headerless
+            />
+          </div>
         </div>
       </div>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SwipeColumn">
+        // Mobile-only pane navigation: a horizontal swipe steps to the
+        // adjacent column via the same "select_column" event the segmented
+        // switcher buttons send. Never touches task state.
+        export default {
+          mounted() {
+            this.touch = null
+
+            this.onTouchStart = (e) => {
+              if (e.touches.length !== 1) { this.touch = null; return }
+              const t = e.touches[0]
+              this.touch = {x: t.clientX, y: t.clientY, at: Date.now()}
+            }
+
+            this.onTouchEnd = (e) => {
+              if (!this.touch) { return }
+              const t = e.changedTouches[0]
+              const dx = t.clientX - this.touch.x
+              const dy = t.clientY - this.touch.y
+              const elapsed = Date.now() - this.touch.at
+              this.touch = null
+
+              const MIN_DISTANCE = 60
+              if (Math.abs(dx) < MIN_DISTANCE || Math.abs(dx) < Math.abs(dy) * 1.5 || elapsed > 600) {
+                return
+              }
+
+              const columns = this.el.dataset.columns.split(",")
+              const index = columns.indexOf(this.el.dataset.column)
+              const nextIndex = dx < 0 ? index + 1 : index - 1
+              if (nextIndex < 0 || nextIndex >= columns.length) { return }
+
+              this.pushEvent("select_column", {column: columns[nextIndex]})
+            }
+
+            this.onTouchCancel = () => { this.touch = null }
+
+            this.el.addEventListener("touchstart", this.onTouchStart, {passive: true})
+            this.el.addEventListener("touchend", this.onTouchEnd, {passive: true})
+            this.el.addEventListener("touchcancel", this.onTouchCancel, {passive: true})
+          },
+
+          destroyed() {
+            this.el.removeEventListener("touchstart", this.onTouchStart)
+            this.el.removeEventListener("touchend", this.onTouchEnd)
+            this.el.removeEventListener("touchcancel", this.onTouchCancel)
+          }
+        }
+      </script>
 
       <.fab patch={~p"/projects/#{@project.id}/board/new"} label="New task" />
 

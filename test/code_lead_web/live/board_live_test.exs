@@ -128,6 +128,30 @@ defmodule CodeLeadWeb.BoardLiveTest do
                ~s(a[href="#{~p"/projects/#{project.id}/tasks/#{task.id}?column=planning"}"])
              )
     end
+
+    test "the mobile pane carries the swipe hook and the current column", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board?column=review")
+
+      assert has_element?(
+               view,
+               ~s(#mobile-board-pane[data-column="review"][data-columns="planning,running,review,done"])
+             )
+    end
+
+    test "a swipe-driven select_column event patches the URL just like a tab click", %{
+      conn: conn
+    } do
+      project = project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      render_click(view, "select_column", %{"column" => "done"})
+
+      assert_patch(view, ~p"/projects/#{project.id}/board?column=done")
+      assert has_element?(view, "#m-board-column-done")
+    end
   end
 
   describe "new-task modal" do
