@@ -424,7 +424,6 @@ defmodule CodeLeadWeb.BoardLive do
     ~H"""
     <div class="flex items-center gap-1.5 text-[11px] text-text3">
       <span class="font-mono">{@task.work_type} · {@task.target}</span>
-      <span :if={@task.ready_flag} class="font-semibold text-ok">✓ Ready</span>
       <div :if={@startable?} class="ml-auto flex items-center">
         <button
           type="button"

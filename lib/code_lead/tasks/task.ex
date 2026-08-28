@@ -68,7 +68,6 @@ defmodule CodeLead.Tasks.Task do
     field :workflow_key, :string, default: "builtin.default"
     field :state, Ecto.Enum, values: @states, default: :planning
     field :run_state, Ecto.Enum, values: @run_states, default: :idle
-    field :ready_flag, :boolean, default: false
     field :repository_id, :id
     field :worktree_path, :string
     field :branch_name, :string
@@ -144,7 +143,6 @@ defmodule CodeLead.Tasks.Task do
       :work_type,
       :target,
       :priority,
-      :ready_flag,
       :agent_id,
       :repository_id,
       :assignee_id,
@@ -171,7 +169,6 @@ defmodule CodeLead.Tasks.Task do
       :work_type,
       :target,
       :priority,
-      :ready_flag,
       :agent_id,
       :repository_id,
       :assignee_id,
@@ -191,7 +188,7 @@ defmodule CodeLead.Tasks.Task do
   @spec details_changeset(t(), map()) :: Ecto.Changeset.t()
   def details_changeset(task, attrs) do
     task
-    |> cast(attrs, [:title, :description, :spec, :priority, :ready_flag, :assignee_id])
+    |> cast(attrs, [:title, :description, :spec, :priority, :assignee_id])
     |> validate_required([:title])
     |> foreign_key_constraint(:assignee_id)
   end

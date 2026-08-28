@@ -87,7 +87,6 @@ Four columns: **Planning → Running → Review → Done**. There is deliberatel
   - `llm_api` → **spec refinement** from the task text plus a repository file listing. A chat.
   - `acp` → **repo-aware survey**: the agent reads the linked repository read-only at its current default branch and reports requirements gaps, contradictions with the existing code, and unstated assumptions. Invoked on demand — a pull, not a push. It is the reviewer's read-only posture pointed at the codebase instead of a diff, and lands as a turn in the same conversation.
 - **Choose the executor agent** that will do the work, and **zero or more reviewer agents** that will critique it — all filtered to the task's work type. The reviewer set is pre-filled from the project's default reviewers for that work type and stays editable per task.
-- **"Ready" flag (optional):** a human-only marker for the user's own reference ("what can I kick off?"). It triggers nothing and moves no card.
 - Nothing runs automatically here. The human **manually** moves the task to Running when they decide it's ready.
 
 ### Running — agent execution
