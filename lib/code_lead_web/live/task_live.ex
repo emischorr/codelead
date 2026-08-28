@@ -71,6 +71,7 @@ defmodule CodeLeadWeb.TaskLive do
         show_raw_report?: false,
         hide_resolved?: false,
         review_raw_expanded: MapSet.new(),
+        review_narrative_expanded: MapSet.new(),
         show_feedback?: false,
         feedback_prefill: "",
         editing?: false,
@@ -552,6 +553,18 @@ defmodule CodeLeadWeb.TaskLive do
         else: MapSet.put(expanded, id)
 
     {:noreply, assign(socket, review_raw_expanded: expanded)}
+  end
+
+  def handle_event("toggle_review_narrative", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    expanded = socket.assigns.review_narrative_expanded
+
+    expanded =
+      if MapSet.member?(expanded, id),
+        do: MapSet.delete(expanded, id),
+        else: MapSet.put(expanded, id)
+
+    {:noreply, assign(socket, review_narrative_expanded: expanded)}
   end
 
   def handle_event("toggle_hide_resolved", _params, socket) do
@@ -1455,6 +1468,7 @@ defmodule CodeLeadWeb.TaskLive do
           finding_expanded={@finding_expanded}
           finding_action={@finding_action}
           review_raw_expanded={@review_raw_expanded}
+          review_narrative_expanded={@review_narrative_expanded}
           forge={(@repository && Git.forge(@repository.git_url)) || :other}
           default_branch={@repository && @repository.default_branch}
           diff_files={@diff_files}

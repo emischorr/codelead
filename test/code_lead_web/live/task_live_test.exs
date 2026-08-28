@@ -806,6 +806,44 @@ defmodule CodeLeadWeb.TaskLiveTest do
       assert view |> element("#feedback-form textarea") |> render() =~ "CTA is passive"
     end
 
+    test "the narrative is collapsed by default when there are findings to review", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+      %{review: review} = review_fixture(task, reviewer)
+
+      finding =
+        finding_fixture(task, %{phase: :review, agent_id: reviewer.id, title: "CTA is passive"})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#finding-#{finding.id}")
+      refute view |> element("#reviewer-findings") |> render() =~ "The CTA needs work."
+
+      assert view |> element("#toggle-review-narrative-#{review.id}") |> render() =~
+               "Show summary"
+
+      view |> element("#toggle-review-narrative-#{review.id}") |> render_click()
+
+      assert has_element?(view, "#review-narrative-#{review.id}")
+
+      assert view |> element("#review-narrative-#{review.id}") |> render() =~
+               "The CTA needs work."
+    end
+
+    test "the narrative is shown by default when there are no findings", %{conn: conn} do
+      %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
+      %{review: review} = review_fixture(task, reviewer)
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "review"))
+
+      assert has_element?(view, "#review-narrative-#{review.id}")
+
+      assert view |> element("#review-narrative-#{review.id}") |> render() =~
+               "The CTA needs work."
+
+      assert view |> element("#toggle-review-narrative-#{review.id}") |> render() =~
+               "Hide summary"
+    end
+
     test "a verdict-only review shows no raw JSON as its body", %{conn: conn} do
       %{task: task, project: project, reviewer: reviewer} = reviewed_task(conn)
       %{review: review} = review_fixture(task, reviewer, %{findings: ~s({"verdict": "concerns"})})
