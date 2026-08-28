@@ -269,6 +269,28 @@ defmodule CodeLeadWeb.Layouts do
         <.icon name="hero-view-columns" class="size-4 shrink-0" />
         <span class="collapsed:hidden">Board</span>
       </span>
+      <.link
+        :if={@nav.project}
+        id={nav_id(@closable, "nav-archive")}
+        navigate={~p"/projects/#{@nav.project.id}/archive"}
+        class={nav_class(@nav.current == :archive)}
+        title="Archive"
+        aria-label="Archive"
+      >
+        <.icon name="hero-archive-box" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Archive</span>
+      </.link>
+      <span
+        :if={is_nil(@nav.project)}
+        id={nav_id(@closable, "nav-archive")}
+        class={nav_class(:disabled)}
+        aria-disabled="true"
+        title="Archive — no project yet"
+        aria-label="Archive"
+      >
+        <.icon name="hero-archive-box" class="size-4 shrink-0" />
+        <span class="collapsed:hidden">Archive</span>
+      </span>
       <span
         class={nav_class(:disabled)}
         aria-disabled="true"

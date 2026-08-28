@@ -90,10 +90,14 @@ defmodule CodeLeadWeb.UIComponents do
   """
   attr :name, :string, required: true
   attr :harness, :atom, default: nil, doc: ":claude_code | :codex | nil"
+  attr :class, :any, default: nil
 
   def agent_pill(assigns) do
     ~H"""
-    <span class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 text-[11px] font-semibold text-text2">
+    <span class={[
+      "inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 text-[11px] font-semibold text-text2",
+      @class
+    ]}>
       <span class="size-1.5 rounded-full" style={"background: #{harness_color(@harness)}"} />
       {@name}
     </span>
@@ -104,6 +108,31 @@ defmodule CodeLeadWeb.UIComponents do
   defp harness_color(:claude_code), do: "#D97757"
   defp harness_color(:codex), do: "var(--run)"
   defp harness_color(_), do: "var(--accent)"
+
+  @doc """
+  Renders a task's priority as a small colored icon — no label, since the
+  color/shape pair is the whole point of a glanceable priority marker.
+  """
+  attr :priority, :atom, required: true
+  attr :class, :any, default: nil
+
+  def priority_icon(assigns) do
+    ~H"""
+    <span title={"Priority: #{@priority}"} class="inline-flex">
+      <.icon name={priority_glyph(@priority)} class={[priority_color(@priority), @class]} />
+    </span>
+    """
+  end
+
+  defp priority_glyph(:urgent), do: "hero-chevron-double-up"
+  defp priority_glyph(:high), do: "hero-chevron-up"
+  defp priority_glyph(:low), do: "hero-chevron-down"
+  defp priority_glyph(_normal), do: "hero-minus"
+
+  defp priority_color(:urgent), do: "text-del-text"
+  defp priority_color(:high), do: "text-warn"
+  defp priority_color(:low), do: "text-text3"
+  defp priority_color(_normal), do: "text-text2"
 
   @doc """
   Renders a small pulsing status dot.

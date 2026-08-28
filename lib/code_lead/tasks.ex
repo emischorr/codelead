@@ -439,7 +439,9 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
-  Hides a Done task from board/list queries without deleting it.
+  Hides a Done task from board queries without deleting it. Reversal stays
+  technically possible (`archived_at` is just a nullable timestamp) but is
+  deliberately not exposed as a context function or UI action.
   """
   @spec archive(Task.t()) :: {:ok, Task.t()} | transition_error()
   def archive(%Task{state: :done} = task) do
@@ -450,11 +452,6 @@ defmodule CodeLead.Tasks do
   end
 
   def archive(%Task{}), do: {:error, :invalid_state}
-
-  @spec unarchive(Task.t()) :: {:ok, Task.t()}
-  def unarchive(%Task{} = task) do
-    task |> Ecto.Changeset.change(archived_at: nil) |> Repo.update() |> broadcast_board_change()
-  end
 
   @doc """
   Hard-deletes a task with no pushed artifacts (Planning or Cancelled).
@@ -686,6 +683,72 @@ defmodule CodeLead.Tasks do
     Enum.reduce(tasks, empty, fn task, acc ->
       Map.update!(acc, task.state, &(&1 ++ [task]))
     end)
+  end
+
+  @doc """
+  Every task in a project — archived and cancelled included — for the
+  archive/list page. Unlike `board/1`, this is the full historical record,
+  not the active working set, so it excludes nothing by state.
+
+  `opts`: `:work_type`, `:agent_id`, `:repository_id` (each `nil` skips that
+  filter), `:include_archived` (default `true`), `:sort_by`
+  (`:id | :priority | :inserted_at | :completed_at`, default `:inserted_at`),
+  `:sort_dir` (`:asc | :desc`, default `:desc`).
+  """
+  @spec list_all(pos_integer(), keyword()) :: [Task.t()]
+  def list_all(project_id, opts \\ []) do
+    from(t in Task, where: t.project_id == ^project_id)
+    |> filter_work_type(opts[:work_type])
+    |> filter_agent(opts[:agent_id])
+    |> filter_repository(opts[:repository_id])
+    |> filter_archived(Keyword.get(opts, :include_archived, true))
+    |> order_by_field(
+      Keyword.get(opts, :sort_by, :inserted_at),
+      Keyword.get(opts, :sort_dir, :desc)
+    )
+    |> Repo.all()
+  end
+
+  defp filter_work_type(query, nil), do: query
+  defp filter_work_type(query, work_type), do: where(query, [t], t.work_type == ^work_type)
+
+  defp filter_agent(query, nil), do: query
+  defp filter_agent(query, agent_id), do: where(query, [t], t.agent_id == ^agent_id)
+
+  defp filter_repository(query, nil), do: query
+
+  defp filter_repository(query, repository_id),
+    do: where(query, [t], t.repository_id == ^repository_id)
+
+  defp filter_archived(query, true), do: query
+  defp filter_archived(query, false), do: where(query, [t], is_nil(t.archived_at))
+
+  # `priority` is a plain `:string` column (Ecto.Enum's default), so a bare
+  # `order_by` sorts alphabetically rather than by rank — rank it explicitly
+  # via each value's position in the declared order.
+  defp order_by_field(query, :priority, dir) do
+    rank =
+      dynamic(
+        [t],
+        fragment(
+          "array_position(ARRAY['low','normal','high','urgent']::varchar[], ?)",
+          t.priority
+        )
+      )
+
+    order_by(query, ^[{dir, rank}])
+  end
+
+  # `completed_at` is nil for any task not yet Done — nulls-last sinks those
+  # to the bottom regardless of direction, instead of leading a desc sort.
+  defp order_by_field(query, :completed_at, :desc),
+    do: order_by(query, [t], desc_nulls_last: t.completed_at)
+
+  defp order_by_field(query, :completed_at, :asc),
+    do: order_by(query, [t], asc_nulls_last: t.completed_at)
+
+  defp order_by_field(query, field_name, dir) do
+    order_by(query, [t], [{^dir, field(t, ^field_name)}])
   end
 
   @doc """

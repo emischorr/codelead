@@ -5,7 +5,7 @@ every authenticated page. This note records the contract it renders from,
 the rules for what is enabled where, and why the project selection is
 remembered the way it is.
 
-(last updated: 2026-08-15)
+(last updated: 2026-08-28, Archive nav item)
 
 ## Two principles
 
@@ -135,7 +135,7 @@ the forced width:
 ## Item table
 
 Order is fixed across every rendering: wordmark → project selector →
-Dashboard · Board · Metrics · Settings → attention pill →
+Dashboard · Board · Archive · Metrics · Settings → attention pill →
 budget tile → account row.
 
 The links and the attention pill share one `min-h-0 flex-1
@@ -157,6 +157,7 @@ no width to spare.
 | Project selector | `<details>` disclosure, lists all projects | deactivated, names the remembered project | deactivated, "No project" |
 | Dashboard | link | link, highlighted on `/` | link — it is org-wide and needs no project |
 | Board | active, links to the project's board | links to the remembered project's board | deactivated |
+| Archive | link, the project's full task history | links to the remembered project's archive | deactivated |
 | Metrics | deactivated (not built) | deactivated | deactivated |
 | Settings | link | link, highlighted on `/settings/*` | link |
 | Attention pill | shown when count > 0 | shown when count > 0 | shown when count > 0 |
@@ -198,9 +199,9 @@ places, all from the same markup, so an item added once appears everywhere:
   **always expanded**, whatever the desktop width is.
 
 Stable ids for tests: `sidebar`, `sidebar-collapse`, `project-switcher`,
-`nav-dashboard`, `nav-board`, `nav-settings`, `attention-pill`,
-`rate-limit-card`, `budget-card`, `account-card`, plus the `m-` variants
-and `nav-project-store`.
+`nav-dashboard`, `nav-board`, `nav-archive`, `nav-settings`,
+`attention-pill`, `rate-limit-card`, `budget-card`, `account-card`, plus
+the `m-` variants and `nav-project-store`.
 
 ### Remembering the width
 
