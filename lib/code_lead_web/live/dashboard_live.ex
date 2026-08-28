@@ -207,7 +207,7 @@ defmodule CodeLeadWeb.DashboardLive do
                 icon="hero-arrow-trending-down"
                 label="Avg lead time"
                 value={Format.duration(@avg_lead_time_ms)}
-                detail={"Created → approved · #{@window_days} days"}
+                detail={"Created → Done · #{@window_days} days"}
                 tone={:accent}
               />
               <.stat_tile
