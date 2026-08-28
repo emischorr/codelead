@@ -238,10 +238,20 @@ rather than mocked: no "autonomous success" rate (rework would mean
 string-matching audit prose), no per-agent token counters, and no
 quick-links row — the sidebar already owns navigation.
 
-It does **not** call `NavContext.put_stats/3`. The sidebar's attention
-pill and budget tile are project-scoped, and pointing them at one
-arbitrary project's board from an org-wide page would be wrong; the page
-carries its own readouts instead.
+It does **not** call `NavContext.put_stats/2`. The sidebar's attention
+pill is org-wide and refreshes itself from `NavContext` on every page;
+the budget tile is project-scoped, and pointing it at one arbitrary
+project's board from an org-wide page would be wrong, so this page
+carries its own spend readouts instead.
+
+The "Agents waiting for input" tile (`#tile-waiting-input`) swaps its
+icon to `hero-hand-raised` — the same hand the sidebar pill and the
+task page's Agent tab use — whenever `Tasks.agent_blocked?/0` is true.
+Its count is unchanged (every `:agent_question`/`:permission_request`
+task, executor- or advisory-sourced); only the icon is gated on
+`CodeLead.Tasks.Attention.blocks_agent?/1`'s stricter rule, so a
+reviewer or the planning survey asking a question bumps the number
+without raising the hand.
 
 Four refresh mechanics, all load-bearing:
 

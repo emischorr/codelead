@@ -916,7 +916,9 @@ defmodule CodeLeadWeb.TaskLiveTest do
     test "shows the banner with detail", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
-      {:ok, task} = Tasks.set_attention(task, :agent_question, "Which retention window?")
+
+      {:ok, task} =
+        Tasks.set_attention(task, :agent_question, "Which retention window?", :advisory)
 
       {:ok, view, _html} = live(conn, task_path(project, task, "task"))
 
@@ -932,7 +934,7 @@ defmodule CodeLeadWeb.TaskLiveTest do
     test "a question with a ref routes the human to the form", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id) |> put_context!(%{state: :running, run_state: :executing})
-      {:ok, task} = Tasks.set_attention(task, :agent_question, "Which one?", ref: "80")
+      {:ok, task} = Tasks.set_attention(task, :agent_question, "Which one?", :executor, ref: "80")
 
       {:ok, view, _html} = live(conn, task_path(project, task, "task"))
 
@@ -952,17 +954,30 @@ defmodule CodeLeadWeb.TaskLiveTest do
       refute has_element?(view, "#task-tab-agent.text-warn")
       refute has_element?(view, "#task-tab-agent .hero-hand-raised")
 
-      {:ok, _task} = Tasks.set_attention(task, :agent_question, "Which one?", ref: "80")
+      {:ok, _task} =
+        Tasks.set_attention(task, :agent_question, "Which one?", :executor, ref: "80")
 
       assert has_element?(view, "#task-tab-agent.text-warn")
       assert has_element?(view, "#task-tab-agent .hero-hand-raised")
+    end
+
+    test "an advisory-run question does not flag the Agent tab", %{conn: conn} do
+      project = project_fixture()
+      task = task_fixture(project.id) |> put_context!(%{state: :review})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "diff"))
+
+      {:ok, _task} = Tasks.set_attention(task, :agent_question, "Which one?", :advisory)
+
+      refute has_element?(view, "#task-tab-agent.text-warn")
+      refute has_element?(view, "#task-tab-agent .hero-hand-raised")
     end
 
     test "review_ready attention does not flag the Agent tab", %{conn: conn} do
       project = project_fixture()
       task = task_fixture(project.id) |> put_context!(%{state: :review})
 
-      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil)
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil, :advisory)
 
       {:ok, view, _html} = live(conn, task_path(project, task, "task"))
 

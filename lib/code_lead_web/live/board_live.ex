@@ -178,10 +178,7 @@ defmodule CodeLeadWeb.BoardLive do
       done_notes: Tasks.commit_notes(Enum.map(board.done, & &1.id)),
       agents: Map.new(Agents.list_agents(project.id), &{&1.id, &1})
     )
-    |> NavContext.put_stats(
-      length(Tasks.attention_tasks(project.id)),
-      Costs.project_spend_month(project.id)
-    )
+    |> NavContext.put_stats(Costs.project_spend_month(project.id))
   end
 
   defp assign_new_task_form(socket, params) do

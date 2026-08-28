@@ -29,7 +29,9 @@ defmodule CodeLead.TasksBoardEventsTest do
       task = executing_task(task)
       assert_receive {:board_changed, ^project_id, ^task_id}
 
-      {:ok, task} = Tasks.set_attention(task, :agent_question, "which retention window?")
+      {:ok, task} =
+        Tasks.set_attention(task, :agent_question, "which retention window?", :executor)
+
       assert_receive {:board_changed, ^project_id, ^task_id}
 
       {:ok, _task} = Tasks.clear_attention(task)
@@ -79,12 +81,14 @@ defmodule CodeLead.TasksBoardEventsTest do
     end
   end
 
-  describe "set_attention/4 with ref" do
+  describe "set_attention/5 with ref" do
     test "stores the opaque ref for later answers" do
       project = project_fixture()
       task = task_fixture(project.id)
 
-      {:ok, task} = Tasks.set_attention(task, :permission_request, "write outside", ref: "42")
+      {:ok, task} =
+        Tasks.set_attention(task, :permission_request, "write outside", :executor, ref: "42")
+
       assert task.attention.ref == "42"
     end
   end

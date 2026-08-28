@@ -22,8 +22,12 @@ defmodule CodeLeadWeb.NavContext do
   the handler for the client's `"nav:restore_project"` push.
 
   `rate_limit` is read directly from `SubscriptionUsageCache` here rather
-  than pushed in via `put_stats/3` — unlike `spend`, it isn't project-scoped,
+  than pushed in via `put_stats/2` — unlike `spend`, it isn't project-scoped,
   so every page (including `DashboardLive`) gets the same reading.
+
+  `attention_count` and `agent_blocked?` are org-wide for the same reason —
+  the sidebar pill covers every project, not just the open one — so they're
+  read here rather than pushed in by the page.
 
   `project_stats` backs the project switcher's per-project running-pulse
   and attention badge, so it covers every project rather than just the
@@ -41,7 +45,8 @@ defmodule CodeLeadWeb.NavContext do
       project: project,
       scope: scope,
       current: section(socket.view),
-      attention_count: 0,
+      attention_count: Tasks.total_attention_count(),
+      agent_blocked?: Tasks.agent_blocked?(),
       project_stats: Tasks.project_summaries(),
       spend: nil,
       rate_limit: SubscriptionUsageCache.current()
@@ -55,13 +60,14 @@ defmodule CodeLeadWeb.NavContext do
   end
 
   @doc """
-  Feeds the project-scoped readouts — the attention pill and the budget tile —
-  into `@nav`. Callers pass the values they already loaded rather than the
-  layout querying for them again.
+  Feeds the project-scoped budget tile into `@nav`. Callers pass the spend
+  they already loaded rather than the layout querying for it again. The
+  attention pill is org-wide and refreshed independently, in `on_mount/4`
+  and `handle_nav_info/2`.
   """
-  @spec put_stats(Socket.t(), non_neg_integer(), map() | nil) :: Socket.t()
-  def put_stats(%{assigns: %{nav: nav}} = socket, attention_count, spend) do
-    assign(socket, :nav, %{nav | attention_count: attention_count, spend: spend})
+  @spec put_stats(Socket.t(), map() | nil) :: Socket.t()
+  def put_stats(%{assigns: %{nav: nav}} = socket, spend) do
+    assign(socket, :nav, %{nav | spend: spend})
   end
 
   ## Project resolution
@@ -98,7 +104,14 @@ defmodule CodeLeadWeb.NavContext do
   # Always :cont — the page's own `handle_info` for the same message (board
   # reload, attention pill, task feed, …) still needs to run after this.
   defp handle_nav_info({:board_changed, _project_id, _task_id}, %{assigns: %{nav: nav}} = socket) do
-    {:cont, assign(socket, :nav, %{nav | project_stats: Tasks.project_summaries()})}
+    nav = %{
+      nav
+      | project_stats: Tasks.project_summaries(),
+        attention_count: Tasks.total_attention_count(),
+        agent_blocked?: Tasks.agent_blocked?()
+    }
+
+    {:cont, assign(socket, :nav, nav)}
   end
 
   defp handle_nav_info(_message, socket), do: {:cont, socket}

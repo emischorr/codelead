@@ -22,11 +22,14 @@ defmodule CodeLead.AdvisoryRun do
   ## Escalations
 
   A question or a permission request raises the ordinary `attention`
-  field on the task and the run keeps waiting. Neither is answerable
-  for an advisory run today — the UI's Allow/Deny and Answer route
-  through `CodeLead.Runtime`, which only finds executor runs — so
-  `:timeout` is what ends a run that blocks on one. Surfacing it is
-  still strictly better than the silent drop it replaces.
+  field on the task, tagged `source: :advisory`, and the run keeps
+  waiting. Neither is answerable for an advisory run today — the UI's
+  Allow/Deny and Answer route through `CodeLead.Runtime`, which only
+  finds executor runs — so `:timeout` is what ends a run that blocks on
+  one. Surfacing it is still strictly better than the silent drop it
+  replaces. The `:advisory` tag also keeps it out of
+  `CodeLead.Tasks.Attention.blocks_agent?/1`: nothing is actually stuck
+  waiting on an executor here, so it shouldn't raise the hand icon.
 
   A question is in practice unreachable here: an advisory run provisions
   a read-only context, and the ACP driver only advertises the elicitation
@@ -103,7 +106,9 @@ defmodule CodeLead.AdvisoryRun do
   end
 
   defp raise_attention(task_id, type, detail, ref) do
-    {:ok, _task} = Tasks.set_attention(Tasks.get_task!(task_id), type, detail, ref: ref)
+    {:ok, _task} =
+      Tasks.set_attention(Tasks.get_task!(task_id), type, detail, :advisory, ref: ref)
+
     :ok
   end
 end

@@ -529,7 +529,7 @@ defmodule CodeLead.Tasks do
       when run_state in [:queued, :dispatched, :executing] do
     transition(
       task,
-      %{run_state: :failed, attention: %{type: :run_failed, detail: detail}},
+      %{run_state: :failed, attention: %{type: :run_failed, detail: detail, source: :executor}},
       actor: :system,
       summary: "run failed: #{detail}"
     )
@@ -574,11 +574,18 @@ defmodule CodeLead.Tasks do
 
   ## Attention
 
-  @spec set_attention(Task.t(), atom(), String.t() | nil, keyword()) :: {:ok, Task.t()}
-  def set_attention(%Task{} = task, type, detail, opts \\ []) do
+  @doc """
+  Raises attention on a task. `source` is `:executor` for a live
+  executor run (question/permission routes an answer back to it) or
+  `:advisory` for a reviewer or the planning survey (see
+  `CodeLead.Tasks.Attention.blocks_agent?/1` for why the distinction
+  matters).
+  """
+  @spec set_attention(Task.t(), atom(), String.t() | nil, atom(), keyword()) :: {:ok, Task.t()}
+  def set_attention(%Task{} = task, type, detail, source, opts \\ []) do
     task
     |> Ecto.Changeset.change()
-    |> put_attention(%{type: type, detail: detail, ref: opts[:ref]})
+    |> put_attention(%{type: type, detail: detail, source: source, ref: opts[:ref]})
     |> Repo.update()
     |> broadcast_board_change()
   end
@@ -722,19 +729,6 @@ defmodule CodeLead.Tasks do
     %{results: results, total: total}
   end
 
-  @doc """
-  Non-archived tasks needing a human, for the attention counter.
-  """
-  @spec attention_tasks(pos_integer()) :: [Task.t()]
-  def attention_tasks(project_id) do
-    Repo.all(
-      from t in Task,
-        where: t.project_id == ^project_id and is_nil(t.archived_at),
-        where: not is_nil(t.attention),
-        order_by: [asc: t.updated_at]
-    )
-  end
-
   ## Aggregates
   #
   # Org-wide readouts for the dashboard. Each is one grouped query for
@@ -797,6 +791,34 @@ defmodule CodeLead.Tasks do
         select: {fragment("?->>'type'", t.attention), count(t.id)}
     )
     |> Map.new(fn {type, count} -> {attention_type(type), count} end)
+  end
+
+  @doc """
+  Org-wide count of tasks waiting on a human, across every attention
+  type — the sidebar pill's number.
+  """
+  @spec total_attention_count() :: non_neg_integer()
+  def total_attention_count do
+    attention_counts() |> Map.values() |> Enum.sum()
+  end
+
+  @doc """
+  Whether any task, anywhere in the organization, has an agent blocked
+  on a human decision — the sidebar pill's hand-icon signal. See
+  `CodeLead.Tasks.Attention.blocks_agent?/1`: advisory-run escalations
+  raise the same attention types but never block an agent, so they
+  don't count here.
+  """
+  @spec agent_blocked?() :: boolean()
+  def agent_blocked? do
+    blocking_types = Enum.map(Attention.blocking_types(), &Atom.to_string/1)
+
+    Repo.exists?(
+      from t in Task,
+        where: is_nil(t.archived_at) and not is_nil(t.attention),
+        where: fragment("?->>'type'", t.attention) in ^blocking_types,
+        where: fragment("?->>'source'", t.attention) == "executor"
+    )
   end
 
   @doc """
@@ -1079,11 +1101,12 @@ defmodule CodeLead.Tasks do
     Ecto.Changeset.put_embed(changeset, :attention, nil)
   end
 
-  defp put_attention(changeset, %{type: type, detail: detail} = attrs) do
+  defp put_attention(changeset, %{type: type, detail: detail, source: source} = attrs) do
     attention =
       Attention.changeset(%Attention{}, %{
         type: type,
         detail: detail,
+        source: source,
         ref: Map.get(attrs, :ref),
         at: DateTime.utc_now(:second)
       })

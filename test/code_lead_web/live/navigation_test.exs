@@ -8,6 +8,7 @@ defmodule CodeLeadWeb.NavigationTest do
   alias CodeLead.Costs
   alias CodeLead.Costs.DailyMetric
   alias CodeLead.Repo
+  alias CodeLead.Tasks
 
   setup :register_and_log_in_user
 
@@ -138,6 +139,74 @@ defmodule CodeLeadWeb.NavigationTest do
 
       assert has_element?(view, ~s{#nav-dashboard[href="/"]})
       refute has_element?(view, "#nav-dashboard[aria-disabled]")
+    end
+  end
+
+  describe "attention pill" do
+    test "hidden with nothing needing attention", %{conn: conn} do
+      project = project_fixture()
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      refute has_element?(view, "#attention-pill")
+    end
+
+    test "counts attention across every project, not just the open one", %{conn: conn} do
+      project = project_fixture()
+      other = project_fixture()
+      {:ok, _} = Tasks.set_attention(task_fixture(other.id), :run_failed, "boom", :executor)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#attention-pill", "1")
+    end
+
+    test "shows on a general page too", %{conn: conn} do
+      project = project_fixture()
+      {:ok, _} = Tasks.set_attention(task_fixture(project.id), :run_failed, "boom", :executor)
+
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      assert has_element?(view, "#attention-pill", "1")
+    end
+
+    test "is not a link", %{conn: conn} do
+      project = project_fixture()
+      {:ok, _} = Tasks.set_attention(task_fixture(project.id), :run_failed, "boom", :executor)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      refute has_element?(view, "a#attention-pill")
+    end
+
+    test "shows the hand icon once an agent is blocked on a human decision",
+         %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :run_failed, "boom", :executor)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      refute has_element?(view, "#attention-pill .hero-hand-raised")
+
+      other = task_fixture(project.id)
+      {:ok, _} = Tasks.set_attention(other, :agent_question, "which port?", :executor)
+      send(view.pid, {:board_changed, project.id, other.id})
+
+      assert has_element?(view, "#attention-pill", "2")
+      assert has_element?(view, "#attention-pill .hero-hand-raised")
+    end
+
+    test "an advisory-run question does not raise the hand icon", %{conn: conn} do
+      project = project_fixture()
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :agent_question, "which port?", :advisory)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#attention-pill", "1")
+      refute has_element?(view, "#attention-pill .hero-hand-raised")
     end
   end
 

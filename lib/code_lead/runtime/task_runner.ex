@@ -413,7 +413,9 @@ defmodule CodeLead.Runtime.TaskRunner do
     ref = to_string(id)
 
     {:ok, task} =
-      Tasks.set_attention(Tasks.get_task!(state.task.id), :agent_question, detail, ref: ref)
+      Tasks.set_attention(Tasks.get_task!(state.task.id), :agent_question, detail, :executor,
+        ref: ref
+      )
 
     row =
       record_row(state, %{
@@ -432,7 +434,9 @@ defmodule CodeLead.Runtime.TaskRunner do
     ref = to_string(id)
 
     {:ok, task} =
-      Tasks.set_attention(Tasks.get_task!(state.task.id), :permission_request, detail, ref: ref)
+      Tasks.set_attention(Tasks.get_task!(state.task.id), :permission_request, detail, :executor,
+        ref: ref
+      )
 
     row = record_row(state, %{kind: :permission, text: detail, external_id: ref})
     broadcast_event(task, event)
@@ -613,8 +617,11 @@ defmodule CodeLead.Runtime.TaskRunner do
     task = Tasks.get_task!(state.task.id)
 
     case next_pending(state) do
-      nil -> {:ok, _task} = Tasks.clear_attention(task)
-      {type, detail, ref} -> {:ok, _task} = Tasks.set_attention(task, type, detail, ref: ref)
+      nil ->
+        {:ok, _task} = Tasks.clear_attention(task)
+
+      {type, detail, ref} ->
+        {:ok, _task} = Tasks.set_attention(task, type, detail, :executor, ref: ref)
     end
 
     state

@@ -57,7 +57,7 @@ defmodule CodeLead.TasksAggregatesTest do
     test "counts tasks waiting on a human" do
       project = project_fixture()
       task = put_context!(task_fixture(project.id), state: :review)
-      {:ok, _task} = Tasks.set_attention(task, :review_ready, "2 reviewers finished")
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, "2 reviewers finished", :advisory)
 
       assert Tasks.board_summary().attention == 1
     end
@@ -71,19 +71,72 @@ defmodule CodeLead.TasksAggregatesTest do
       project_a = project_fixture()
       project_b = project_fixture()
 
-      {:ok, _} = Tasks.set_attention(task_fixture(project_a.id), :run_failed, "exit 1")
-      {:ok, _} = Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 2")
-      {:ok, _} = Tasks.set_attention(task_fixture(project_b.id), :agent_question, "which port?")
+      {:ok, _} = Tasks.set_attention(task_fixture(project_a.id), :run_failed, "exit 1", :executor)
+      {:ok, _} = Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 2", :executor)
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project_b.id), :agent_question, "which port?", :executor)
 
       assert Tasks.attention_counts() == %{run_failed: 2, agent_question: 1}
     end
 
     test "ignores archived tasks" do
       project = project_fixture()
-      {:ok, task} = Tasks.set_attention(task_fixture(project.id), :run_failed, "exit 1")
+
+      {:ok, task} =
+        Tasks.set_attention(task_fixture(project.id), :run_failed, "exit 1", :executor)
+
       put_context!(task, archived_at: DateTime.utc_now(:second))
 
       assert Tasks.attention_counts() == %{}
+    end
+  end
+
+  describe "total_attention_count/0" do
+    test "sums every attention type across projects" do
+      project = project_fixture()
+
+      {:ok, _} = Tasks.set_attention(task_fixture(project.id), :run_failed, "exit 1", :executor)
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :agent_question, "port?", :executor)
+
+      assert Tasks.total_attention_count() == 2
+    end
+  end
+
+  describe "agent_blocked?/0" do
+    test "false with no attention at all" do
+      refute Tasks.agent_blocked?()
+    end
+
+    test "false when the only attention is review_ready or run_failed" do
+      project = project_fixture()
+      {:ok, _} = Tasks.set_attention(task_fixture(project.id), :review_ready, nil, :advisory)
+      {:ok, _} = Tasks.set_attention(task_fixture(project.id), :run_failed, "exit 1", :executor)
+
+      refute Tasks.agent_blocked?()
+    end
+
+    test "false for an advisory-run question or permission request" do
+      project = project_fixture()
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :agent_question, "port?", :advisory)
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :permission_request, "write?", :advisory)
+
+      refute Tasks.agent_blocked?()
+    end
+
+    test "true for an executor-run question or permission request" do
+      project = project_fixture()
+
+      {:ok, _} =
+        Tasks.set_attention(task_fixture(project.id), :agent_question, "port?", :executor)
+
+      assert Tasks.agent_blocked?()
     end
   end
 
@@ -92,11 +145,16 @@ defmodule CodeLead.TasksAggregatesTest do
       project_a = project_fixture()
       project_b = project_fixture()
 
-      {:ok, first} = Tasks.set_attention(task_fixture(project_a.id), :run_failed, "exit 1")
+      {:ok, first} =
+        Tasks.set_attention(task_fixture(project_a.id), :run_failed, "exit 1", :executor)
+
       first = put_context!(first, updated_at: DateTime.add(DateTime.utc_now(:second), -3, :hour))
 
-      {:ok, second} = Tasks.set_attention(task_fixture(project_b.id), :agent_question, "port?")
-      {:ok, _third} = Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 2")
+      {:ok, second} =
+        Tasks.set_attention(task_fixture(project_b.id), :agent_question, "port?", :executor)
+
+      {:ok, _third} =
+        Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 2", :executor)
 
       assert [oldest, next] = Tasks.org_attention_tasks(2)
       assert oldest.id == first.id
@@ -255,7 +313,7 @@ defmodule CodeLead.TasksAggregatesTest do
 
       task_fixture(project_a.id)
       put_context!(task_fixture(project_a.id), state: :review)
-      {:ok, _} = Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 1")
+      {:ok, _} = Tasks.set_attention(task_fixture(project_b.id), :run_failed, "exit 1", :executor)
 
       summaries = Tasks.project_summaries()
 

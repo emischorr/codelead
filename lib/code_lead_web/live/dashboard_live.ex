@@ -8,9 +8,10 @@ defmodule CodeLeadWeb.DashboardLive do
   rendered at all rather than shown as placeholders.
 
   It is org-wide, so it deliberately does not call
-  `NavContext.put_stats/3`: the sidebar's attention pill and budget tile
-  are project-scoped readouts, and pointing them at one arbitrary
-  project's board would be wrong. See `docs/web-ui.md`.
+  `NavContext.put_stats/2`: the sidebar's budget tile is a project-scoped
+  readout, and pointing it at one arbitrary project's board would be
+  wrong — the attention pill needs no such call, it's org-wide already.
+  See `docs/web-ui.md`.
   """
 
   use CodeLeadWeb, :live_view
@@ -159,7 +160,7 @@ defmodule CodeLeadWeb.DashboardLive do
             />
             <.stat_tile
               id="tile-waiting-input"
-              icon="hero-chat-bubble-left-right"
+              icon={(@agent_blocked? && "hero-hand-raised") || "hero-chat-bubble-left-right"}
               label="Agents waiting for input"
               value={to_string(@waiting_for_input)}
               detail={
@@ -406,6 +407,7 @@ defmodule CodeLeadWeb.DashboardLive do
       waiting_for_input:
         Map.get(attention_counts, :agent_question, 0) +
           Map.get(attention_counts, :permission_request, 0),
+      agent_blocked?: Tasks.agent_blocked?(),
       active_runs: active_runs,
       live_task_ids: live_task_ids,
       stalled_count: stalled_count(active_runs, live_task_ids),

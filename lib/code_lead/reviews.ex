@@ -88,7 +88,7 @@ defmodule CodeLead.Reviews do
     reviewers = Tasks.reviewers(task.id)
 
     if reviewers == [] do
-      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil)
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil, :advisory)
       broadcast(task, {:review_cycle_completed, 0})
       {:ok, 0}
     else
@@ -124,7 +124,7 @@ defmodule CodeLead.Reviews do
         record_review(task, reviewer, cycle, nil, "review crashed: #{inspect(reason)}", nil)
     end)
 
-    {:ok, updated} = Tasks.set_attention(Tasks.get_task!(task.id), :review_ready, nil)
+    {:ok, updated} = Tasks.set_attention(Tasks.get_task!(task.id), :review_ready, nil, :advisory)
     broadcast(updated, {:review_cycle_completed, cycle})
   end
 
