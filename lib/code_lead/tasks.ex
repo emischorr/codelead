@@ -51,6 +51,7 @@ defmodule CodeLead.Tasks do
   alias CodeLead.Tasks.Attention
   alias CodeLead.Tasks.Task
   alias CodeLead.Tasks.TaskReviewer
+  alias CodeLead.Tasks.TaskStateTransition
   alias CodeLead.Tasks.TaskStep
   alias CodeLead.Workflow
   alias CodeLead.Workflow.Stage
@@ -902,6 +903,45 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
+  Mean time from a task's first entry into Running to approval over the
+  last `days` days, in milliseconds; nil when nothing completed, or
+  every completion in the window has no logged Running entry
+  (pre-migration history). Uses the *first* entry — Running is
+  re-enterable via retry or request-changes rework, and a later
+  re-entry must not read as a fresh start.
+  """
+  @spec avg_cycle_time_ms(pos_integer()) :: non_neg_integer() | nil
+  def avg_cycle_time_ms(days) do
+    since = window_start(days)
+
+    first_running =
+      from tst in TaskStateTransition,
+        where: tst.to_state == :running,
+        group_by: tst.task_id,
+        select: %{task_id: tst.task_id, entered_running_at: min(tst.inserted_at)}
+
+    Repo.one(
+      from t in Task,
+        join: fr in subquery(first_running),
+        on: fr.task_id == t.id,
+        where: not is_nil(t.completed_at) and t.completed_at >= ^since,
+        select:
+          type(
+            fragment(
+              "avg(extract(epoch from (? - ?)) * 1000)",
+              t.completed_at,
+              fr.entered_running_at
+            ),
+            :float
+          )
+    )
+    |> case do
+      nil -> nil
+      ms -> round(ms)
+    end
+  end
+
+  @doc """
   The most recently approved tasks across every project, newest first.
   """
   @spec recently_completed(pos_integer()) :: [map()]
@@ -991,9 +1031,26 @@ defmodule CodeLead.Tasks do
 
     with {:ok, updated} <- Repo.update(changeset) do
       record_step(updated.id, :transition, actor, Atom.to_string(actor), summary)
+      record_state_transition(updated.id, task.state, changes)
       broadcast_board_change({:ok, updated})
     end
   end
+
+  # Fires only for an actual Kanban-column move: `changes` carries
+  # `:state` exclusively via `transition_changes/3` (i.e. every
+  # `apply_transition/3` call). The direct `transition/3` calls for
+  # `run_state`-only moves (dispatch, executing, retry, schedule) never
+  # set `:state`, so they fall through untouched — a task orbiting
+  # inside one stage does not look like a fresh entry into it.
+  defp record_state_transition(task_id, from_state, %{state: to_state}) do
+    Repo.insert!(%TaskStateTransition{
+      task_id: task_id,
+      from_state: from_state,
+      to_state: to_state
+    })
+  end
+
+  defp record_state_transition(_task_id, _from_state, _changes), do: :ok
 
   # A select's "inherit" option posts an empty string, which `cast/3`
   # would read as "field omitted" and leave the old override in place.

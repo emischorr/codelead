@@ -75,6 +75,35 @@ defmodule CodeLeadWeb.DashboardLiveTest do
     end
   end
 
+  describe "throughput and spend tiles" do
+    test "cycle time reads the first Running entry, spend covers 14 days, token tile is gone", %{
+      conn: conn
+    } do
+      project = project_fixture()
+
+      task = task_fixture(project.id)
+      completed_at = DateTime.utc_now(:second)
+      entered_running_at = DateTime.add(completed_at, -3600, :second)
+
+      put_context!(task, state: :done, completed_at: completed_at)
+      put_state_transition!(task, :planning, :running, entered_running_at)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert tile_value(view, "tile-cycle-time") == "1h 00m"
+      assert has_element?(view, "#tile-spend-14d")
+      refute has_element?(view, "#tile-window-tokens")
+    end
+
+    test "cycle time is a dash with nothing completed", %{conn: conn} do
+      project_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      assert tile_value(view, "tile-cycle-time") == "—"
+    end
+  end
+
   describe "panels" do
     test "list waiting tasks, active runs and completions", %{conn: conn} do
       project = project_fixture()

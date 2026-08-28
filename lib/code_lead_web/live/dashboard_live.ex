@@ -210,11 +210,19 @@ defmodule CodeLeadWeb.DashboardLive do
                 tone={:accent}
               />
               <.stat_tile
-                id="tile-spend-today"
+                id="tile-cycle-time"
+                icon="hero-arrow-path"
+                label="Avg cycle time"
+                value={Format.duration(@avg_cycle_time_ms)}
+                detail={"Running → Done · #{@window_days} days"}
+                tone={:accent}
+              />
+              <.stat_tile
+                id="tile-spend-14d"
                 icon="hero-banknotes"
-                label="Spend today"
-                value={Format.cents(@spend_today.cost_cents)}
-                detail={"#{Format.tokens(@spend_today.tokens)} tokens"}
+                label={"Spend · #{@window_days} days"}
+                value={Format.cents(@window_cost_cents)}
+                detail={"#{Format.tokens(@window_tokens)} tokens · #{@window_runs} runs"}
                 tone={:neutral}
               >
                 <:meter>
@@ -234,14 +242,6 @@ defmodule CodeLeadWeb.DashboardLive do
                   </span>
                 </:meter>
               </.stat_tile>
-              <.stat_tile
-                id="tile-window-tokens"
-                icon="hero-cpu-chip"
-                label={"Tokens · #{@window_days} days"}
-                value={Format.tokens(@window_tokens)}
-                detail={"#{@window_runs} runs · #{Format.cents(@window_cost_cents)}"}
-                tone={:neutral}
-              />
             </div>
           </section>
 
@@ -413,6 +413,7 @@ defmodule CodeLeadWeb.DashboardLive do
       completed_total: Enum.sum(Enum.map(completion_series, & &1.value)),
       completed_trend: trend(completions),
       avg_lead_time_ms: Tasks.avg_lead_time_ms(@window_days),
+      avg_cycle_time_ms: Tasks.avg_cycle_time_ms(@window_days),
       recent_done: recent_done,
       done_spend: Costs.spend_by_task(Enum.map(recent_done, & &1.id)),
       activity: Tasks.recent_activity(9),

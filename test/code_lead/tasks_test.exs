@@ -6,8 +6,14 @@ defmodule CodeLead.TasksTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.Agents
+  alias CodeLead.Repo
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
+  alias CodeLead.Tasks.TaskStateTransition
+
+  defp transitions(task) do
+    Repo.all(from t in TaskStateTransition, where: t.task_id == ^task.id, order_by: t.id)
+  end
 
   describe "create_task/2 defaults" do
     test "code defaults to repo target and picks the first linked repository" do
@@ -406,6 +412,52 @@ defmodule CodeLead.TasksTest do
       assert task.run_state == :idle
       assert task.worktree_path == "/tmp/wt"
       assert task.branch_name == "codelead/task-1"
+    end
+  end
+
+  describe "task_state_transitions history" do
+    test "a Kanban-column move logs its from/to state" do
+      %{task: task} = runnable_task_fixture()
+      {:ok, task} = Tasks.move_to_running(task)
+
+      assert [%{from_state: :planning, to_state: :running}] = transitions(task)
+    end
+
+    test "run_state-only moves log nothing" do
+      %{task: task} = runnable_task_fixture()
+      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.begin_dispatch(task)
+      {:ok, task} = Tasks.mark_executing(task, "sess-1")
+      {:ok, task} = Tasks.fail_run(task, "boom")
+      {:ok, task} = Tasks.retry_run(task)
+
+      assert [%{from_state: :planning, to_state: :running}] = transitions(task)
+    end
+
+    test "a full run through Done logs every column move, in order" do
+      %{task: task} = runnable_task_fixture()
+      task = executing_task(task)
+      {:ok, task} = Tasks.complete_run(task)
+      {:ok, task} = Tasks.approve(task)
+
+      assert [
+               %{from_state: :planning, to_state: :running},
+               %{from_state: :running, to_state: :review},
+               %{from_state: :review, to_state: :done}
+             ] = transitions(task)
+    end
+
+    test "a rework cycle logs a second entry into Running" do
+      %{task: task} = runnable_task_fixture()
+      task = executing_task(task)
+      {:ok, task} = Tasks.complete_run(task)
+      {:ok, task} = Tasks.request_changes(task, "add tests")
+
+      assert [
+               %{from_state: :planning, to_state: :running},
+               %{from_state: :running, to_state: :review},
+               %{from_state: :review, to_state: :running}
+             ] = transitions(task)
     end
   end
 

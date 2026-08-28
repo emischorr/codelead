@@ -173,6 +173,49 @@ defmodule CodeLead.TasksAggregatesTest do
     end
   end
 
+  describe "avg_cycle_time_ms/1" do
+    test "averages first-Running-to-approval across completed tasks" do
+      project = project_fixture()
+
+      task_a = completed!(task_fixture(project.id), 1, 2)
+      entered_a = DateTime.add(task_a.completed_at, -3600, :second)
+      put_state_transition!(task_a, :planning, :running, entered_a)
+
+      task_b = completed!(task_fixture(project.id), 2, 4)
+      entered_b = DateTime.add(task_b.completed_at, -3 * 3600, :second)
+      put_state_transition!(task_b, :planning, :running, entered_b)
+
+      assert Tasks.avg_cycle_time_ms(14) == 2 * 3600 * 1000
+    end
+
+    test "uses the first entry into Running, not a later rework re-entry" do
+      project = project_fixture()
+      task = completed!(task_fixture(project.id), 1, 2)
+
+      first_entry = DateTime.add(task.completed_at, -5 * 3600, :second)
+      rework_entry = DateTime.add(task.completed_at, -3600, :second)
+
+      put_state_transition!(task, :planning, :running, first_entry)
+      put_state_transition!(task, :review, :running, rework_entry)
+
+      assert Tasks.avg_cycle_time_ms(14) == 5 * 3600 * 1000
+    end
+
+    test "is nil when nothing completed in the window" do
+      project = project_fixture()
+      task_fixture(project.id)
+
+      assert Tasks.avg_cycle_time_ms(14) == nil
+    end
+
+    test "excludes a completed task with no logged Running entry" do
+      project = project_fixture()
+      completed!(task_fixture(project.id), 1, 2)
+
+      assert Tasks.avg_cycle_time_ms(14) == nil
+    end
+  end
+
   describe "recently_completed/1" do
     test "returns the newest completions first, honoring the limit" do
       project = project_fixture()
