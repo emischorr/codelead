@@ -85,10 +85,11 @@ load-bearing; the disabled button is only the explanation.
 **Secrets never reach the browser.** The providers page reduces each row
 to `%{credential_set?: bool}` before it hits an assign, because
 `providers.config` decrypts on load. The project env store lists through
-`Projects.list_env_keys/1`, which selects a bare map so Cloak's load
-callback never runs — `env_vars/1` would hand back every plaintext value.
-Both surfaces are write-only: a stored value can be replaced, never read
-back.
+`Projects.list_env_keys/1`, which decrypts nothing — it hands back
+`value: nil` for entries marked secret (the default) and the real value
+for entries an operator chose to leave unencrypted, so those can be shown
+and edited inline. Providers stay entirely write-only; a secret env entry
+can only be replaced, never read back.
 
 The agent form's **Project** select drives `scope`: left on "All
 projects" the agent stays org-wide (`Agents.list_all_agents/0` and the

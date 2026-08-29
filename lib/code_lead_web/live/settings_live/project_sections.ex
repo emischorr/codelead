@@ -218,8 +218,9 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   end
 
   @doc """
-  The encrypted env store. Values are write-only — the list is built from
-  keys alone so nothing is ever decrypted to render it.
+  The project env store. Secret entries (the default) are write-only — the
+  list carries no value for them so nothing is ever decrypted to render it.
+  Plain entries are stored unencrypted and shown/edited inline.
   """
   attr :env_keys, :list, required: true
   attr :project_id, :integer, required: true
@@ -232,8 +233,9 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
       </:actions>
 
       <p class="text-[12px] leading-relaxed text-text3">
-        Injected into every agent process for this project. Encrypted at rest and write-only —
-        a stored value is never shown again, only replaced.
+        Injected into every agent process for this project. Secret entries are encrypted at rest
+        and write-only — never shown again, only replaced; plain entries are stored as-is and can
+        be viewed and edited here.
       </p>
 
       <div :if={@env_keys == []}>
@@ -253,11 +255,14 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
             <.badge :if={entry.forge_token?} variant={:accent}>git access</.badge>
           </:badges>
           <:meta>
-            <.secret_value set?={true} />
+            <.secret_value :if={entry.secret} set?={true} />
+            <span :if={!entry.secret} class="font-mono text-[12px] text-text2">
+              {entry.value}
+            </span>
           </:meta>
           <:actions>
             <.button patch={~p"/settings/projects/#{@project_id}/env/#{entry.key}/edit"}>
-              Replace
+              {if entry.secret, do: "Replace", else: "Edit"}
             </.button>
             <.button
               id={"delete-env-#{entry.key}"}

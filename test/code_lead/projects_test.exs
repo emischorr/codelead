@@ -172,19 +172,43 @@ defmodule CodeLead.ProjectsTest do
       assert Repo.aggregate(ProjectEnv, :count) == 0
     end
 
-    # The listing UI must never decrypt: `list_env_keys/1` selects a bare map
-    # so Cloak's load callback never runs.
-    test "list_env_keys/1 returns keys without values" do
+    # The listing UI must never decrypt a secret: `list_env_keys/1` never
+    # calls `Vault.decrypt!/1` for entries marked secret.
+    test "list_env_keys/1 hides the value of secret entries" do
       project = project_fixture()
       {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
 
       assert [entry] = Projects.list_env_keys(project.id)
       assert entry.key == "API_KEY"
       assert entry.updated_at
-      refute Map.has_key?(entry, :value)
+      assert entry.secret == true
+      assert entry.value == nil
 
       # the value is still reachable where it is actually needed
       assert Projects.env_var(project.id, "API_KEY") == "s3cret"
+    end
+
+    test "put_env/3 defaults to a secret entry" do
+      project = project_fixture()
+      {:ok, env} = Projects.put_env(project.id, "API_KEY", "s3cret")
+
+      assert env.secret == true
+    end
+
+    test "put_env/4 with secret: false stores the value in plain text" do
+      project = project_fixture()
+      {:ok, _} = Projects.put_env(project.id, "ERL_FLAGS", "+K true", false)
+
+      %{rows: [[raw_value]]} =
+        Repo.query!("SELECT value FROM project_envs WHERE project_id = $1", [project.id])
+
+      assert raw_value == "+K true"
+      assert Projects.env_vars(project.id) == [{"ERL_FLAGS", "+K true"}]
+      assert Projects.env_var(project.id, "ERL_FLAGS") == "+K true"
+
+      assert [entry] = Projects.list_env_keys(project.id)
+      assert entry.secret == false
+      assert entry.value == "+K true"
     end
   end
 
