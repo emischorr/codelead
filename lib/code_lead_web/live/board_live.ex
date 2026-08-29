@@ -2,7 +2,9 @@ defmodule CodeLeadWeb.BoardLive do
   @moduledoc """
   The project Kanban board: Planning / Running / Review / Done. Desktop
   shows all four columns; mobile shows one at a time behind a segmented
-  switcher, which a horizontal swipe on the pane can also step through.
+  switcher, which a horizontal swipe on the pane can also step through —
+  the pane translates with the finger (bounded, with resistance) and
+  springs back or slides the rest of the way off on release.
   Subscribes to the project's board topic and reloads on any task change.
   """
   use CodeLeadWeb, :live_view
@@ -271,7 +273,7 @@ defmodule CodeLeadWeb.BoardLive do
         </div>
 
         <%!-- Mobile: segmented switcher + one column --%>
-        <div class="lg:hidden">
+        <div class="overflow-x-hidden lg:hidden">
           <div class="mb-3 flex gap-1 overflow-x-auto rounded-[11px] bg-surface2 p-1">
             <button
               :for={{column, title} <- @columns}
@@ -293,6 +295,7 @@ defmodule CodeLeadWeb.BoardLive do
           <div
             id="mobile-board-pane"
             phx-hook=".SwipeColumn"
+            class="touch-pan-y"
             data-column={@mobile_column}
             data-columns={Enum.map_join(@columns, ",", fn {column, _title} -> column end)}
           >
@@ -310,17 +313,49 @@ defmodule CodeLeadWeb.BoardLive do
       </div>
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SwipeColumn">
-        // Mobile-only pane navigation: a horizontal swipe steps to the
-        // adjacent column via the same "select_column" event the segmented
-        // switcher buttons send. Never touches task state.
+        // Mobile-only pane navigation: a horizontal drag translates the
+        // pane with the finger — bounded, with more resistance at the
+        // ends where there is no adjacent column — so the gesture reads
+        // as "this is going to swipe." A commit-worthy release slides the
+        // pane the rest of the way off and fires the same "select_column"
+        // event the segmented switcher buttons send; anything short of
+        // that springs back. Never touches task state.
         export default {
           mounted() {
             this.touch = null
+            this.axis = null
+            this.committing = false
+            this.resetTimer = null
+
+            const rubberBand = (delta, max) => (delta * max) / (Math.abs(delta) + max)
 
             this.onTouchStart = (e) => {
               if (e.touches.length !== 1) { this.touch = null; return }
               const t = e.touches[0]
               this.touch = {x: t.clientX, y: t.clientY, at: Date.now()}
+              this.axis = null
+              this.el.style.transition = "none"
+            }
+
+            this.onTouchMove = (e) => {
+              if (!this.touch) { return }
+              const t = e.touches[0]
+              const dx = t.clientX - this.touch.x
+              const dy = t.clientY - this.touch.y
+
+              if (this.axis === null && Math.max(Math.abs(dx), Math.abs(dy)) > 10) {
+                this.axis = Math.abs(dx) > Math.abs(dy) * 1.5 ? "x" : "y"
+              }
+              if (this.axis !== "x") { return }
+
+              e.preventDefault()
+
+              const columns = this.el.dataset.columns.split(",")
+              const index = columns.indexOf(this.el.dataset.column)
+              const hasTarget = dx < 0 ? index < columns.length - 1 : index > 0
+              const max = hasTarget ? Math.min(this.el.clientWidth * 0.3, 120) : 24
+
+              this.el.style.transform = `translateX(${rubberBand(dx, max)}px)`
             }
 
             this.onTouchEnd = (e) => {
@@ -329,30 +364,71 @@ defmodule CodeLeadWeb.BoardLive do
               const dx = t.clientX - this.touch.x
               const dy = t.clientY - this.touch.y
               const elapsed = Date.now() - this.touch.at
+              const dragged = this.axis === "x"
               this.touch = null
+              this.axis = null
+
+              if (!dragged) { return }
+
+              this.el.style.transition = "transform 200ms ease-out"
 
               const MIN_DISTANCE = 60
-              if (Math.abs(dx) < MIN_DISTANCE || Math.abs(dx) < Math.abs(dy) * 1.5 || elapsed > 600) {
-                return
-              }
-
               const columns = this.el.dataset.columns.split(",")
               const index = columns.indexOf(this.el.dataset.column)
               const nextIndex = dx < 0 ? index + 1 : index - 1
-              if (nextIndex < 0 || nextIndex >= columns.length) { return }
+              const withinAngle = Math.abs(dx) >= Math.abs(dy) * 1.5
+              const commit =
+                Math.abs(dx) >= MIN_DISTANCE && withinAngle && elapsed <= 600 &&
+                nextIndex >= 0 && nextIndex < columns.length
 
-              this.pushEvent("select_column", {column: columns[nextIndex]})
+              if (commit) {
+                this.el.style.transform =
+                  `translateX(${dx < 0 ? -this.el.clientWidth : this.el.clientWidth}px)`
+                this.committing = true
+                this.pushEvent("select_column", {column: columns[nextIndex]})
+                clearTimeout(this.resetTimer)
+                this.resetTimer = setTimeout(() => this.resetTransform(), 800)
+              } else {
+                this.el.style.transform = "translateX(0px)"
+                this.el.addEventListener("transitionend", () => { this.el.style.transition = "" }, {once: true})
+              }
             }
 
-            this.onTouchCancel = () => { this.touch = null }
+            this.onTouchCancel = () => {
+              this.touch = null
+              this.axis = null
+              this.el.style.transition = "transform 200ms ease-out"
+              this.el.style.transform = "translateX(0px)"
+              this.el.addEventListener("transitionend", () => { this.el.style.transition = "" }, {once: true})
+            }
 
             this.el.addEventListener("touchstart", this.onTouchStart, {passive: true})
+            this.el.addEventListener("touchmove", this.onTouchMove, {passive: false})
             this.el.addEventListener("touchend", this.onTouchEnd, {passive: true})
             this.el.addEventListener("touchcancel", this.onTouchCancel, {passive: true})
           },
 
+          updated() {
+            // Fires once the swiped-to column's markup has landed. Reset
+            // now so the new pane appears already in place instead of
+            // the old one snapping back into view first.
+            if (this.committing) {
+              this.committing = false
+              clearTimeout(this.resetTimer)
+              this.resetTransform()
+            }
+          },
+
+          resetTransform() {
+            this.el.style.transition = "none"
+            this.el.style.transform = "translateX(0px)"
+            requestAnimationFrame(() => { this.el.style.transition = "" })
+          },
+
           destroyed() {
+            clearTimeout(this.resetTimer)
             this.el.removeEventListener("touchstart", this.onTouchStart)
+            this.el.removeEventListener("touchmove", this.onTouchMove)
             this.el.removeEventListener("touchend", this.onTouchEnd)
             this.el.removeEventListener("touchcancel", this.onTouchCancel)
           }
