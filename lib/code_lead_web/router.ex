@@ -1,6 +1,7 @@
 defmodule CodeLeadWeb.Router do
   use CodeLeadWeb, :router
 
+  import CodeLeadWeb.Authorization
   import CodeLeadWeb.SetupGate
   import CodeLeadWeb.UserAuth
 
@@ -27,6 +28,17 @@ defmodule CodeLeadWeb.Router do
     plug :redirect_if_setup_done
   end
 
+  # Authorization gates for the split app scopes below; each has a
+  # matching on_mount hook in its live_session (live navigation never
+  # re-runs router pipelines).
+  pipeline :admin do
+    plug :require_admin
+  end
+
+  pipeline :project_access do
+    plug :require_project_access
+  end
+
   # The preview proxy carries arbitrary proxied traffic, so it skips the
   # `:browser` conveniences that would mangle it — `:accepts` (asset
   # requests would 406), CSRF (proxied POSTs would be rejected), and the
@@ -47,7 +59,11 @@ defmodule CodeLeadWeb.Router do
   scope "/", CodeLeadWeb do
     pipe_through [:browser, :setup_pending]
 
-    live_session :setup, on_mount: [{CodeLeadWeb.SetupGate, :redirect_if_setup_done}] do
+    live_session :setup,
+      on_mount: [
+        {CodeLeadWeb.SetupGate, :redirect_if_setup_done},
+        {CodeLeadWeb.UserAuth, :mount_current_scope}
+      ] do
       live "/setup", SetupLive, :index
     end
 
@@ -98,6 +114,33 @@ defmodule CodeLeadWeb.Router do
 
       live "/settings", SettingsLive, :index
 
+      live "/settings/agents", SettingsLive.Agents, :index
+      live "/settings/agents/new", SettingsLive.Agents, :new
+      live "/settings/agents/:id/edit", SettingsLive.Agents, :edit
+
+      live "/settings/projects", SettingsLive.Projects, :index
+      live "/settings/projects/new", SettingsLive.Projects, :new
+    end
+
+    post "/users/update-password", UserSessionController, :update_password
+  end
+
+  ## Instance administration
+  #
+  # Admin-only pages in their own `live_session`: crossing into or out of
+  # them is a full page load, so the router's `:admin` plug and the
+  # session's `:require_admin` hook are both always consulted.
+
+  scope "/", CodeLeadWeb do
+    pipe_through [:browser, :setup_done, :require_authenticated_user, :admin]
+
+    live_session :admin,
+      on_mount: [
+        {CodeLeadWeb.SetupGate, :require_setup},
+        {CodeLeadWeb.UserAuth, :require_authenticated},
+        {CodeLeadWeb.Authorization, :require_admin},
+        {CodeLeadWeb.NavContext, :default}
+      ] do
       live "/settings/users", SettingsLive.Users, :index
       live "/settings/users/new", SettingsLive.Users, :new
       live "/settings/users/:id/edit", SettingsLive.Users, :edit
@@ -106,14 +149,30 @@ defmodule CodeLeadWeb.Router do
       live "/settings/providers/new", SettingsLive.Providers, :new
       live "/settings/providers/:id/edit", SettingsLive.Providers, :edit
 
-      live "/settings/agents", SettingsLive.Agents, :index
-      live "/settings/agents/new", SettingsLive.Agents, :new
-      live "/settings/agents/:id/edit", SettingsLive.Agents, :edit
+      live "/settings/organization", SettingsLive.Organization, :edit
+    end
+  end
 
-      # `/new` before `/:id`, or the literal would be swallowed by the param.
-      live "/settings/projects", SettingsLive.Projects, :index
-      live "/settings/projects/new", SettingsLive.Projects, :new
+  ## Project-keyed pages
+  #
+  # Everything here resolves a project from the URL, so the access check
+  # runs before any page code: the plug for HTTP mounts, the hook for
+  # live navigation. This session must hold ONLY project-keyed routes —
+  # `require_project_access` reads `:project_id` or the settings routes'
+  # `:id` (see `CodeLeadWeb.Authorization`).
+
+  scope "/", CodeLeadWeb do
+    pipe_through [:browser, :setup_done, :require_authenticated_user, :project_access]
+
+    live_session :project,
+      on_mount: [
+        {CodeLeadWeb.SetupGate, :require_setup},
+        {CodeLeadWeb.UserAuth, :require_authenticated},
+        {CodeLeadWeb.Authorization, :require_project_access},
+        {CodeLeadWeb.NavContext, :default}
+      ] do
       live "/settings/projects/:id", SettingsLive.Project, :show
+      live "/settings/projects/:id/members/new", SettingsLive.Project, :new_member
       live "/settings/projects/:id/repositories/new", SettingsLive.Project, :new_repository
 
       live "/settings/projects/:id/repositories/:repository_id/edit",
@@ -128,8 +187,6 @@ defmodule CodeLeadWeb.Router do
       live "/projects/:project_id/archive", ArchiveLive, :index
       live "/projects/:project_id/tasks/:id", TaskLive, :show
     end
-
-    post "/users/update-password", UserSessionController, :update_password
 
     # A download is a controller response, not a LiveView render, so it
     # sits outside the `live_session` — same pipeline, same gates.

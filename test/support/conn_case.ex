@@ -45,11 +45,12 @@ defmodule CodeLeadWeb.ConnCase do
 
       setup :register_and_log_in_user
 
-  It stores an updated connection and a registered user in the
-  test context.
+  It stores an updated connection and a registered user in the test
+  context. Tag the case `@moduletag role: :admin` (or a single test
+  `@tag role: :admin`) to log in an admin instead.
   """
   def register_and_log_in_user(%{conn: conn} = context) do
-    user = CodeLead.AccountsFixtures.user_fixture()
+    user = CodeLead.AccountsFixtures.user_fixture(Map.take(context, [:role]))
     scope = CodeLead.Accounts.Scope.for_user(user)
 
     opts =
@@ -58,6 +59,19 @@ defmodule CodeLeadWeb.ConnCase do
       |> Enum.into([])
 
     %{conn: log_in_user(conn, user, opts), user: user, scope: scope}
+  end
+
+  @doc """
+  Setup helper that creates a project the logged-in user maintains.
+
+      setup [:register_and_log_in_user, :create_project_as_maintainer]
+
+  Stores the project and a scope that carries the membership.
+  """
+  def create_project_as_maintainer(%{user: user}) do
+    project = CodeLead.ProjectsFixtures.project_fixture()
+    CodeLead.AccountsFixtures.membership_fixture(project, user, :maintainer)
+    %{project: project, scope: CodeLead.Accounts.Scope.for_user(user)}
   end
 
   @doc """

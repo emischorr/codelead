@@ -19,6 +19,8 @@ defmodule CodeLeadWeb.TaskLiveTest do
   alias CodeLead.Tasks
   alias CodeLeadWeb.DiffComponents
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   defp task_path(project, task, tab \\ nil) do

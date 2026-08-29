@@ -8,6 +8,8 @@ defmodule CodeLeadWeb.SettingsLive.AgentsTest do
 
   alias CodeLead.Agents
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   describe "list" do

@@ -168,7 +168,7 @@ defmodule CodeLeadWeb.PreviewHostTest do
     end
 
     test "stale /preview/ path URLs are refused with a pointer to the launch route" do
-      user_conn = log_in_user(build_conn(), CodeLead.AccountsFixtures.user_fixture())
+      user_conn = log_in_user(build_conn(), CodeLead.AccountsFixtures.admin_fixture())
       task = repo_task(4321)
 
       conn = get(user_conn, "/preview/#{task.id}/")
@@ -179,7 +179,7 @@ defmodule CodeLeadWeb.PreviewHostTest do
     end
 
     test "the launch route redirects onto the subdomain with a verifiable token" do
-      user_conn = log_in_user(build_conn(), CodeLead.AccountsFixtures.user_fixture())
+      user_conn = log_in_user(build_conn(), CodeLead.AccountsFixtures.admin_fixture())
       task = repo_task(4321)
 
       conn = get(user_conn, "/preview/launch/#{task.id}")

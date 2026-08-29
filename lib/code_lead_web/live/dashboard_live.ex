@@ -26,6 +26,7 @@ defmodule CodeLeadWeb.DashboardLive do
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
   alias CodeLead.Terminal
+  alias CodeLeadWeb.NavContext
 
   @window_days 14
   @refresh_ms 800
@@ -174,7 +175,11 @@ defmodule CodeLeadWeb.DashboardLive do
             />
           </section>
 
-          <.live_component module={CodeLeadWeb.Components.SearchBar} id="global-search" />
+          <.live_component
+            module={CodeLeadWeb.Components.SearchBar}
+            id="global-search"
+            visible_ids={NavContext.visible_ids(@current_scope)}
+          />
 
           <section class="grid gap-3.5 lg:grid-cols-3">
             <.section_card label={"Tasks completed · last #{@window_days} days"} class="lg:col-span-2">
@@ -385,16 +390,18 @@ defmodule CodeLeadWeb.DashboardLive do
   ## Loading
 
   defp load_dashboard(socket) do
-    projects = Projects.list_projects()
+    current_scope = socket.assigns.current_scope
+    ids = NavContext.visible_ids(current_scope)
+    projects = Projects.list_projects(current_scope)
     organization = socket.assigns.organization
 
-    active_runs = Tasks.active_runs()
+    active_runs = Tasks.active_runs(ids)
     live_task_ids = MapSet.new(RunSupervisor.active_task_ids())
-    recent_done = Tasks.recently_completed(6)
-    completions = Tasks.completions_by_day(@window_days)
+    recent_done = Tasks.recently_completed(6, ids)
+    completions = Tasks.completions_by_day(@window_days, ids)
     completion_series = completion_series(completions)
-    spend_series = Costs.daily_series(@window_days)
-    attention_counts = Tasks.attention_counts()
+    spend_series = Costs.daily_series(@window_days, ids)
+    attention_counts = Tasks.attention_counts(ids)
 
     assign(socket,
       window_days: @window_days,
@@ -402,33 +409,37 @@ defmodule CodeLeadWeb.DashboardLive do
       empty_summary: %{planning: 0, running: 0, review: 0, done: 0, attention: 0},
       projects: projects,
       projects_by_id: Map.new(projects, &{&1.id, &1}),
-      summary: Tasks.board_summary(),
-      attention_tasks: Tasks.org_attention_tasks(6),
+      summary: Tasks.board_summary(ids),
+      attention_tasks: Tasks.org_attention_tasks(6, ids),
       waiting_for_input:
         Map.get(attention_counts, :agent_question, 0) +
           Map.get(attention_counts, :permission_request, 0),
-      agent_blocked?: Tasks.agent_blocked?(),
+      agent_blocked?: Tasks.agent_blocked?(ids),
       active_runs: active_runs,
       live_task_ids: live_task_ids,
       stalled_count: stalled_count(active_runs, live_task_ids),
       completion_series: completion_series,
       completed_total: Enum.sum(Enum.map(completion_series, & &1.value)),
       completed_trend: trend(completions),
-      avg_lead_time_ms: Tasks.avg_lead_time_ms(@window_days),
-      avg_cycle_time_ms: Tasks.avg_cycle_time_ms(@window_days),
+      avg_lead_time_ms: Tasks.avg_lead_time_ms(@window_days, ids),
+      avg_cycle_time_ms: Tasks.avg_cycle_time_ms(@window_days, ids),
       recent_done: recent_done,
       done_spend: Costs.spend_by_task(Enum.map(recent_done, & &1.id)),
-      activity: Tasks.recent_activity(9),
+      activity: Tasks.recent_activity(9, ids),
       spend_bars: spend_bars(spend_series),
       window_tokens: Enum.sum(Enum.map(spend_series, & &1.tokens)),
       window_cost_cents: Enum.sum(Enum.map(spend_series, & &1.cost_cents)),
       window_runs: Enum.sum(Enum.map(spend_series, & &1.run_count)),
-      spend_today: Costs.org_spend_today(),
-      org_spend: org_spend(organization),
-      project_summaries: Tasks.project_summaries(),
-      project_spend: Costs.spend_by_project_month()
+      spend_today: Costs.org_spend_today(ids),
+      org_spend: org_spend(organization, ids),
+      project_summaries: Tasks.project_summaries(ids),
+      project_spend: scoped_project_spend(ids)
     )
   end
+
+  # Non-admins only see their projects' rows of the per-project spend map.
+  defp scoped_project_spend(nil), do: Costs.spend_by_project_month()
+  defp scoped_project_spend(ids), do: Costs.spend_by_project_month() |> Map.take(ids)
 
   # One armed timer at a time, so a burst of transitions during a run
   # coalesces into a single reload instead of one per event.
@@ -483,8 +494,10 @@ defmodule CodeLeadWeb.DashboardLive do
 
   # The month-to-date total is only ever the budget meter's numerator,
   # so with no limit configured it is two queries nobody reads.
-  defp org_spend(%{budget_limit_cents: nil, budget_limit_tokens: nil}), do: nil
-  defp org_spend(_organization), do: Costs.org_spend_month()
+  defp org_spend(%{budget_limit_cents: nil, budget_limit_tokens: nil}, _ids), do: nil
+
+  defp org_spend(_organization, ids),
+    do: Costs.org_spend_month(Date.beginning_of_month(Date.utc_today()), ids)
 
   # `run_state` is the database's belief; the registry is the process
   # truth. A task executing without a runner has lost it.

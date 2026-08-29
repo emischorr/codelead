@@ -7,6 +7,8 @@ defmodule CodeLeadWeb.SettingsLive.ProjectsTest do
 
   alias CodeLead.Projects
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   describe "list" do

@@ -11,6 +11,8 @@ defmodule CodeLead.Agents do
 
   import Ecto.Query
 
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Agents.Agent
   alias CodeLead.Agents.ProjectDefaultReviewer
   alias CodeLead.Agents.Provider
@@ -170,7 +172,20 @@ defmodule CodeLead.Agents do
 
   @doc """
   Creates an agent. `project_id` binds it to one project; a blank value
-  keeps it org-wide (see `Agent.changeset/2`).
+  keeps it org-wide (see `Agent.changeset/2`). Org-wide agents are
+  admin-only, project agents need the maintainer role on that project.
+  """
+  @spec create_agent(Scope.t() | nil, map()) ::
+          {:ok, Agent.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def create_agent(scope, attrs) do
+    with :ok <- authorize_agent_scope(scope, attrs_project_id(attrs, nil)) do
+      create_agent(attrs)
+    end
+  end
+
+  @doc """
+  `create_agent/2` without authorization — the system seam for the setup
+  wizard, seeds, and fixtures.
   """
   @spec create_agent(map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def create_agent(attrs) do
@@ -179,11 +194,40 @@ defmodule CodeLead.Agents do
     |> Repo.insert()
   end
 
+  @doc """
+  Updates an agent. Authorizes against both the agent's current scope
+  and the one the attrs would move it to — a maintainer can neither
+  promote a project agent to org-wide nor push it into a project they
+  don't maintain.
+  """
+  @spec update_agent(Scope.t() | nil, Agent.t(), map()) ::
+          {:ok, Agent.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def update_agent(scope, %Agent{} = agent, attrs) do
+    with :ok <- authorize_agent_scope(scope, agent.project_id),
+         :ok <- authorize_agent_scope(scope, attrs_project_id(attrs, agent.project_id)) do
+      update_agent(agent, attrs)
+    end
+  end
+
   @spec update_agent(Agent.t(), map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def update_agent(agent, attrs) do
     agent
     |> Agent.changeset(attrs)
     |> Repo.update()
+  end
+
+  defp authorize_agent_scope(scope, nil), do: Policy.authorize(scope, :manage_org_agents)
+
+  defp authorize_agent_scope(scope, project_id),
+    do: Policy.authorize(scope, :manage_project, project_id)
+
+  defp attrs_project_id(attrs, fallback) do
+    case attrs[:project_id] || attrs["project_id"] do
+      nil -> fallback
+      "" -> nil
+      id when is_binary(id) -> String.to_integer(id)
+      id -> id
+    end
   end
 
   @spec get_agent!(pos_integer()) :: Agent.t()
@@ -199,6 +243,22 @@ defmodule CodeLead.Agents do
   @spec list_all_agents() :: [Agent.t()]
   def list_all_agents do
     Repo.all(from a in Agent, order_by: a.name)
+  end
+
+  @doc """
+  The agents the settings page shows a caller: everything for admins
+  (`nil`), otherwise the org pool plus the project agents of the given
+  (maintained) projects — other projects' agents stay out of sight.
+  """
+  @spec list_agents_for_settings([pos_integer()] | nil) :: [Agent.t()]
+  def list_agents_for_settings(nil), do: list_all_agents()
+
+  def list_agents_for_settings(project_ids) do
+    Repo.all(
+      from a in Agent,
+        where: a.scope == :org or a.project_id in ^project_ids,
+        order_by: a.name
+    )
   end
 
   @doc """
@@ -238,6 +298,14 @@ defmodule CodeLead.Agents do
   cascade, so an unguarded delete would quietly strip executors and reviewers
   off existing tasks instead of failing.
   """
+  @spec delete_agent(Scope.t() | nil, Agent.t()) ::
+          {:ok, Agent.t()} | {:error, :unauthorized | {:in_use, map()}}
+  def delete_agent(scope, %Agent{} = agent) do
+    with :ok <- authorize_agent_scope(scope, agent.project_id) do
+      delete_agent(agent)
+    end
+  end
+
   @spec delete_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, {:in_use, map()}}
   def delete_agent(%Agent{id: id} = agent) do
     usage = agent_usage(id)

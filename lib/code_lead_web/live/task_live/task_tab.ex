@@ -44,6 +44,9 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :finalize_mode, :atom, default: :pull_request
   attr :project_finalize_mode, :atom, default: :pull_request
   attr :container_licensed?, :boolean, default: false
+  attr :can_edit?, :boolean, default: true
+  attr :can_operate?, :boolean, default: true
+  attr :can_plan?, :boolean, default: true
 
   def task_tab(assigns) do
     ~H"""
@@ -54,7 +57,9 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           type={@task.attention.type}
           detail={@task.attention.detail}
         >
-          <:actions :if={@task.attention.type == :permission_request && @task.attention.ref}>
+          <:actions :if={
+            @task.attention.type == :permission_request && @task.attention.ref && @can_operate?
+          }>
             <.button
               variant="primary"
               phx-click="answer_permission"
@@ -75,7 +80,9 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           </:actions>
           <%!-- The form itself lives on the Agent tab beside the question,
                 where the agent's options and their descriptions are. --%>
-          <:actions :if={@task.attention.type == :agent_question && @task.attention.ref}>
+          <:actions :if={
+            @task.attention.type == :agent_question && @task.attention.ref && @can_operate?
+          }>
             <.button
               variant="primary"
               patch={~p"/projects/#{@task.project_id}/tasks/#{@task.id}?tab=agent"}
@@ -97,7 +104,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           task={@task}
           edit_form={@edit_form}
           decisions={@decisions}
-          editable?={@task.state == :planning}
+          editable?={@task.state == :planning && @can_edit?}
           editing?={@editing? && @task.state == :planning}
         />
 
@@ -117,6 +124,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           eligible_planners={@eligible_planners}
           selected_planner={@selected_planner}
           survey_pending?={@survey_pending?}
+          can_plan?={@can_plan?}
         />
 
         <.section_card label="Timeline" id="timeline-card">
@@ -142,6 +150,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           reviews={@reviews}
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
+          can_operate?={@can_operate?}
         />
         <.target_card
           task={@task}
@@ -150,6 +159,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           finalize_mode={@finalize_mode}
           project_finalize_mode={@project_finalize_mode}
           container_licensed?={@container_licensed?}
+          can_edit?={@can_edit?}
         />
         <.cost_card runs={@runs} task_stat={@task_stat} />
       </div>
@@ -267,6 +277,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :eligible_planners, :list, default: []
   attr :selected_planner, :map, default: nil
   attr :survey_pending?, :boolean, default: false
+  attr :can_plan?, :boolean, default: true
 
   # One card for the whole planning-agent lifecycle: pick an agent and
   # run it on top, findings (once any exist) and the chat below.
@@ -318,7 +329,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         </div>
       </:actions>
 
-      <div :if={@task.state == :planning} class="flex flex-col gap-2">
+      <div :if={@task.state == :planning && @can_plan?} class="flex flex-col gap-2">
         <div class="flex items-center gap-2">
           <form id="planner-form" phx-change="set_planner" class="min-w-0 flex-1">
             <select
@@ -489,6 +500,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :reviews, :list, required: true
   attr :eligible_executors, :list, default: []
   attr :eligible_reviewers, :list, default: []
+  attr :can_operate?, :boolean, default: true
 
   defp people_card(assigns) do
     assigns = assign(assigns, :latest_verdicts, latest_verdicts(assigns.reviews))
@@ -509,7 +521,11 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
       <p :if={!@executor && @task.state != :planning} class="text-[13px] text-text3">
         No executor selected.
       </p>
-      <form :if={@task.state == :planning} id="executor-form" phx-change="set_executor">
+      <form
+        :if={@task.state == :planning && @can_operate?}
+        id="executor-form"
+        phx-change="set_executor"
+      >
         <select
           name="agent_id"
           class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
@@ -543,7 +559,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
         </p>
       </div>
       <form
-        :if={@task.state == :planning}
+        :if={@task.state == :planning && @can_operate?}
         id="reviewers-form"
         phx-change="set_reviewers"
         class="flex flex-col gap-1.5"
@@ -575,6 +591,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :finalize_mode, :atom, default: :pull_request
   attr :project_finalize_mode, :atom, default: nil
   attr :container_licensed?, :boolean, default: false
+  attr :can_edit?, :boolean, default: true
 
   defp target_card(assigns) do
     ~H"""
@@ -582,7 +599,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
       <%!-- Planning is the only state where the execution shape is editable;
             afterwards a worktree or task folder already exists for it. --%>
       <form
-        :if={@task.state == :planning}
+        :if={@task.state == :planning && @can_edit?}
         id="target-form"
         phx-change="set_target"
         class="flex flex-col gap-2.5"

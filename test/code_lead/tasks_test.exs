@@ -75,7 +75,8 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :code, repository_id: local_repo.id})
       assert task.execution_env == :local
 
-      assert {:ok, task} = Tasks.update_task(task, %{repository_id: devcontainer_repo.id})
+      assert {:ok, task} =
+               Tasks.update_task(admin_scope(), task, %{repository_id: devcontainer_repo.id})
 
       assert task.execution_env == :container
     end
@@ -87,7 +88,7 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :code, repository_id: devcontainer_repo.id})
       assert task.execution_env == :container
 
-      assert {:ok, task} = Tasks.update_task(task, %{repository_id: local_repo.id})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{repository_id: local_repo.id})
 
       assert task.execution_env == :local
     end
@@ -98,12 +99,12 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :code, repository_id: repository.id})
       assert task.execution_env == :container
 
-      assert {:ok, task} = Tasks.update_task(task, %{execution_env: :local})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{execution_env: :local})
       assert task.execution_env == :local
 
       # An unrelated edit that never touches repository_id must not
       # re-derive over the manual choice.
-      assert {:ok, task} = Tasks.update_task(task, %{title: "Renamed"})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{title: "Renamed"})
       assert task.execution_env == :local
     end
   end
@@ -114,7 +115,7 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :code})
 
       assert {:ok, task} =
-               Tasks.update_task(task, %{
+               Tasks.update_task(admin_scope(), task, %{
                  work_type: :content,
                  target: :folder,
                  execution_env: :container
@@ -136,7 +137,7 @@ defmodule CodeLead.TasksTest do
       assert [%{id: id}] = Tasks.reviewers(task.id)
       assert id == code_reviewer.id
 
-      assert {:ok, task} = Tasks.update_task(task, %{work_type: :content})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{work_type: :content})
 
       assert task.agent_id == nil
       assert [%{id: id}] = Tasks.reviewers(task.id)
@@ -148,7 +149,7 @@ defmodule CodeLead.TasksTest do
       executor = agent_fixture(%{roles: [:execute], work_type: :code})
       task = task_fixture(project.id, %{work_type: :code, agent_id: executor.id})
 
-      assert {:ok, task} = Tasks.update_task(task, %{priority: :high})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{priority: :high})
 
       assert task.agent_id == executor.id
     end
@@ -159,7 +160,8 @@ defmodule CodeLead.TasksTest do
       :ok = Agents.set_default_reviewers(project.id, :code, [code_reviewer.id])
       task = task_fixture(project.id, %{work_type: :code})
 
-      assert {:ok, task} = Tasks.update_task(task, %{work_type: :content, target: :folder})
+      assert {:ok, task} =
+               Tasks.update_task(admin_scope(), task, %{work_type: :content, target: :folder})
 
       assert Tasks.reviewers(task.id) == []
     end
@@ -170,7 +172,7 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :content})
       assert task.repository_id == nil
 
-      assert {:ok, task} = Tasks.update_task(task, %{target: :repo})
+      assert {:ok, task} = Tasks.update_task(admin_scope(), task, %{target: :repo})
 
       assert task.target == :repo
       assert task.repository_id == repository.id
@@ -178,10 +180,10 @@ defmodule CodeLead.TasksTest do
 
     test "after planning the execution shape is locked" do
       %{task: task} = runnable_task_fixture()
-      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.move_to_running(admin_scope(), task)
 
       {:ok, updated} =
-        Tasks.update_task(task, %{
+        Tasks.update_task(admin_scope(), task, %{
           work_type: :content,
           execution_env: :container,
           title: "New title"
@@ -198,8 +200,8 @@ defmodule CodeLead.TasksTest do
       wrong = agent_fixture(%{roles: [:review], work_type: :code})
       right = agent_fixture(%{roles: [:execute], work_type: :code})
 
-      assert {:error, :executor_ineligible} = Tasks.set_executor(task, wrong.id)
-      assert {:ok, task} = Tasks.set_executor(task, right.id)
+      assert {:error, :executor_ineligible} = Tasks.set_executor(admin_scope(), task, wrong.id)
+      assert {:ok, task} = Tasks.set_executor(admin_scope(), task, right.id)
       assert task.agent_id == right.id
     end
 
@@ -250,7 +252,7 @@ defmodule CodeLead.TasksTest do
 
       assert Tasks.finalize_mode(task) == :merge
 
-      {:ok, task} = Tasks.set_finalize_mode(task, "squash")
+      {:ok, task} = Tasks.set_finalize_mode(admin_scope(), task, "squash")
       assert Tasks.finalize_mode(task) == :squash
     end
 
@@ -265,8 +267,8 @@ defmodule CodeLead.TasksTest do
           repository_id: repository.id
         })
 
-      {:ok, task} = Tasks.set_finalize_mode(task, "squash")
-      {:ok, task} = Tasks.set_finalize_mode(task, "")
+      {:ok, task} = Tasks.set_finalize_mode(admin_scope(), task, "squash")
+      {:ok, task} = Tasks.set_finalize_mode(admin_scope(), task, "")
       assert task.finalize_mode == nil
 
       {:ok, _project} = CodeLead.Projects.put_finalize_defaults(project, %{"repo" => "merge"})
@@ -277,7 +279,7 @@ defmodule CodeLead.TasksTest do
       project = project_fixture()
       task = task_fixture(project.id, %{work_type: :content, target: :folder})
 
-      assert {:error, changeset} = Tasks.set_finalize_mode(task, "merge")
+      assert {:error, changeset} = Tasks.set_finalize_mode(admin_scope(), task, "merge")
       assert "is invalid" in errors_on(changeset).finalize_mode
     end
   end
@@ -288,7 +290,7 @@ defmodule CodeLead.TasksTest do
       repository_fixture(project.id)
       task = task_fixture(project.id, %{work_type: :code})
 
-      assert {:error, :no_executor} = Tasks.move_to_running(task)
+      assert {:error, :no_executor} = Tasks.move_to_running(admin_scope(), task)
     end
 
     test "requires a repository for repo targets" do
@@ -299,7 +301,7 @@ defmodule CodeLead.TasksTest do
         task_fixture(project.id, %{work_type: :code, target: :repo, agent_id: executor.id})
 
       assert task.repository_id == nil
-      assert {:error, :missing_repository} = Tasks.move_to_running(task)
+      assert {:error, :missing_repository} = Tasks.move_to_running(admin_scope(), task)
     end
 
     test "a plan-role agent does not satisfy the executor guard" do
@@ -309,21 +311,21 @@ defmodule CodeLead.TasksTest do
       task = task_fixture(project.id, %{work_type: :code})
 
       # Surveying is not executing: the guard stays keyed on :execute.
-      assert {:error, :executor_ineligible} = Tasks.set_executor(task, planner.id)
-      assert {:error, :no_executor} = Tasks.move_to_running(task)
+      assert {:error, :executor_ineligible} = Tasks.set_executor(admin_scope(), task, planner.id)
+      assert {:error, :no_executor} = Tasks.move_to_running(admin_scope(), task)
     end
 
     test "rejects an executor that lost eligibility" do
       %{task: task, executor: executor} = runnable_task_fixture()
       {:ok, _} = Agents.update_agent(executor, %{roles: [:review]})
 
-      assert {:error, :executor_ineligible} = Tasks.move_to_running(task)
+      assert {:error, :executor_ineligible} = Tasks.move_to_running(admin_scope(), task)
     end
 
     test "enqueues and records a transition step" do
       %{task: task} = runnable_task_fixture()
 
-      assert {:ok, task} = Tasks.move_to_running(task)
+      assert {:ok, task} = Tasks.move_to_running(admin_scope(), task)
       assert task.state == :running
       assert task.run_state == :queued
 
@@ -352,13 +354,13 @@ defmodule CodeLead.TasksTest do
       {:ok, repository} = CodeLead.Projects.update_repository(repository, %{env_kind: :default})
 
       assert Tasks.startable(task, executor) == {:error, :missing_execution_env}
-      assert {:error, :missing_execution_env} = Tasks.move_to_running(task)
+      assert {:error, :missing_execution_env} = Tasks.move_to_running(admin_scope(), task)
 
       {:ok, _repository} =
         CodeLead.Projects.update_repository(repository, %{env_kind: :devcontainer})
 
       assert Tasks.startable(task, executor) == :ok
-      assert {:ok, _task} = Tasks.move_to_running(task)
+      assert {:ok, _task} = Tasks.move_to_running(admin_scope(), task)
     end
 
     test "a local task is unaffected by an undeclared environment" do
@@ -372,7 +374,7 @@ defmodule CodeLead.TasksTest do
   describe "run lifecycle (spec §4)" do
     test "queued → dispatched → executing → review" do
       %{task: task} = runnable_task_fixture()
-      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.move_to_running(admin_scope(), task)
 
       assert {:ok, task} = Tasks.begin_dispatch(task)
       assert task.run_state == :dispatched
@@ -396,7 +398,7 @@ defmodule CodeLead.TasksTest do
       assert task.attention.type == :run_failed
       assert task.attention.detail == "agent crashed"
 
-      assert {:ok, task} = Tasks.retry_run(task)
+      assert {:ok, task} = Tasks.retry_run(admin_scope(), task)
       assert task.run_state == :queued
       assert task.attention == nil
     end
@@ -406,7 +408,7 @@ defmodule CodeLead.TasksTest do
       task = executing_task(task)
       task = put_context!(task, worktree_path: "/tmp/wt", branch_name: "codelead/task-1")
 
-      assert {:ok, task} = Tasks.cancel_run(task)
+      assert {:ok, task} = Tasks.cancel_run(admin_scope(), task)
       assert task.state == :planning
       assert task.run_state == :idle
       assert task.worktree_path == "/tmp/wt"
@@ -417,18 +419,18 @@ defmodule CodeLead.TasksTest do
   describe "task_state_transitions history" do
     test "a Kanban-column move logs its from/to state" do
       %{task: task} = runnable_task_fixture()
-      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.move_to_running(admin_scope(), task)
 
       assert [%{from_state: :planning, to_state: :running}] = transitions(task)
     end
 
     test "run_state-only moves log nothing" do
       %{task: task} = runnable_task_fixture()
-      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.move_to_running(admin_scope(), task)
       {:ok, task} = Tasks.begin_dispatch(task)
       {:ok, task} = Tasks.mark_executing(task, "sess-1")
       {:ok, task} = Tasks.fail_run(task, "boom")
-      {:ok, task} = Tasks.retry_run(task)
+      {:ok, task} = Tasks.retry_run(admin_scope(), task)
 
       assert [%{from_state: :planning, to_state: :running}] = transitions(task)
     end
@@ -437,7 +439,7 @@ defmodule CodeLead.TasksTest do
       %{task: task} = runnable_task_fixture()
       task = executing_task(task)
       {:ok, task} = Tasks.complete_run(task)
-      {:ok, task} = Tasks.approve(task)
+      {:ok, task} = Tasks.approve(admin_scope(), task)
 
       assert [
                %{from_state: :planning, to_state: :running},
@@ -450,7 +452,7 @@ defmodule CodeLead.TasksTest do
       %{task: task} = runnable_task_fixture()
       task = executing_task(task)
       {:ok, task} = Tasks.complete_run(task)
-      {:ok, task} = Tasks.request_changes(task, "add tests")
+      {:ok, task} = Tasks.request_changes(admin_scope(), task, "add tests")
 
       assert [
                %{from_state: :planning, to_state: :running},
@@ -470,7 +472,7 @@ defmodule CodeLead.TasksTest do
     end
 
     test "request changes keeps context and stores the feedback", %{task: task} do
-      assert {:ok, task} = Tasks.request_changes(task, "please add tests")
+      assert {:ok, task} = Tasks.request_changes(admin_scope(), task, "please add tests")
       assert task.state == :running
       assert task.run_state == :queued
       assert task.worktree_path == "/tmp/wt"
@@ -480,7 +482,7 @@ defmodule CodeLead.TasksTest do
     end
 
     test "send back to planning discards context", %{task: task} do
-      assert {:ok, task} = Tasks.send_back_to_planning(task)
+      assert {:ok, task} = Tasks.send_back_to_planning(admin_scope(), task)
       assert task.state == :planning
       assert task.worktree_path == nil
       assert task.branch_name == nil
@@ -488,12 +490,12 @@ defmodule CodeLead.TasksTest do
     end
 
     test "approve moves to done; archive hides from the board", %{task: task} do
-      assert {:ok, task} = Tasks.approve(task)
+      assert {:ok, task} = Tasks.approve(admin_scope(), task)
       assert task.state == :done
       assert task.completed_at
       completed_at = task.completed_at
 
-      assert {:ok, task} = Tasks.archive(task)
+      assert {:ok, task} = Tasks.archive(admin_scope(), task)
       assert task.archived_at
       # Archiving hides the card; it does not un-do the completion.
       assert task.completed_at == completed_at
@@ -512,19 +514,19 @@ defmodule CodeLead.TasksTest do
       assert {:error, :invalid_state} = Tasks.mark_executing(planning_task, "s")
       assert {:error, :invalid_state} = Tasks.complete_run(planning_task)
       assert {:error, :invalid_state} = Tasks.fail_run(planning_task, "x")
-      assert {:error, :invalid_state} = Tasks.retry_run(planning_task)
-      assert {:error, :invalid_state} = Tasks.cancel_run(planning_task)
-      assert {:error, :invalid_state} = Tasks.request_changes(planning_task, "f")
-      assert {:error, :invalid_state} = Tasks.send_back_to_planning(planning_task)
-      assert {:error, :invalid_state} = Tasks.approve(planning_task)
-      assert {:error, :invalid_state} = Tasks.archive(planning_task)
+      assert {:error, :invalid_state} = Tasks.retry_run(admin_scope(), planning_task)
+      assert {:error, :invalid_state} = Tasks.cancel_run(admin_scope(), planning_task)
+      assert {:error, :invalid_state} = Tasks.request_changes(admin_scope(), planning_task, "f")
+      assert {:error, :invalid_state} = Tasks.send_back_to_planning(admin_scope(), planning_task)
+      assert {:error, :invalid_state} = Tasks.approve(admin_scope(), planning_task)
+      assert {:error, :invalid_state} = Tasks.archive(admin_scope(), planning_task)
 
       # Queued but not dispatched: cannot mark executing or complete.
-      {:ok, queued} = Tasks.move_to_running(planning_task)
+      {:ok, queued} = Tasks.move_to_running(admin_scope(), planning_task)
       assert {:error, :invalid_state} = Tasks.mark_executing(queued, "s")
       assert {:error, :invalid_state} = Tasks.complete_run(queued)
-      assert {:error, :invalid_state} = Tasks.move_to_running(queued)
-      assert {:error, :invalid_state} = Tasks.retry_run(queued)
+      assert {:error, :invalid_state} = Tasks.move_to_running(admin_scope(), queued)
+      assert {:error, :invalid_state} = Tasks.retry_run(admin_scope(), queued)
 
       # Executing: cannot re-dispatch; failing twice is invalid.
       {:ok, dispatched} = Tasks.begin_dispatch(queued)
@@ -535,33 +537,33 @@ defmodule CodeLead.TasksTest do
       assert {:error, :invalid_state} = Tasks.complete_run(failed)
 
       # Review: no run-lifecycle calls.
-      {:ok, retried} = Tasks.retry_run(failed)
+      {:ok, retried} = Tasks.retry_run(admin_scope(), failed)
       {:ok, dispatched} = Tasks.begin_dispatch(retried)
       {:ok, executing} = Tasks.mark_executing(dispatched, "s")
       {:ok, review} = Tasks.complete_run(executing)
       assert {:error, :invalid_state} = Tasks.begin_dispatch(review)
       assert {:error, :invalid_state} = Tasks.complete_run(review)
-      assert {:error, :invalid_state} = Tasks.cancel_run(review)
+      assert {:error, :invalid_state} = Tasks.cancel_run(admin_scope(), review)
 
       # Done: review decisions are gone.
-      {:ok, done} = Tasks.approve(review)
-      assert {:error, :invalid_state} = Tasks.request_changes(done, "f")
-      assert {:error, :invalid_state} = Tasks.send_back_to_planning(done)
-      assert {:error, :invalid_state} = Tasks.approve(done)
+      {:ok, done} = Tasks.approve(admin_scope(), review)
+      assert {:error, :invalid_state} = Tasks.request_changes(admin_scope(), done, "f")
+      assert {:error, :invalid_state} = Tasks.send_back_to_planning(admin_scope(), done)
+      assert {:error, :invalid_state} = Tasks.approve(admin_scope(), done)
     end
   end
 
   describe "delete" do
     test "planning tasks can be deleted, done tasks cannot" do
       %{task: task} = runnable_task_fixture()
-      assert {:ok, _} = Tasks.delete_task(task)
+      assert {:ok, _} = Tasks.delete_task(admin_scope(), task)
       assert_raise Ecto.NoResultsError, fn -> Tasks.get_task!(task.id) end
 
       %{task: task2} = runnable_task_fixture()
       task2 = executing_task(task2)
       {:ok, task2} = Tasks.complete_run(task2)
-      {:ok, task2} = Tasks.approve(task2)
-      assert {:error, :not_deletable} = Tasks.delete_task(task2)
+      {:ok, task2} = Tasks.approve(admin_scope(), task2)
+      assert {:error, :not_deletable} = Tasks.delete_task(admin_scope(), task2)
     end
 
     test "deleting cascades steps and reviewers" do
@@ -571,7 +573,7 @@ defmodule CodeLead.TasksTest do
       :ok = Tasks.set_reviewers(task, [reviewer.id])
       Tasks.record_step(task.id, :comment, :human, "human", "note")
 
-      assert {:ok, _} = Tasks.delete_task(task)
+      assert {:ok, _} = Tasks.delete_task(admin_scope(), task)
       assert Tasks.steps(task.id) == []
       assert Tasks.reviewers(task.id) == []
     end

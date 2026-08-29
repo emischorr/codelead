@@ -67,6 +67,11 @@ defmodule CodeLeadWeb.FormOptions do
   for the attention pill and banner, so a project could otherwise look
   like it needs attention when it doesn't.
   """
+  @spec project_roles() :: [{String.t(), String.t()}]
+  def project_roles do
+    [{"Reporter", "reporter"}, {"Member", "member"}, {"Maintainer", "maintainer"}]
+  end
+
   @spec project_colors() :: [{String.t(), String.t()}]
   def project_colors do
     [

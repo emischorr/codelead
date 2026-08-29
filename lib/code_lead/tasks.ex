@@ -42,6 +42,8 @@ defmodule CodeLead.Tasks do
 
   import Ecto.Query
 
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Agents
   alias CodeLead.Agents.Agent
   alias CodeLead.Finalizer
@@ -58,6 +60,7 @@ defmodule CodeLead.Tasks do
 
   @type transition_error ::
           {:error, :invalid_state}
+          | {:error, :unauthorized}
           | {:error, :no_executor}
           | {:error, :executor_ineligible}
           | {:error, :missing_repository}
@@ -126,10 +129,24 @@ defmodule CodeLead.Tasks do
   declared environment (see `derive_execution_env/2`), and the
   project's default reviewers for the work type.
   """
+  @spec create_task(Scope.t() | nil, pos_integer(), map()) ::
+          {:ok, Task.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def create_task(scope, project_id, attrs) do
+    with :ok <- Policy.authorize(scope, :create_task, project_id) do
+      do_create_task(project_id, attrs, scope.user.id)
+    end
+  end
+
+  @doc """
+  `create_task/3` without authorization or a creator — the system seam
+  for seeds, fixtures, and the console. Browser callers use `/3`.
+  """
   @spec create_task(pos_integer(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def create_task(project_id, attrs) do
+  def create_task(project_id, attrs), do: do_create_task(project_id, attrs, nil)
+
+  defp do_create_task(project_id, attrs, created_by_id) do
     changeset =
-      %Task{project_id: project_id}
+      %Task{project_id: project_id, created_by_id: created_by_id}
       |> Task.create_changeset(attrs)
       |> validate_licensed_execution_env()
 
@@ -156,8 +173,26 @@ defmodule CodeLead.Tasks do
   work type drops an executor that is no longer eligible and re-prefills
   the reviewer set.
   """
-  @spec update_task(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def update_task(%Task{state: :planning} = task, attrs) do
+  @spec update_task(Scope.t() | nil, Task.t(), map()) ::
+          {:ok, Task.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def update_task(scope, %Task{} = task, attrs) do
+    with :ok <- Policy.authorize(scope, :edit_task, task),
+         :ok <- authorize_assignment(scope, task, attrs) do
+      do_update_task(task, attrs)
+    end
+  end
+
+  # Assignment is member+ while a reporter may edit their own Planning
+  # task — an explicit refusal rather than silently dropping the field.
+  defp authorize_assignment(scope, task, attrs) do
+    if Map.has_key?(attrs, :assignee_id) or Map.has_key?(attrs, "assignee_id") do
+      Policy.authorize(scope, :operate_task, task)
+    else
+      :ok
+    end
+  end
+
+  defp do_update_task(%Task{state: :planning} = task, attrs) do
     changeset =
       task
       |> Task.planning_changeset(attrs)
@@ -172,7 +207,7 @@ defmodule CodeLead.Tasks do
     end
   end
 
-  def update_task(%Task{} = task, attrs) do
+  defp do_update_task(%Task{} = task, attrs) do
     task |> Task.details_changeset(attrs) |> Repo.update() |> broadcast_board_change()
   end
 
@@ -180,9 +215,15 @@ defmodule CodeLead.Tasks do
   Sets the executor agent. Planning only; the agent must be an eligible
   executor for the task's work type.
   """
-  @spec set_executor(Task.t(), pos_integer()) ::
+  @spec set_executor(Scope.t() | nil, Task.t(), pos_integer()) ::
           {:ok, Task.t()} | transition_error() | {:error, Ecto.Changeset.t()}
-  def set_executor(%Task{state: :planning} = task, agent_id) do
+  def set_executor(scope, %Task{} = task, agent_id) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      do_set_executor(task, agent_id)
+    end
+  end
+
+  defp do_set_executor(%Task{state: :planning} = task, agent_id) do
     agent = Agents.get_agent!(agent_id)
 
     if Agents.eligible?(agent, task.work_type, task.project_id, :execute) do
@@ -192,15 +233,29 @@ defmodule CodeLead.Tasks do
     end
   end
 
-  def set_executor(%Task{}, _agent_id), do: {:error, :invalid_state}
+  defp do_set_executor(%Task{}, _agent_id), do: {:error, :invalid_state}
 
   @doc """
   Replaces the task's reviewer set. Every agent must be an eligible
   reviewer for the task's work type.
   """
+  @spec set_reviewers(Scope.t() | nil, Task.t(), [pos_integer()]) ::
+          :ok | {:error, :unauthorized | {:ineligible, [pos_integer()]}}
+  def set_reviewers(scope, %Task{} = task, agent_ids) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      do_set_reviewers(task, agent_ids)
+    end
+  end
+
+  @doc """
+  `set_reviewers/3` without authorization — the system seam for seeds
+  and the console.
+  """
   @spec set_reviewers(Task.t(), [pos_integer()]) ::
           :ok | {:error, {:ineligible, [pos_integer()]}}
-  def set_reviewers(%Task{} = task, agent_ids) do
+  def set_reviewers(%Task{} = task, agent_ids), do: do_set_reviewers(task, agent_ids)
+
+  defp do_set_reviewers(%Task{} = task, agent_ids) do
     eligible_ids =
       MapSet.new(Agents.eligible_reviewers(task.work_type, task.project_id), & &1.id)
 
@@ -291,65 +346,81 @@ defmodule CodeLead.Tasks do
   and, for `:repo` targets, a repository. Enqueues (`run_state:
   :queued`); the scheduler picks it up from there.
   """
-  @spec move_to_running(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def move_to_running(%Task{} = task) do
-    apply_transition(task, {:planning, :running},
-      actor: :human,
-      summary: "moved to Running (queued)"
-    )
+  @spec move_to_running(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def move_to_running(scope, %Task{} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      apply_transition(task, {:planning, :running},
+        actor: :human,
+        scope: scope,
+        summary: "moved to Running (queued)"
+      )
+    end
   end
 
   @doc """
   Aborts a run: Running → Planning. The worktree/branch/session are
   kept for inspection; the agent process is terminated by the runtime.
   """
-  @spec cancel_run(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def cancel_run(%Task{} = task) do
-    apply_transition(task, {:running, :planning},
-      actor: :human,
-      summary: "run cancelled — back to Planning (worktree kept)"
-    )
+  @spec cancel_run(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def cancel_run(scope, %Task{} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      apply_transition(task, {:running, :planning},
+        actor: :human,
+        scope: scope,
+        summary: "run cancelled — back to Planning (worktree kept)"
+      )
+    end
   end
 
   @doc """
   Re-dispatches a failed run.
   """
-  @spec retry_run(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def retry_run(%Task{state: :running, run_state: :failed} = task) do
-    transition(task, %{run_state: :queued, attention: nil},
-      actor: :human,
-      summary: "retry after failure (queued)"
-    )
+  @spec retry_run(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def retry_run(scope, %Task{state: :running, run_state: :failed} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      transition(task, %{run_state: :queued, attention: nil},
+        actor: :human,
+        scope: scope,
+        summary: "retry after failure (queued)"
+      )
+    end
   end
 
-  def retry_run(%Task{}), do: {:error, :invalid_state}
+  def retry_run(_scope, %Task{}), do: {:error, :invalid_state}
 
   @doc """
   Drops a queued task's start time so it can be dispatched now. The
   pending wake-up job no-ops on its own once the time no longer
   matches — nothing has to chase it.
   """
-  @spec clear_schedule(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def clear_schedule(%Task{state: :running, run_state: :queued} = task) do
-    transition(task, %{scheduled_at: nil},
-      actor: :human,
-      summary: "schedule cleared — running now"
-    )
+  @spec clear_schedule(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def clear_schedule(scope, %Task{state: :running, run_state: :queued} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      transition(task, %{scheduled_at: nil},
+        actor: :human,
+        scope: scope,
+        summary: "schedule cleared — running now"
+      )
+    end
   end
 
-  def clear_schedule(%Task{}), do: {:error, :invalid_state}
+  def clear_schedule(_scope, %Task{}), do: {:error, :invalid_state}
 
   @doc """
   Review → Running with the same agent, worktree, branch, and session.
   The feedback becomes the next prompt; commits accumulate.
   """
-  @spec request_changes(Task.t(), String.t()) :: {:ok, Task.t()} | transition_error()
-  def request_changes(%Task{} = task, feedback) do
-    apply_transition(task, {:review, :running},
-      actor: :human,
-      prompt: feedback,
-      summary: "changes requested: #{feedback}"
-    )
+  @spec request_changes(Scope.t() | nil, Task.t(), String.t()) ::
+          {:ok, Task.t()} | transition_error()
+  def request_changes(scope, %Task{} = task, feedback) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      apply_transition(task, {:review, :running},
+        actor: :human,
+        scope: scope,
+        prompt: feedback,
+        summary: "changes requested: #{feedback}"
+      )
+    end
   end
 
   @doc """
@@ -358,12 +429,15 @@ defmodule CodeLead.Tasks do
   filesystem teardown; here the references are dropped — the edge's
   `:reset` context policy and `:discard` worktree policy say so.
   """
-  @spec send_back_to_planning(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def send_back_to_planning(%Task{} = task) do
-    apply_transition(task, {:review, :planning},
-      actor: :human,
-      summary: "sent back to Planning — worktree, branch, and session discarded"
-    )
+  @spec send_back_to_planning(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def send_back_to_planning(scope, %Task{} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      apply_transition(task, {:review, :planning},
+        actor: :human,
+        scope: scope,
+        summary: "sent back to Planning — worktree, branch, and session discarded"
+      )
+    end
   end
 
   @doc """
@@ -376,9 +450,15 @@ defmodule CodeLead.Tasks do
   reopen transition must set it back to nil or throughput will
   double-count.
   """
-  @spec approve(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def approve(%Task{} = task) do
-    apply_transition(task, {:review, :done}, actor: :human, summary: "approved — Done")
+  @spec approve(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def approve(scope, %Task{} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      apply_transition(task, {:review, :done},
+        actor: :human,
+        scope: scope,
+        summary: "approved — Done"
+      )
+    end
   end
 
   @doc """
@@ -399,13 +479,15 @@ defmodule CodeLead.Tasks do
   is not the same as picking the project's current default — it means
   "follow the project", including after the project changes its mind.
   """
-  @spec set_finalize_mode(Task.t(), String.t() | nil) ::
-          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def set_finalize_mode(%Task{} = task, value) do
-    task
-    |> Task.finalize_changeset(%{finalize_mode: blank_to_nil(value)})
-    |> Repo.update()
-    |> broadcast_board_change()
+  @spec set_finalize_mode(Scope.t() | nil, Task.t(), String.t() | nil) ::
+          {:ok, Task.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def set_finalize_mode(scope, %Task{} = task, value) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      task
+      |> Task.finalize_changeset(%{finalize_mode: blank_to_nil(value)})
+      |> Repo.update()
+      |> broadcast_board_change()
+    end
   end
 
   @doc """
@@ -443,26 +525,39 @@ defmodule CodeLead.Tasks do
   technically possible (`archived_at` is just a nullable timestamp) but is
   deliberately not exposed as a context function or UI action.
   """
-  @spec archive(Task.t()) :: {:ok, Task.t()} | transition_error()
-  def archive(%Task{state: :done} = task) do
-    task
-    |> Ecto.Changeset.change(archived_at: DateTime.utc_now(:second))
-    |> Repo.update()
-    |> broadcast_board_change()
+  @spec archive(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | transition_error()
+  def archive(scope, %Task{state: :done} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      result =
+        task
+        |> Ecto.Changeset.change(archived_at: DateTime.utc_now(:second))
+        |> Repo.update()
+        |> broadcast_board_change()
+
+      with {:ok, archived} <- result do
+        {name, user_id} = step_actor(:human, scope)
+        record_step(archived.id, :transition, :human, name, "archived", user_id: user_id)
+      end
+
+      result
+    end
   end
 
-  def archive(%Task{}), do: {:error, :invalid_state}
+  def archive(_scope, %Task{}), do: {:error, :invalid_state}
 
   @doc """
   Hard-deletes a task with no pushed artifacts (Planning or Cancelled).
   Steps, reviewers, and messages cascade.
   """
-  @spec delete_task(Task.t()) :: {:ok, Task.t()} | {:error, :not_deletable}
-  def delete_task(%Task{state: state} = task) when state in [:planning, :cancelled] do
-    task |> Repo.delete() |> broadcast_board_change()
+  @spec delete_task(Scope.t() | nil, Task.t()) ::
+          {:ok, Task.t()} | {:error, :unauthorized | :not_deletable}
+  def delete_task(scope, %Task{state: state} = task) when state in [:planning, :cancelled] do
+    with :ok <- Policy.authorize(scope, :delete_task, task) do
+      task |> Repo.delete() |> broadcast_board_change()
+    end
   end
 
-  def delete_task(%Task{}), do: {:error, :not_deletable}
+  def delete_task(_scope, %Task{}), do: {:error, :not_deletable}
 
   ## System transitions (called by the runtime)
 
@@ -600,17 +695,19 @@ defmodule CodeLead.Tasks do
 
   @doc """
   Records an audit step. Executor identity is denormalized so history
-  survives agent deletion.
+  survives agent deletion; `opts` take `:executor_ref` (agent id as a
+  string) and `:user_id` (the acting user on human steps).
   """
-  @spec record_step(pos_integer(), atom(), atom(), String.t(), String.t(), String.t() | nil) ::
+  @spec record_step(pos_integer(), atom(), atom(), String.t(), String.t(), keyword()) ::
           TaskStep.t()
-  def record_step(task_id, kind, executor_type, executor_name, summary, executor_ref \\ nil) do
+  def record_step(task_id, kind, executor_type, executor_name, summary, opts \\ []) do
     Repo.insert!(%TaskStep{
       task_id: task_id,
       kind: kind,
       executor_type: executor_type,
       executor_name: executor_name,
-      executor_ref: executor_ref,
+      executor_ref: opts[:executor_ref],
+      user_id: opts[:user_id],
       summary: summary
     })
   end
@@ -648,6 +745,15 @@ defmodule CodeLead.Tasks do
   """
   @spec get_task(pos_integer()) :: Task.t() | nil
   def get_task(id), do: Repo.get(Task, id)
+
+  @doc """
+  The task's project id, or nil for an unknown task — enough for an
+  access check without loading the row.
+  """
+  @spec task_project_id(pos_integer()) :: pos_integer() | nil
+  def task_project_id(task_id) do
+    Repo.one(from t in Task, where: t.id == ^task_id, select: t.project_id)
+  end
 
   @doc """
   Scoped lookup for UI entry points that carry a project id in the URL.
@@ -766,12 +872,15 @@ defmodule CodeLead.Tasks do
   the total match count, so the caller can render a "N more results" hint
   without a second round trip.
   """
-  @spec search_tasks(String.t(), pos_integer()) :: %{results: [map()], total: non_neg_integer()}
-  def search_tasks(query, limit) do
+  @spec search_tasks(String.t(), pos_integer(), [pos_integer()] | nil) :: %{
+          results: [map()],
+          total: non_neg_integer()
+        }
+  def search_tasks(query, limit, project_ids \\ nil) do
     like = "%" <> escape_like(query) <> "%"
 
     base =
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at),
         where:
           fragment("? ILIKE ?", t.title, ^like) or fragment("? ILIKE ?", t.description, ^like)
@@ -804,17 +913,22 @@ defmodule CodeLead.Tasks do
   #
   # Org-wide readouts for the dashboard. Each is one grouped query for
   # every project — never one query per project — and every one of them
-  # excludes archived tasks, except `completions_by_day/1`: archiving
+  # excludes archived tasks, except `completions_by_day/2`: archiving
   # hides a card, it does not un-do the work it recorded.
+  #
+  # Every aggregate takes an optional `project_ids` list: nil is the
+  # whole organization (admins, system callers), a list restricts the
+  # readout to those projects (a member's visible slice). The web layer
+  # derives the list from the `Scope`.
 
   @doc """
   Org-wide task counts: one entry per Kanban column, plus the three
   `run_state` readouts and the number of tasks waiting on a human.
   """
-  @spec board_summary() :: summary()
-  def board_summary do
+  @spec board_summary([pos_integer()] | nil) :: summary()
+  def board_summary(project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at) and t.state != :cancelled,
         group_by: [t.state, t.run_state],
         select:
@@ -830,10 +944,10 @@ defmodule CodeLead.Tasks do
   The same counts as `board_summary/0`, split per project — the
   dashboard's project breakdown. Projects without tasks are absent.
   """
-  @spec project_summaries() :: %{pos_integer() => summary()}
-  def project_summaries do
+  @spec project_summaries([pos_integer()] | nil) :: %{pos_integer() => summary()}
+  def project_summaries(project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at) and t.state != :cancelled,
         group_by: [t.project_id, t.state, t.run_state],
         select:
@@ -853,10 +967,10 @@ defmodule CodeLead.Tasks do
   @doc """
   Org-wide count of tasks waiting on a human, keyed by attention type.
   """
-  @spec attention_counts() :: %{atom() => non_neg_integer()}
-  def attention_counts do
+  @spec attention_counts([pos_integer()] | nil) :: %{atom() => non_neg_integer()}
+  def attention_counts(project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at) and not is_nil(t.attention),
         group_by: fragment("?->>'type'", t.attention),
         select: {fragment("?->>'type'", t.attention), count(t.id)}
@@ -868,9 +982,9 @@ defmodule CodeLead.Tasks do
   Org-wide count of tasks waiting on a human, across every attention
   type — the sidebar pill's number.
   """
-  @spec total_attention_count() :: non_neg_integer()
-  def total_attention_count do
-    attention_counts() |> Map.values() |> Enum.sum()
+  @spec total_attention_count([pos_integer()] | nil) :: non_neg_integer()
+  def total_attention_count(project_ids \\ nil) do
+    project_ids |> attention_counts() |> Map.values() |> Enum.sum()
   end
 
   @doc """
@@ -880,12 +994,12 @@ defmodule CodeLead.Tasks do
   raise the same attention types but never block an agent, so they
   don't count here.
   """
-  @spec agent_blocked?() :: boolean()
-  def agent_blocked? do
+  @spec agent_blocked?([pos_integer()] | nil) :: boolean()
+  def agent_blocked?(project_ids \\ nil) do
     blocking_types = Enum.map(Attention.blocking_types(), &Atom.to_string/1)
 
     Repo.exists?(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at) and not is_nil(t.attention),
         where: fragment("?->>'type'", t.attention) in ^blocking_types,
         where: fragment("?->>'source'", t.attention) == "executor"
@@ -895,10 +1009,10 @@ defmodule CodeLead.Tasks do
   @doc """
   Tasks waiting on a human across every project, oldest first.
   """
-  @spec org_attention_tasks(pos_integer()) :: [map()]
-  def org_attention_tasks(limit) do
+  @spec org_attention_tasks(pos_integer(), [pos_integer()] | nil) :: [map()]
+  def org_attention_tasks(limit, project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: is_nil(t.archived_at) and not is_nil(t.attention),
         order_by: [asc: t.updated_at, asc: t.id],
         limit: ^limit,
@@ -932,10 +1046,10 @@ defmodule CodeLead.Tasks do
   `run_state` is what the database believes; whether a runner process
   actually exists is the caller's cross-check.
   """
-  @spec active_runs() :: [map()]
-  def active_runs do
+  @spec active_runs([pos_integer()] | nil) :: [map()]
+  def active_runs(project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         left_join: a in Agent,
         on: a.id == t.agent_id,
         where: t.state == :running and t.run_state != :idle and is_nil(t.archived_at),
@@ -956,12 +1070,14 @@ defmodule CodeLead.Tasks do
   Tasks approved per day over the last `days` days, keyed by date. Days
   without completions are absent — the caller zero-fills.
   """
-  @spec completions_by_day(pos_integer()) :: %{Date.t() => non_neg_integer()}
-  def completions_by_day(days) do
+  @spec completions_by_day(pos_integer(), [pos_integer()] | nil) :: %{
+          Date.t() => non_neg_integer()
+        }
+  def completions_by_day(days, project_ids \\ nil) do
     since = window_start(days)
 
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: not is_nil(t.completed_at) and t.completed_at >= ^since,
         group_by: fragment("date(?)", t.completed_at),
         select: {fragment("date(?)", t.completed_at), count(t.id)}
@@ -974,14 +1090,14 @@ defmodule CodeLead.Tasks do
   milliseconds; nil when nothing completed. This is lead time, not agent
   time — it includes however long the task sat in Planning.
   """
-  @spec avg_lead_time_ms(pos_integer()) :: non_neg_integer() | nil
-  def avg_lead_time_ms(days) do
+  @spec avg_lead_time_ms(pos_integer(), [pos_integer()] | nil) :: non_neg_integer() | nil
+  def avg_lead_time_ms(days, project_ids \\ nil) do
     since = window_start(days)
 
     # `type/2` is load-bearing: without it Postgrex hands back a Decimal
     # and `round/1` raises.
     Repo.one(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: not is_nil(t.completed_at) and t.completed_at >= ^since,
         select:
           type(
@@ -1003,8 +1119,8 @@ defmodule CodeLead.Tasks do
   re-enterable via retry or request-changes rework, and a later
   re-entry must not read as a fresh start.
   """
-  @spec avg_cycle_time_ms(pos_integer()) :: non_neg_integer() | nil
-  def avg_cycle_time_ms(days) do
+  @spec avg_cycle_time_ms(pos_integer(), [pos_integer()] | nil) :: non_neg_integer() | nil
+  def avg_cycle_time_ms(days, project_ids \\ nil) do
     since = window_start(days)
 
     first_running =
@@ -1014,7 +1130,7 @@ defmodule CodeLead.Tasks do
         select: %{task_id: tst.task_id, entered_running_at: min(tst.inserted_at)}
 
     Repo.one(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         join: fr in subquery(first_running),
         on: fr.task_id == t.id,
         where: not is_nil(t.completed_at) and t.completed_at >= ^since,
@@ -1037,10 +1153,10 @@ defmodule CodeLead.Tasks do
   @doc """
   The most recently approved tasks across every project, newest first.
   """
-  @spec recently_completed(pos_integer()) :: [map()]
-  def recently_completed(limit) do
+  @spec recently_completed(pos_integer(), [pos_integer()] | nil) :: [map()]
+  def recently_completed(limit, project_ids \\ nil) do
     Repo.all(
-      from t in Task,
+      from t in scope_projects(Task, project_ids),
         where: not is_nil(t.completed_at),
         order_by: [desc: t.completed_at, desc: t.id],
         limit: ^limit,
@@ -1058,9 +1174,9 @@ defmodule CodeLead.Tasks do
   to — the dashboard's activity feed. Ordered by id, which is monotonic
   with `inserted_at` and covered by the primary key.
   """
-  @spec recent_activity(pos_integer()) :: [map()]
-  def recent_activity(limit) do
-    Repo.all(
+  @spec recent_activity(pos_integer(), [pos_integer()] | nil) :: [map()]
+  def recent_activity(limit, project_ids \\ nil) do
+    query =
       from s in TaskStep,
         join: t in Task,
         on: t.id == s.task_id,
@@ -1077,10 +1193,22 @@ defmodule CodeLead.Tasks do
           summary: s.summary,
           at: s.inserted_at
         }
-    )
+
+    query =
+      if project_ids,
+        do: from([s, t] in query, where: t.project_id in ^project_ids),
+        else: query
+
+    Repo.all(query)
   end
 
   ## Internals
+
+  # nil = unrestricted; a list narrows a Task-based query to those projects.
+  defp scope_projects(queryable, nil), do: queryable
+
+  defp scope_projects(queryable, project_ids),
+    do: from(t in queryable, where: t.project_id in ^project_ids)
 
   # Backslash-escape ILIKE's own wildcards so user input can't inject them.
   defp escape_like(string), do: String.replace(string, ~r/([%_\\])/, "\\\\\\1")
@@ -1123,11 +1251,18 @@ defmodule CodeLead.Tasks do
       |> put_transition_attention(attention)
 
     with {:ok, updated} <- Repo.update(changeset) do
-      record_step(updated.id, :transition, actor, Atom.to_string(actor), summary)
+      {name, user_id} = step_actor(actor, opts[:scope])
+      record_step(updated.id, :transition, actor, name, summary, user_id: user_id)
       record_state_transition(updated.id, task.state, changes)
       broadcast_board_change({:ok, updated})
     end
   end
+
+  # Human steps carry who acted: the username into the denormalized
+  # `executor_name`, the id into `user_id`. System steps (and human ones
+  # forced without a scope, e.g. from fixtures) keep the actor literal.
+  defp step_actor(:human, %Scope{user: %{username: name, id: id}}), do: {name, id}
+  defp step_actor(actor, _scope), do: {Atom.to_string(actor), nil}
 
   # Fires only for an actual Kanban-column move: `changes` carries
   # `:state` exclusively via `transition_changes/3` (i.e. every

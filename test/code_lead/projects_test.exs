@@ -1,25 +1,126 @@
 defmodule CodeLead.ProjectsTest do
   use CodeLead.DataCase, async: true
 
+  import CodeLead.AccountsFixtures
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.Accounts
   alias CodeLead.Projects
   alias CodeLead.Projects.Project
   alias CodeLead.Projects.ProjectEnv
 
-  describe "projects" do
-    test "create_project/1 attaches the organization singleton" do
-      project = project_fixture()
+  defp maintainer_scope(project) do
+    user = user_fixture()
+    membership_fixture(project, user, :maintainer)
+    user_scope_fixture(user)
+  end
+
+  describe "create_project/2" do
+    setup do
+      organization_fixture()
+      %{scope: user_scope_fixture(user_fixture())}
+    end
+
+    test "attaches the organization singleton", %{scope: scope} do
+      {:ok, project} = Projects.create_project(scope, %{name: "Fresh"})
       org = CodeLead.Accounts.get_organization!()
       assert %Project{org_id: org_id} = project
       assert org_id == org.id
     end
 
-    test "project names are unique" do
+    test "project names are unique", %{scope: scope} do
       project = project_fixture()
-      assert {:error, changeset} = Projects.create_project(%{name: project.name})
+      assert {:error, changeset} = Projects.create_project(scope, %{name: project.name})
       assert %{name: _} = errors_on(changeset)
+    end
+
+    test "the creator becomes maintainer in the same transaction", %{scope: scope} do
+      {:ok, project} = Projects.create_project(scope, %{name: "Mine"})
+      assert Accounts.membership_map(scope.user.id) == %{project.id => :maintainer}
+    end
+
+    test "an admin creator gets a membership row too" do
+      admin = admin_fixture()
+      {:ok, project} = Projects.create_project(user_scope_fixture(admin), %{name: "Theirs"})
+      assert Accounts.membership_map(admin.id) == %{project.id => :maintainer}
+    end
+
+    test "a failed insert leaves no membership behind", %{scope: scope} do
+      project = project_fixture()
+      assert {:error, _} = Projects.create_project(scope, %{name: project.name})
+      assert Accounts.membership_map(scope.user.id) == %{}
+    end
+
+    test "copies the org default budget limits onto the project", %{scope: scope} do
+      {:ok, _} =
+        Accounts.update_organization(%{
+          default_project_budget_limit_cents: 2500,
+          default_project_budget_limit_tokens: 1_000_000
+        })
+
+      {:ok, project} = Projects.create_project(scope, %{name: "Budgeted"})
+      assert project.budget_limit_cents == 2500
+      assert project.budget_limit_tokens == 1_000_000
+    end
+
+    test "a nil org default yields a nil limit", %{scope: scope} do
+      {:ok, project} = Projects.create_project(scope, %{name: "Unbudgeted"})
+      assert project.budget_limit_cents == nil
+      assert project.budget_limit_tokens == nil
+    end
+
+    test "non-admin budget attrs are stripped, the default wins", %{scope: scope} do
+      {:ok, _} = Accounts.update_organization(%{default_project_budget_limit_cents: 2500})
+
+      {:ok, project} =
+        Projects.create_project(scope, %{name: "Sneaky", budget_limit_cents: 9_999_999})
+
+      assert project.budget_limit_cents == 2500
+    end
+
+    test "an admin may set the budget explicitly at creation" do
+      {:ok, _} = Accounts.update_organization(%{default_project_budget_limit_cents: 2500})
+      admin_scope = user_scope_fixture(admin_fixture())
+
+      {:ok, project} =
+        Projects.create_project(admin_scope, %{name: "Custom", budget_limit_cents: 100})
+
+      assert project.budget_limit_cents == 100
+    end
+
+    test "refuses without a signed-in user" do
+      assert {:error, :unauthorized} = Projects.create_project(nil, %{name: "Nope"})
+    end
+  end
+
+  describe "update_project/3" do
+    test "a maintainer edits details but budget attrs are stripped" do
+      project = project_fixture()
+      scope = maintainer_scope(project)
+
+      {:ok, updated} =
+        Projects.update_project(scope, project, %{name: "Renamed", budget_limit_cents: 500})
+
+      assert updated.name == "Renamed"
+      assert updated.budget_limit_cents == nil
+    end
+
+    test "an admin edits the budget" do
+      project = project_fixture()
+      admin_scope = user_scope_fixture(admin_fixture())
+
+      {:ok, updated} = Projects.update_project(admin_scope, project, %{budget_limit_cents: 500})
+      assert updated.budget_limit_cents == 500
+    end
+
+    test "refuses a member" do
+      project = project_fixture()
+      user = user_fixture()
+      membership_fixture(project, user, :member)
+
+      assert {:error, :unauthorized} =
+               Projects.update_project(user_scope_fixture(user), project, %{name: "Nope"})
     end
   end
 
@@ -213,22 +314,37 @@ defmodule CodeLead.ProjectsTest do
   end
 
   describe "guarded deletes" do
-    test "delete_project/1 refuses while a task belongs to it" do
+    test "delete_project/2 refuses while a task belongs to it" do
       project = project_fixture()
       task_fixture(project.id)
 
       assert Projects.project_usage(project.id) == %{tasks: 1}
-      assert {:error, {:has_tasks, 1}} = Projects.delete_project(project)
+
+      assert {:error, {:has_tasks, 1}} =
+               Projects.delete_project(maintainer_scope(project), project)
     end
 
-    test "delete_project/1 takes the repositories and env store with it" do
+    test "delete_project/2 takes repositories, env store and memberships with it" do
       project = project_fixture()
+      scope = maintainer_scope(project)
       repository_fixture(project.id)
       {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
+      Accounts.subscribe_user(scope.user.id)
 
-      assert {:ok, _project} = Projects.delete_project(project)
+      assert {:ok, _project} = Projects.delete_project(scope, project)
       assert Projects.list_repositories(project.id) == []
       assert Projects.list_env_keys(project.id) == []
+      assert Accounts.membership_map(scope.user.id) == %{}
+      assert_receive {:scope_changed, _user_id}
+    end
+
+    test "delete_project/2 refuses a member" do
+      project = project_fixture()
+      user = user_fixture()
+      membership_fixture(project, user, :member)
+
+      assert {:error, :unauthorized} =
+               Projects.delete_project(user_scope_fixture(user), project)
     end
 
     test "delete_repository/1 refuses while a task targets it" do
@@ -287,7 +403,11 @@ defmodule CodeLead.ProjectsTest do
 
     test "leaves unrelated settings keys alone" do
       project = project_fixture()
-      {:ok, project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, project} =
+        Projects.update_project(maintainer_scope(project), project, %{
+          settings: %{"theme" => "dark"}
+        })
 
       {:ok, project} = Projects.put_finalize_defaults(project, %{"repo" => "merge"})
 
@@ -322,7 +442,11 @@ defmodule CodeLead.ProjectsTest do
 
     test "leaves unrelated settings keys alone" do
       project = project_fixture()
-      {:ok, project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+
+      {:ok, project} =
+        Projects.update_project(maintainer_scope(project), project, %{
+          settings: %{"theme" => "dark"}
+        })
 
       {:ok, project} = Projects.put_pr_template(project, "custom template")
 

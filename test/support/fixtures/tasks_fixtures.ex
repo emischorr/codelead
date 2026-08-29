@@ -47,11 +47,25 @@ defmodule CodeLead.TasksFixtures do
   end
 
   @doc """
+  A fresh admin's scope — authorizes any action without membership rows.
+  The context helpers below stay user-free by forcing state through
+  `apply_transition/3`, which deliberately does not authorize.
+  """
+  def admin_scope do
+    CodeLead.AccountsFixtures.user_scope_fixture(CodeLead.AccountsFixtures.admin_fixture())
+  end
+
+  @doc """
   Drives a task through move_to_running → begin_dispatch →
   mark_executing, returning the executing task.
   """
   def executing_task(task, session_id \\ "sess-1") do
-    {:ok, task} = Tasks.move_to_running(task)
+    {:ok, task} =
+      Tasks.apply_transition(task, {:planning, :running},
+        actor: :human,
+        summary: "moved to Running (queued)"
+      )
+
     {:ok, task} = Tasks.begin_dispatch(task)
     {:ok, task} = Tasks.mark_executing(task, session_id)
     task

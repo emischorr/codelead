@@ -57,14 +57,16 @@ defmodule CodeLead.TasksLicenseTest do
     end
 
     test "refuses the Planning → Running transition", %{task: task} do
-      assert {:error, :unlicensed_execution_env} = Tasks.move_to_running(task)
+      assert {:error, :unlicensed_execution_env} = Tasks.move_to_running(admin_scope(), task)
       assert Tasks.get_task!(task.id).state == :planning
     end
 
     test "refuses to store a fresh move to container", %{project: project, repository: repository} do
       local = task_fixture(project.id, %{target: :repo, repository_id: repository.id})
 
-      assert {:error, changeset} = Tasks.update_task(local, %{execution_env: :container})
+      assert {:error, changeset} =
+               Tasks.update_task(admin_scope(), local, %{execution_env: :container})
+
       assert "requires a commercial license" in errors_on(changeset).execution_env
       assert Tasks.get_task!(local.id).execution_env == :local
     end
@@ -85,7 +87,9 @@ defmodule CodeLead.TasksLicenseTest do
     # The gate is on the licensed *act*, not on the stored value: a task
     # from a lapsed key must not become uneditable.
     test "still allows unrelated edits to a task already set to container", %{task: task} do
-      assert {:ok, updated} = Tasks.update_task(task, %{title: "Renamed while lapsed"})
+      assert {:ok, updated} =
+               Tasks.update_task(admin_scope(), task, %{title: "Renamed while lapsed"})
+
       assert updated.title == "Renamed while lapsed"
       assert updated.execution_env == :container
     end
@@ -95,7 +99,7 @@ defmodule CodeLead.TasksLicenseTest do
         task_fixture(project.id, %{target: :repo, repository_id: repository.id})
 
       executor = agent_fixture(%{roles: [:execute], work_type: :code})
-      {:ok, local} = Tasks.set_executor(local, executor.id)
+      {:ok, local} = Tasks.set_executor(admin_scope(), local, executor.id)
 
       assert local.execution_env == :local
       assert Tasks.startable(local, executor) == :ok
@@ -105,7 +109,7 @@ defmodule CodeLead.TasksLicenseTest do
   describe "a licensed instance" do
     test "starts a container task", %{task: task, executor: executor} do
       assert Tasks.startable(task, executor) == :ok
-      assert {:ok, running} = Tasks.move_to_running(task)
+      assert {:ok, running} = Tasks.move_to_running(admin_scope(), task)
       assert running.state == :running
     end
 
@@ -122,7 +126,9 @@ defmodule CodeLead.TasksLicenseTest do
     test "stores a move to container", %{project: project, repository: repository} do
       local = task_fixture(project.id, %{target: :repo, repository_id: repository.id})
 
-      assert {:ok, updated} = Tasks.update_task(local, %{execution_env: :container})
+      assert {:ok, updated} =
+               Tasks.update_task(admin_scope(), local, %{execution_env: :container})
+
       assert updated.execution_env == :container
     end
   end

@@ -97,7 +97,7 @@ defmodule CodeLeadWeb.PreviewHostWsTest do
   # written through the endpoint's own Plug.Session so the TCP request
   # authenticates like a browser would.
   defp app_session_cookie do
-    user = CodeLead.AccountsFixtures.user_fixture()
+    user = CodeLead.AccountsFixtures.admin_fixture()
     token = CodeLead.Accounts.generate_user_session_token(user)
 
     Plug.Test.conn(:get, "/")

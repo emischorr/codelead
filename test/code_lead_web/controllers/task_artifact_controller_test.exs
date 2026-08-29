@@ -39,6 +39,8 @@ defmodule CodeLeadWeb.TaskArtifactControllerTest do
   end
 
   describe "authenticated" do
+    @moduletag role: :admin
+
     setup :register_and_log_in_user
 
     setup do

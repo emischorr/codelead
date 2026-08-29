@@ -26,10 +26,26 @@ defmodule CodeLeadWeb.Components.SearchBar do
        total: 0,
        open?: false,
        highlighted_index: 0,
-       debounce_ms: @debounce_ms,
-       projects_by_id: Map.new(Projects.list_projects(), &{&1.id, &1})
+       debounce_ms: @debounce_ms
      )}
   end
+
+  # `visible_ids` comes from the parent (nil = admin, unrestricted); the
+  # label lookup only needs the projects the caller may see.
+  @impl true
+  def update(assigns, socket) do
+    {:ok,
+     socket
+     |> assign(assigns)
+     |> assign(
+       projects_by_id:
+         Map.new(Projects.list_projects(), &{&1.id, &1})
+         |> scope_labels(assigns[:visible_ids])
+     )}
+  end
+
+  defp scope_labels(map, nil), do: map
+  defp scope_labels(map, ids), do: Map.take(map, ids)
 
   @impl true
   def render(assigns) do
@@ -139,7 +155,8 @@ defmodule CodeLeadWeb.Components.SearchBar do
       if String.length(trimmed) < @min_query_length do
         assign(socket, query: query, results: [], total: 0, open?: false)
       else
-        %{results: results, total: total} = Tasks.search_tasks(trimmed, @result_limit)
+        %{results: results, total: total} =
+          Tasks.search_tasks(trimmed, @result_limit, socket.assigns.visible_ids)
 
         assign(socket,
           query: query,

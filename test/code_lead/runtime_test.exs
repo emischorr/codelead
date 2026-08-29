@@ -80,7 +80,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
 
       assert_receive {:task_event, _id, {:run_started, _agent_name}}, 15_000
       assert_receive {:task_event, _id, {:message_chunk, "Working on it. "}}, 15_000
@@ -133,7 +133,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -147,7 +147,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -179,7 +179,7 @@ defmodule CodeLead.RuntimeTest do
         task_fixture(project.id, %{work_type: :content, target: :folder, agent_id: agent.id})
 
       subscribe(task)
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -200,7 +200,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -209,7 +209,7 @@ defmodule CodeLead.RuntimeTest do
       assert task.acp_session_id == "fake-sess-happy"
 
       use_scenario("resume")
-      assert {:ok, task} = Runtime.request_changes(task, "please add tests")
+      assert {:ok, task} = Runtime.request_changes(admin_scope(), task, "please add tests")
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -232,7 +232,7 @@ defmodule CodeLead.RuntimeTest do
       use_scenario("happy")
       %{task: task, project: project} = acp_task()
 
-      {:ok, _} = CodeLead.Projects.update_project(project, %{budget_limit_cents: 5})
+      _ = set_project_budget!(project, %{budget_limit_cents: 5})
 
       {:ok, _} =
         CodeLead.Costs.record_run(%{
@@ -242,7 +242,7 @@ defmodule CodeLead.RuntimeTest do
           usage: %{prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cost_cents: 10}
         })
 
-      assert {:ok, task} = Runtime.start_task(task)
+      assert {:ok, task} = Runtime.start_task(admin_scope(), task)
       assert task.state == :running
       assert task.run_state == :queued
       assert RunSupervisor.whereis(task.id) == nil
@@ -254,7 +254,7 @@ defmodule CodeLead.RuntimeTest do
       subscribe(task)
 
       Application.put_env(:code_lead, :max_concurrent_runs, 0)
-      assert {:ok, task} = Runtime.start_task(task)
+      assert {:ok, task} = Runtime.start_task(admin_scope(), task)
       assert task.run_state == :queued
       assert RunSupervisor.whereis(task.id) == nil
 
@@ -272,7 +272,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = runnable_task_fixture()
       at = DateTime.add(DateTime.utc_now(:second), 3600)
 
-      assert {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+      assert {:ok, task} = Runtime.start_task(admin_scope(), task, scheduled_at: at)
 
       # The card moves now — that is the authorisation. Only dispatch waits.
       assert task.state == :running
@@ -288,7 +288,9 @@ defmodule CodeLead.RuntimeTest do
       task = task_fixture(project.id, %{title: "No executor"})
 
       assert {:error, :no_executor} =
-               Runtime.start_task(task, scheduled_at: DateTime.add(DateTime.utc_now(:second), 60))
+               Runtime.start_task(admin_scope(), task,
+                 scheduled_at: DateTime.add(DateTime.utc_now(:second), 60)
+               )
 
       refute_enqueued(worker: ScheduledDispatchWorker)
     end
@@ -297,7 +299,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = runnable_task_fixture()
       at = DateTime.add(DateTime.utc_now(:second), 3600)
 
-      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+      {:ok, task} = Runtime.start_task(admin_scope(), task, scheduled_at: at)
       Runtime.kick_queue()
 
       assert Tasks.get_task!(task.id).run_state == :queued
@@ -308,9 +310,9 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = runnable_task_fixture()
       at = DateTime.add(DateTime.utc_now(:second), 3600)
 
-      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+      {:ok, task} = Runtime.start_task(admin_scope(), task, scheduled_at: at)
 
-      assert {:ok, task} = Runtime.cancel_task(task)
+      assert {:ok, task} = Runtime.cancel_task(admin_scope(), task)
       assert task.state == :planning
       assert task.scheduled_at == nil
     end
@@ -319,13 +321,13 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = runnable_task_fixture()
       at = DateTime.add(DateTime.utc_now(:second), 3600)
 
-      {:ok, task} = Runtime.start_task(task, scheduled_at: at)
+      {:ok, task} = Runtime.start_task(admin_scope(), task, scheduled_at: at)
 
       # Held at capacity so the assertion is about the schedule, not
       # about a real run starting.
       Application.put_env(:code_lead, :max_concurrent_runs, 0)
 
-      assert {:ok, task} = Runtime.run_now(task)
+      assert {:ok, task} = Runtime.run_now(admin_scope(), task)
       assert task.scheduled_at == nil
       assert task.run_state == :queued
     end
@@ -337,7 +339,7 @@ defmodule CodeLead.RuntimeTest do
       # not about a run starting — dispatch is covered elsewhere.
       Application.put_env(:code_lead, :max_concurrent_runs, 0)
 
-      assert {:ok, task} = Runtime.start_task(task)
+      assert {:ok, task} = Runtime.start_task(admin_scope(), task)
       assert task.run_state == :queued
       assert task.scheduled_at == nil
 
@@ -351,7 +353,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
 
       # The permission scenario stalls awaiting a human decision.
       assert_receive {:task_event, _id, {:permission_request, _detail}}, 15_000
@@ -359,7 +361,7 @@ defmodule CodeLead.RuntimeTest do
       task = Tasks.get_task!(task.id)
       assert task.attention.type == :permission_request
 
-      assert {:ok, task} = Runtime.cancel_task(task)
+      assert {:ok, task} = Runtime.cancel_task(admin_scope(), task)
       assert task.state == :planning
       assert task.run_state == :idle
 
@@ -371,11 +373,11 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:permission_request, %{id: request_id}}}, 15_000
 
       task = Tasks.get_task!(task.id)
-      assert :ok = Runtime.answer_permission(task, request_id, true)
+      assert :ok = Runtime.answer_permission(admin_scope(), task, request_id, true)
 
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
@@ -389,7 +391,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:question, %{id: request_id}}}, 15_000
 
       # The turn is blocked on the human, so the run must not have taken
@@ -413,7 +415,12 @@ defmodule CodeLead.RuntimeTest do
       assert [%{"value" => "Refactor first", "label" => "Refactor first"} | _] = options
 
       assert :ok =
-               Runtime.answer_question(task, request_id, {:accept, %{"question_0" => "Ship it"}})
+               Runtime.answer_question(
+                 admin_scope(),
+                 task,
+                 request_id,
+                 {:accept, %{"question_0" => "Ship it"}}
+               )
 
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
@@ -433,11 +440,11 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:question, %{id: request_id}}}, 15_000
 
       task = Tasks.get_task!(task.id)
-      assert :ok = Runtime.answer_question(task, request_id, :decline)
+      assert :ok = Runtime.answer_question(admin_scope(), task, request_id, :decline)
 
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
@@ -451,11 +458,11 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:question, _question}}, 15_000
 
       task = Tasks.get_task!(task.id)
-      assert {:ok, task} = Runtime.cancel_task(task)
+      assert {:ok, task} = Runtime.cancel_task(admin_scope(), task)
       assert task.state == :planning
       assert is_nil(task.attention)
 
@@ -467,7 +474,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = acp_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       assert detail =~ "exited with status 3"
       await_runner_down(task.id)
@@ -478,7 +485,7 @@ defmodule CodeLead.RuntimeTest do
       assert task.attention.type == :run_failed
 
       use_scenario("happy")
-      assert {:ok, _} = Runtime.retry_task(task)
+      assert {:ok, _} = Runtime.retry_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
       assert Tasks.get_task!(task.id).state == :review
@@ -491,7 +498,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task, repository: repository} = repo_task()
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       assert detail =~ "claude-agent-acp-missing"
       assert detail =~ "not found on PATH"
@@ -508,7 +515,7 @@ defmodule CodeLead.RuntimeTest do
       %{task: task} = repo_task(git_url: "file:///nonexistent/codelead-missing.git")
       subscribe(task)
 
-      assert {:ok, _} = Runtime.start_task(task)
+      assert {:ok, _} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       assert detail =~ "could not prepare the workspace"
       assert detail =~ "does not appear to be a git repository"

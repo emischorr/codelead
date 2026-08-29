@@ -12,9 +12,12 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
 
   @doc """
   Name and budget limits. Budgets are entered in cents, which is how they are
-  stored and how the scheduler reads them.
+  stored and how the scheduler reads them. Budget limits are admin-only:
+  non-admins see them disabled (and `Projects.update_project/3` strips them
+  server-side — the disabled inputs are only the explanation).
   """
   attr :form, Phoenix.HTML.Form, required: true
+  attr :can_set_budget?, :boolean, required: true
 
   def details(assigns) do
     ~H"""
@@ -39,6 +42,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
               min="0"
               label="Monthly cost limit (cents)"
               placeholder="No limit"
+              disabled={!@can_set_budget?}
             />
             <p class="-mt-1 mb-2 text-[12px] text-text3">
               {budget_hint(@form[:budget_limit_cents].value)}
@@ -50,8 +54,13 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
             min="0"
             label="Monthly token limit"
             placeholder="No limit"
+            disabled={!@can_set_budget?}
           />
         </div>
+
+        <p :if={!@can_set_budget?} class="mb-4 text-[12px] leading-relaxed text-text3">
+          Budget limits are set by an administrator.
+        </p>
 
         <p class="mb-4 text-[12px] leading-relaxed text-text3">
           Limits cover the current calendar month (UTC) and reset on the 1st. A run that would push
@@ -271,6 +280,78 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
               phx-click="delete_env"
               phx-value-key={entry.key}
               data-confirm={"Remove #{entry.key}? Runs that need it will fail."}
+            >
+              Remove
+            </.button>
+          </:actions>
+        </.list_row>
+      </div>
+    </.section_card>
+    """
+  end
+
+  @doc """
+  Who is on the project and with which role. Role changes and removals
+  apply immediately; adding opens the member modal (patched over the
+  page by `SettingsLive.Project`).
+  """
+  attr :members, :list, required: true
+  attr :project_id, :integer, required: true
+
+  def members(assigns) do
+    ~H"""
+    <.section_card label="Members">
+      <:actions>
+        <.button
+          id="add-member"
+          variant="primary"
+          patch={~p"/settings/projects/#{@project_id}/members/new"}
+        >
+          Add member
+        </.button>
+      </:actions>
+
+      <p class="text-[12px] leading-relaxed text-text3">
+        Reporters file and refine their own tasks; members work every human
+        gate; maintainers also manage these settings. Administrators see every
+        project without a membership.
+      </p>
+
+      <div :if={@members == []}>
+        <.empty_state icon="hero-users" title="No members yet">
+          Add one and the project shows up in their sidebar.
+        </.empty_state>
+      </div>
+
+      <div id="member-list">
+        <.list_row
+          :for={membership <- @members}
+          id={"member-row-#{membership.id}"}
+          title={membership.user.username}
+          subtitle={membership.user.email}
+        >
+          <:actions>
+            <form id={"member-role-form-#{membership.id}"} phx-change="change_member_role">
+              <input type="hidden" name="membership_id" value={membership.id} />
+              <select
+                name="role"
+                class="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] text-text focus:border-accent focus:outline-none"
+              >
+                <option
+                  :for={{label, value} <- FormOptions.project_roles()}
+                  value={value}
+                  selected={to_string(membership.role) == value}
+                >
+                  {label}
+                </option>
+              </select>
+            </form>
+            <.button
+              id={"remove-member-#{membership.id}"}
+              variant="danger"
+              phx-click="remove_member"
+              phx-value-id={membership.id}
+              data-confirm={"Remove #{membership.user.username} from this project?"}
             >
               Remove
             </.button>

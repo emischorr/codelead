@@ -10,6 +10,8 @@ defmodule CodeLeadWeb.NavigationTest do
   alias CodeLead.Repo
   alias CodeLead.Tasks
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   describe "sidebar on a project page" do

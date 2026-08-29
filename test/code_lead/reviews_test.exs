@@ -86,7 +86,7 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     task_id = task.id
     assert_receive {:task_event, ^task_id, {:run_completed, _result}}, 20_000
 
@@ -144,7 +144,7 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     await_review_ready(task.id)
 
     assert_receive {:executor_prompt, executor_body}
@@ -181,7 +181,7 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     await_review_ready(task.id)
 
     # the prompt carries the shared two-part contract with the verdict key
@@ -215,7 +215,7 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     await_review_ready(task.id)
 
     assert [review] = Reviews.list_reviews(task.id)
@@ -282,13 +282,13 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     assert await_review_ready(task.id) == 1
     assert_receive {:prompt, "Reviewer One", _first}
     assert_receive {:prompt, "Reviewer Two", _first}
 
     task = Tasks.get_task!(task.id)
-    {:ok, _task} = Runtime.request_changes(task, "Tighten it.")
+    {:ok, _task} = Runtime.request_changes(admin_scope(), task, "Tighten it.")
     assert await_review_ready(task.id) == 2
 
     assert_receive {:prompt, "Reviewer One", prompt_one}, 20_000
@@ -313,7 +313,7 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     await_review_ready(task.id)
 
     assert [review] = Reviews.list_reviews(task.id)
@@ -339,13 +339,13 @@ defmodule CodeLead.ReviewsTest do
       end
     end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     assert_receive {:executor_prompt, first_prompt}
     assert first_prompt =~ "Hero copy"
     assert await_review_ready(task.id) == 1
 
     task = Tasks.get_task!(task.id)
-    {:ok, task} = Runtime.request_changes(task, "Make it punchier and shorter.")
+    {:ok, task} = Runtime.request_changes(admin_scope(), task, "Make it punchier and shorter.")
     assert task.state in [:running, :review]
 
     assert_receive {:executor_prompt, second_prompt}, 20_000
@@ -381,7 +381,7 @@ defmodule CodeLead.ReviewsTest do
 
     assert File.dir?(context.path)
 
-    {:ok, task} = Runtime.send_back_to_planning(task)
+    {:ok, task} = Runtime.send_back_to_planning(admin_scope(), task)
     assert task.state == :planning
     assert task.worktree_path == nil
     assert task.branch_name == nil
@@ -417,7 +417,7 @@ defmodule CodeLead.ReviewsTest do
 
     stub_llm(fn conn, _body -> reply(conn, "Executor output.") end)
 
-    {:ok, _} = Runtime.start_task(task)
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
     await_review_ready(task.id)
 
     # The fake agent tried to write hello.txt through fs/write_text_file;

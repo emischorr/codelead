@@ -10,6 +10,9 @@ defmodule CodeLead.Accounts do
   import Ecto.Query
 
   alias CodeLead.Accounts.Organization
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.ProjectMembership
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Accounts.User
   alias CodeLead.Accounts.UserNotifier
   alias CodeLead.Accounts.UserToken
@@ -40,13 +43,29 @@ defmodule CodeLead.Accounts do
   end
 
   @doc """
-  Updates organization settings or budget limits.
+  Updates organization settings or budget limits. System-level — used by the
+  setup wizard and `complete_setup/0`, which run inside their own trust
+  boundary. Browser-facing edits go through `update_organization/2`.
   """
   @spec update_organization(map()) :: {:ok, Organization.t()} | {:error, Ecto.Changeset.t()}
   def update_organization(attrs) do
     get_organization!()
     |> Organization.changeset(attrs)
     |> Repo.update()
+  end
+
+  @doc """
+  Updates the admin-editable organization details (name, budget limits and
+  the default project budget limits). Never touches `settings`.
+  """
+  @spec update_organization(Scope.t() | nil, map()) ::
+          {:ok, Organization.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def update_organization(scope, attrs) do
+    with :ok <- Policy.authorize(scope, :manage_organization) do
+      get_organization!()
+      |> Organization.details_changeset(attrs)
+      |> Repo.update()
+    end
   end
 
   ## Setup
@@ -114,6 +133,9 @@ defmodule CodeLead.Accounts do
   @spec get_user!(pos_integer()) :: User.t()
   def get_user!(id), do: Repo.get!(User, id)
 
+  @spec get_user(pos_integer()) :: User.t() | nil
+  def get_user(id), do: Repo.get(User, id)
+
   @doc """
   Whether the instance has any user at all. Used by the setup wizard.
   """
@@ -145,12 +167,15 @@ defmodule CodeLead.Accounts do
   `login_user_by_magic_link/1` refuses an unconfirmed user that has a password.
   Without one the user is left unconfirmed and gains access by magic link.
   """
-  @spec create_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
-  def create_user(attrs) do
-    %User{role: attrs[:role] || attrs["role"] || :member}
-    |> User.changeset(attrs)
-    |> put_initial_password(attrs[:password] || attrs["password"], attrs)
-    |> Repo.insert()
+  @spec create_user(Scope.t() | nil, map()) ::
+          {:ok, User.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def create_user(scope, attrs) do
+    with :ok <- Policy.authorize(scope, :manage_users) do
+      %User{role: attrs[:role] || attrs["role"] || :member}
+      |> User.changeset(attrs)
+      |> put_initial_password(attrs[:password] || attrs["password"], attrs)
+      |> Repo.insert()
+    end
   end
 
   @spec update_user(User.t(), map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
@@ -177,15 +202,41 @@ defmodule CodeLead.Accounts do
 
   @doc """
   Deletes a user. Refuses to delete the last one — with registration closed,
-  an instance with no users cannot be recovered through the browser.
+  an instance with no users cannot be recovered through the browser — and the
+  last admin, since instance administration would become unreachable.
   """
-  @spec delete_user(User.t()) :: {:ok, User.t()} | {:error, :last_user}
-  def delete_user(%User{} = user) do
-    if Repo.aggregate(User, :count) <= 1 do
-      {:error, :last_user}
-    else
-      Repo.delete(user)
+  @spec delete_user(Scope.t() | nil, User.t()) ::
+          {:ok, User.t()} | {:error, :unauthorized | :last_user | :last_admin}
+  def delete_user(scope, %User{} = user) do
+    with :ok <- Policy.authorize(scope, :manage_users) do
+      cond do
+        Repo.aggregate(User, :count) <= 1 -> {:error, :last_user}
+        user.role == :admin and admin_count() <= 1 -> {:error, :last_admin}
+        true -> Repo.delete(user)
+      end
     end
+  end
+
+  @doc """
+  Changes a user's instance role. Refuses to demote the last admin.
+  """
+  @spec update_user_role(Scope.t() | nil, User.t(), :admin | :member) ::
+          {:ok, User.t()} | {:error, :unauthorized | :last_admin}
+  def update_user_role(scope, %User{} = user, role) when role in [:admin, :member] do
+    with :ok <- Policy.authorize(scope, :manage_users) do
+      if user.role == :admin and role != :admin and admin_count() <= 1 do
+        {:error, :last_admin}
+      else
+        user
+        |> Ecto.Changeset.change(role: role)
+        |> Repo.update()
+        |> tap_scope_change(user.id)
+      end
+    end
+  end
+
+  defp admin_count do
+    Repo.aggregate(from(u in User, where: u.role == :admin), :count)
   end
 
   defp put_initial_password(changeset, blank, _attrs) when blank in [nil, ""], do: changeset
@@ -195,6 +246,122 @@ defmodule CodeLead.Accounts do
     |> User.password_changeset(attrs)
     |> User.confirm_changeset()
   end
+
+  ## Project memberships
+
+  @doc """
+  The user's project roles as `%{project_id => role}`. Loaded once into the
+  `Scope` per request/mount; admins skip it entirely.
+  """
+  @spec membership_map(pos_integer()) :: %{pos_integer() => ProjectMembership.role()}
+  def membership_map(user_id) do
+    Repo.all(
+      from m in ProjectMembership,
+        where: m.user_id == ^user_id,
+        select: {m.project_id, m.role}
+    )
+    |> Map.new()
+  end
+
+  @spec list_project_members(pos_integer()) :: [ProjectMembership.t()]
+  def list_project_members(project_id) do
+    Repo.all(
+      from m in ProjectMembership,
+        join: u in assoc(m, :user),
+        where: m.project_id == ^project_id,
+        order_by: u.username,
+        preload: [user: u]
+    )
+  end
+
+  @spec get_project_membership!(pos_integer()) :: ProjectMembership.t()
+  def get_project_membership!(id), do: ProjectMembership |> Repo.get!(id) |> Repo.preload(:user)
+
+  @doc """
+  Adds a user to a project. Open sessions of the user pick the new access up
+  via the `{:scope_changed, user_id}` broadcast.
+  """
+  @spec add_project_member(Scope.t() | nil, pos_integer(), pos_integer(), atom()) ::
+          {:ok, ProjectMembership.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def add_project_member(scope, project_id, user_id, role) do
+    with :ok <- Policy.authorize(scope, :manage_project, project_id) do
+      %ProjectMembership{project_id: project_id, user_id: user_id}
+      |> ProjectMembership.changeset(%{role: role})
+      |> Repo.insert()
+      |> preload_member_user()
+      |> tap_scope_change(user_id)
+    end
+  end
+
+  @spec update_project_member_role(Scope.t() | nil, ProjectMembership.t(), atom()) ::
+          {:ok, ProjectMembership.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def update_project_member_role(scope, %ProjectMembership{} = membership, role) do
+    with :ok <- Policy.authorize(scope, :manage_project, membership.project_id) do
+      membership
+      |> ProjectMembership.changeset(%{role: role})
+      |> Repo.update()
+      |> preload_member_user()
+      |> tap_scope_change(membership.user_id)
+    end
+  end
+
+  @spec remove_project_member(Scope.t() | nil, ProjectMembership.t()) ::
+          {:ok, ProjectMembership.t()} | {:error, :unauthorized}
+  def remove_project_member(scope, %ProjectMembership{} = membership) do
+    with :ok <- Policy.authorize(scope, :manage_project, membership.project_id) do
+      membership
+      |> Repo.delete()
+      |> tap_scope_change(membership.user_id)
+    end
+  end
+
+  @doc """
+  The users a task on this project can be assigned to: its members plus all
+  admins (who bypass membership).
+  """
+  @spec list_assignable_users(pos_integer()) :: [User.t()]
+  def list_assignable_users(project_id) do
+    Repo.all(
+      from u in User,
+        left_join: m in ProjectMembership,
+        on: m.user_id == u.id and m.project_id == ^project_id,
+        where: u.role == :admin or not is_nil(m.id),
+        order_by: u.username
+    )
+  end
+
+  @doc """
+  Subscribes to the user's scope-change topic. `{:scope_changed, user_id}`
+  fires when their instance role or any project membership changes.
+  """
+  @spec subscribe_user(pos_integer()) :: :ok | {:error, term()}
+  def subscribe_user(user_id) do
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, user_topic(user_id))
+  end
+
+  @spec user_topic(pos_integer()) :: String.t()
+  def user_topic(user_id), do: "user:#{user_id}"
+
+  @doc """
+  Tells the user's open sessions their scope changed. Fired by every
+  membership and role write here; `CodeLead.Projects.delete_project/2` calls
+  it for the members its cascade removes.
+  """
+  @spec notify_scope_changed(pos_integer()) :: :ok
+  def notify_scope_changed(user_id) do
+    Phoenix.PubSub.broadcast(CodeLead.PubSub, user_topic(user_id), {:scope_changed, user_id})
+    :ok
+  end
+
+  defp preload_member_user({:ok, membership}), do: {:ok, Repo.preload(membership, :user)}
+  defp preload_member_user(other), do: other
+
+  defp tap_scope_change({:ok, _} = result, user_id) do
+    notify_scope_changed(user_id)
+    result
+  end
+
+  defp tap_scope_change(other, _user_id), do: other
 
   ## User registration
 

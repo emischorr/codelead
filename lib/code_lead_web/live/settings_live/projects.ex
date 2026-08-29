@@ -38,13 +38,16 @@ defmodule CodeLeadWeb.SettingsLive.Projects do
 
     case socket.assigns.classification do
       {:name, name} ->
-        %{"name" => name}
-        |> Projects.create_project()
+        socket.assigns.current_scope
+        |> Projects.create_project(%{"name" => name})
         |> handle_created(socket, "Link its repositories next.")
 
       {:repo, kind, owner, repo, git_url} ->
-        %{"name" => repo}
-        |> Projects.create_project_with_repository(%{"name" => repo, "git_url" => git_url})
+        socket.assigns.current_scope
+        |> Projects.create_project_with_repository(%{"name" => repo}, %{
+          "name" => repo,
+          "git_url" => git_url
+        })
         |> handle_created(socket, "Linked its #{Git.host(kind)} repository #{owner}/#{repo}.")
 
       _not_submittable ->
@@ -53,7 +56,7 @@ defmodule CodeLeadWeb.SettingsLive.Projects do
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
-    case id |> Projects.get_project!() |> Projects.delete_project() do
+    case Projects.delete_project(socket.assigns.current_scope, Projects.get_project!(id)) do
       {:ok, project} ->
         {:noreply, socket |> put_flash(:info, "#{project.name} deleted.") |> load_projects()}
 
@@ -149,7 +152,7 @@ defmodule CodeLeadWeb.SettingsLive.Projects do
 
   defp load_projects(socket) do
     projects =
-      Enum.map(Projects.list_projects(), fn project ->
+      Enum.map(Projects.list_projects(socket.assigns.current_scope), fn project ->
         %{tasks: task_count} = Projects.project_usage(project.id)
 
         project

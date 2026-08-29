@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-28, unarchive/1 removal)
+# Task workflow (last updated: 2026-08-29, authorization + step attribution)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -47,6 +47,19 @@ it transcribes spec §4 and fails if the definition drifts from it.
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 
 Every transition writes a `:transition` task step (denormalized actor).
+Since the multi-user change the human functions are scope-first
+(`move_to_running(scope, task)` etc.): they authorize `:operate_task`
+through `CodeLead.Accounts.Policy` before moving anything, and a human
+step records who acted — the username lands in `executor_name` (where
+the literal `"human"` used to be) and the id in `task_steps.user_id`
+(nilified if the account is later deleted). System steps keep the
+`"system"` literal and a nil user. `archive/2` — which bypasses
+`transition/3` because it moves no column — now writes its own
+attributed step, closing a former audit gap. `apply_transition/3` stays
+authorization-free by design: it is also the system funnel
+(`complete_run/1`), and `Runtime.advance/3` authorizes human moves
+before any side effect fires. Task creation stamps
+`tasks.created_by_id`, which is what the reporter own-task rule reads.
 Invalid from-states return `{:error, :invalid_state}`.
 
 `begin_dispatch/1`, `mark_executing/2`, `fail_run/2` and `retry_run/1`

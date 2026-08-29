@@ -20,6 +20,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
   attr :live_message, :map, default: nil
   attr :executing?, :boolean, required: true
   attr :all_runs?, :boolean, default: false
+  attr :can_operate?, :boolean, default: true
 
   attr :task_stat, :map,
     required: true,
@@ -78,6 +79,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
             id={id}
             block={block}
             executing?={@executing?}
+            can_operate?={@can_operate?}
             root={@root}
           />
         </div>
@@ -137,6 +139,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
   attr :id, :string, required: true
   attr :block, :map, required: true
   attr :executing?, :boolean, required: true
+  attr :can_operate?, :boolean, default: true
   attr :root, :string, default: nil, doc: "the run's working directory, stripped from paths"
 
   defp feed_block(%{block: %{kind: :tools}} = assigns) do
@@ -225,7 +228,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
         <span class="ml-auto font-mono text-[10px] text-text3">{Format.time(@row.inserted_at)}</span>
       </div>
       <p class="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-text" phx-no-format>{@row.text}</p>
-      <.question_form :if={answerable?(@row, @executing?)} id={@id} row={@row} />
+      <.question_form :if={answerable?(@row, @executing?) && @can_operate?} id={@id} row={@row} />
       <.question_answers :if={@row.data["resolved"]} row={@row} />
     </div>
     """
@@ -249,7 +252,7 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
         class={["whitespace-pre-wrap break-words text-[13px] leading-relaxed", text_class(@row)]}
         phx-no-format
       >{notice_text(@row)}</p>
-      <div :if={answerable?(@row, @executing?)} class="mt-1 flex gap-2">
+      <div :if={answerable?(@row, @executing?) && @can_operate?} class="mt-1 flex gap-2">
         <.button
           variant="primary"
           phx-click="answer_permission"

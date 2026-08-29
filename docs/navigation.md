@@ -5,7 +5,7 @@ every authenticated page. This note records the contract it renders from,
 the rules for what is enabled where, and why the project selection is
 remembered the way it is.
 
-(last updated: 2026-08-28, Archive nav item)
+(last updated: 2026-08-29, scoped nav + scope refresh)
 
 ## Two principles
 
@@ -45,17 +45,23 @@ from — LiveViews never assemble navigation themselves:
 
 ```elixir
 %{
-  projects: [%Project{}],     # Projects.list_projects/0
+  projects: [%Project{}],     # Projects.list_projects/1 — the caller's visible projects
   project: %Project{} | nil,  # the selected project
   scope: :project | :general, # is this page inside a project?
   current: :dashboard | :board | :settings | :account | nil,
-  attention_count: 0,         # Tasks.total_attention_count/0 — org-wide
-  agent_blocked?: false,      # Tasks.agent_blocked?/0 — org-wide
-  project_stats: %{},         # Tasks.project_summaries/0 — every project, not just the open one
+  attention_count: 0,         # Tasks.total_attention_count/1 — the caller's projects
+  agent_blocked?: false,      # Tasks.agent_blocked?/1 — the caller's projects
+  project_stats: %{},         # Tasks.project_summaries/1 — every visible project
   spend: nil,                 # month-to-date %{cost_cents: _, tokens: _} | nil
   rate_limit: nil             # subscription usage snapshot | nil — see below
 }
 ```
+
+Everything project-derived is scoped to the caller: admins see the whole
+instance (`NavContext.visible_ids/1` returns `nil`), everyone else their
+membership projects. The org-topic `{:board_changed, ...}` refresh
+recomputes with the same filter, so foreign projects' activity never
+reaches a member's sidebar.
 
 - `scope` is `:project` when the mount params carry a `"project_id"` —
   i.e. on `/projects/:project_id/…` — and `:general` everywhere else. It
@@ -308,3 +314,22 @@ and confirmation pages.
    always reachable (Dashboard, Settings) needs no disabled variant.
 4. If it needs highlighting, extend `NavContext.section/1` and the
    `current` values; the LiveView itself stays untouched.
+
+## Scope refresh
+
+`NavContext.on_mount/4` also subscribes to `Accounts.user_topic/1`.
+Every membership or instance-role write for the user broadcasts
+`{:scope_changed, user_id}` (see `Accounts.notify_scope_changed/1`), and
+the hook's `handle_info` clause then rebuilds `@current_scope` via
+`Scope.refresh/1`:
+
+- user gone → halt and redirect to `/users/log-in`;
+- instance role changed, or `:view_project` on the currently open
+  project lost → `push_navigate` to `/` — the remount re-runs the
+  live_session's own gates (this is what bounces a demoted admin off an
+  admin page);
+- otherwise → reassign `@current_scope` and rebuild the scoped parts of
+  `@nav` in place, no remount.
+
+Any membership write that bypasses the `Accounts` CRUD (raw seeds, IEx
+inserts) won't refresh open sessions — keep writes behind the context.

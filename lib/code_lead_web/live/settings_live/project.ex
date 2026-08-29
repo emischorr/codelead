@@ -12,6 +12,8 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
   import CodeLeadWeb.SettingsLive.Components
 
+  alias CodeLead.Accounts
+  alias CodeLead.Accounts.Policy
   alias CodeLead.Agents
   alias CodeLead.Git
   alias CodeLead.Projects
@@ -24,14 +26,26 @@ defmodule CodeLeadWeb.SettingsLive.Project do
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     project = Projects.get_project!(id)
+    scope = socket.assigns.current_scope
 
-    {:ok,
-     socket
-     |> assign(page_title: project.name, project: project)
-     |> assign_details_form(%{})
-     |> assign_finalize_form()
-     |> assign_pr_template_form()
-     |> load_project()}
+    # The live_session's `require_project_access` hook already grants
+    # viewing; managing settings needs the maintainer role on top. Members
+    # know the project exists, so a specific message is fine here.
+    if Policy.can?(scope, :manage_project, project) do
+      {:ok,
+       socket
+       |> assign(page_title: project.name, project: project)
+       |> assign(can_set_budget?: Policy.can?(scope, :set_project_budget))
+       |> assign_details_form(%{})
+       |> assign_finalize_form()
+       |> assign_pr_template_form()
+       |> load_project()}
+    else
+      {:ok,
+       socket
+       |> put_flash(:error, "Only maintainers can manage project settings.")
+       |> push_navigate(to: ~p"/projects/#{project.id}/board")}
+    end
   end
 
   @impl true
@@ -55,6 +69,13 @@ defmodule CodeLeadWeb.SettingsLive.Project do
      socket
      |> assign(repository: repository)
      |> assign(repository_form: to_form(Projects.change_repository(repository), as: "repository"))}
+  end
+
+  def handle_params(_params, _uri, %{assigns: %{live_action: :new_member}} = socket) do
+    {:noreply,
+     socket
+     |> assign(repository: nil, repository_form: nil, env_form: nil, env_key: nil)
+     |> assign(member_form: to_form(%{"user_id" => "", "role" => "member"}, as: "member"))}
   end
 
   def handle_params(_params, _uri, %{assigns: %{live_action: :new_env}} = socket) do
@@ -85,7 +106,11 @@ defmodule CodeLeadWeb.SettingsLive.Project do
   end
 
   def handle_event("save_details", %{"project" => params}, socket) do
-    case Projects.update_project(socket.assigns.project, blank_to_nil(params)) do
+    case Projects.update_project(
+           socket.assigns.current_scope,
+           socket.assigns.project,
+           blank_to_nil(params)
+         ) do
       {:ok, project} ->
         {:noreply,
          socket
@@ -219,6 +244,66 @@ defmodule CodeLeadWeb.SettingsLive.Project do
     end
   end
 
+  ## Members
+
+  def handle_event("add_member", %{"member" => %{"user_id" => user_id} = params}, socket)
+      when user_id != "" do
+    case Accounts.add_project_member(
+           socket.assigns.current_scope,
+           socket.assigns.project.id,
+           String.to_integer(user_id),
+           params["role"]
+         ) do
+      {:ok, membership} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "#{membership.user.username} added.")
+         |> push_patch(to: ~p"/settings/projects/#{socket.assigns.project.id}")
+         |> load_project()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, "Could not add that member.")}
+    end
+  end
+
+  def handle_event("add_member", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Choose a user first.")}
+  end
+
+  def handle_event("change_member_role", %{"membership_id" => id, "role" => role}, socket) do
+    membership = Accounts.get_project_membership!(id)
+
+    case Accounts.update_project_member_role(socket.assigns.current_scope, membership, role) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "#{updated.user.username} is now a #{updated.role}.")
+         |> load_project()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, socket |> put_flash(:error, "Could not change the role.") |> load_project()}
+    end
+  end
+
+  def handle_event("remove_member", %{"id" => id}, socket) do
+    membership = Accounts.get_project_membership!(id)
+
+    case Accounts.remove_project_member(socket.assigns.current_scope, membership) do
+      {:ok, removed} ->
+        {:noreply,
+         socket |> put_flash(:info, "#{removed.user.username} removed.") |> load_project()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
+    end
+  end
+
   ## Template
 
   @impl true
@@ -233,7 +318,8 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
       <div class="min-h-0 flex-1 overflow-y-auto">
         <div class="mx-auto flex w-full max-w-4xl flex-col gap-3.5 p-4 sm:p-6">
-          <ProjectSections.details form={@details_form} />
+          <ProjectSections.details form={@details_form} can_set_budget?={@can_set_budget?} />
+          <ProjectSections.members members={@members} project_id={@project.id} />
           <ProjectSections.finalize form={@finalize_form} />
           <ProjectSections.pr_template form={@pr_template_form} />
           <ProjectSections.repositories
@@ -379,6 +465,38 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           </div>
         </.form>
       </.modal>
+
+      <.modal
+        :if={@live_action == :new_member}
+        id="member-modal"
+        title="Add member"
+        return_to={~p"/settings/projects/#{@project.id}"}
+      >
+        <.form for={@member_form} id="member-form" phx-submit="add_member">
+          <.input
+            field={@member_form[:user_id]}
+            type="select"
+            label="User"
+            prompt="Choose a user…"
+            options={Enum.map(@addable_users, &{&1.username, &1.id})}
+            required
+          />
+          <.input
+            field={@member_form[:role]}
+            type="select"
+            label="Role"
+            options={FormOptions.project_roles()}
+          />
+          <p class="mb-4 text-[12px] leading-relaxed text-text3">
+            Reporters create and refine their own tasks; members work every
+            human gate; maintainers also manage these settings.
+          </p>
+          <div class="mt-4 flex justify-end gap-2">
+            <.button patch={~p"/settings/projects/#{@project.id}"}>Cancel</.button>
+            <.button variant="primary" type="submit" phx-disable-with="Adding…">Add member</.button>
+          </div>
+        </.form>
+      </.modal>
     </Layouts.app>
     """
   end
@@ -415,12 +533,17 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         }
       end)
 
+    members = Accounts.list_project_members(project_id)
+    member_user_ids = MapSet.new(members, & &1.user_id)
+
     assign(socket,
       repositories: repositories,
       default_repository_name: default_repository_name,
       env_keys: env_keys,
       project_agents: Agents.list_project_agents(project_id),
-      reviewer_sets: reviewer_sets
+      reviewer_sets: reviewer_sets,
+      members: members,
+      addable_users: Enum.reject(Accounts.list_users(), &MapSet.member?(member_user_ids, &1.id))
     )
   end
 

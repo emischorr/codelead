@@ -17,6 +17,9 @@ defmodule CodeLead.Projects do
   require Logger
 
   alias CodeLead.Accounts
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.ProjectMembership
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Git
   alias CodeLead.Projects.Project
   alias CodeLead.Projects.ProjectEnv
@@ -36,15 +39,26 @@ defmodule CodeLead.Projects do
   """
 
   @doc """
-  Creates a project under the organization singleton.
+  Creates a project under the organization singleton. The creator becomes
+  its maintainer in the same transaction, and the organization's default
+  project budget limits are stamped onto it unless the attrs (admin-only)
+  set them explicitly — copied at creation, never inherited live.
   """
-  @spec create_project(map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
-  def create_project(attrs) do
-    organization = Accounts.get_organization!()
+  @spec create_project(Scope.t() | nil, map()) ::
+          {:ok, Project.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def create_project(scope, attrs) do
+    with :ok <- Policy.authorize(scope, :create_project) do
+      insert_project_with_creator(Accounts.get_organization!(), scope, attrs)
+    end
+  end
 
-    %Project{org_id: organization.id}
-    |> Project.changeset(attrs)
-    |> Repo.insert()
+  defp insert_project_with_creator(organization, scope, attrs) do
+    Repo.transact(fn ->
+      with {:ok, project} <- insert_project(organization, scope, attrs),
+           {:ok, _membership} <- insert_creator_membership(project, scope.user) do
+        {:ok, project}
+      end
+    end)
   end
 
   @spec list_projects() :: [Project.t()]
@@ -52,14 +66,42 @@ defmodule CodeLead.Projects do
     Repo.all(from p in Project, order_by: p.name)
   end
 
+  @doc """
+  The projects the caller may see: all of them for admins, their
+  membership projects otherwise. Web callers use this; `list_projects/0`
+  stays for system callers.
+  """
+  @spec list_projects(Scope.t() | nil) :: [Project.t()]
+  def list_projects(%Scope{} = scope) do
+    if Scope.admin?(scope) do
+      list_projects()
+    else
+      ids = Scope.project_ids(scope)
+      Repo.all(from p in Project, where: p.id in ^ids, order_by: p.name)
+    end
+  end
+
+  def list_projects(nil), do: []
+
   @spec get_project!(pos_integer()) :: Project.t()
   def get_project!(id), do: Repo.get!(Project, id)
 
-  @spec update_project(Project.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
-  def update_project(project, attrs) do
-    project
-    |> Project.changeset(attrs)
-    |> Repo.update()
+  @doc """
+  Updates a project's settings. Budget limits are admin-only and silently
+  kept out of reach here — the UI renders them read-only for everyone else,
+  this strip is the authoritative guard.
+  """
+  @spec update_project(Scope.t() | nil, Project.t(), map()) ::
+          {:ok, Project.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def update_project(scope, project, attrs) do
+    with :ok <- Policy.authorize(scope, :manage_project, project) do
+      attrs =
+        if Policy.can?(scope, :set_project_budget), do: attrs, else: drop_budget_attrs(attrs)
+
+      project
+      |> Project.changeset(attrs)
+      |> Repo.update()
+    end
   end
 
   @spec change_project(Project.t(), map()) :: Ecto.Changeset.t()
@@ -79,11 +121,29 @@ defmodule CodeLead.Projects do
   it, because `tasks.project_id` cascades and would take the whole history
   with it. The managed clone on disk is left alone.
   """
-  @spec delete_project(Project.t()) :: {:ok, Project.t()} | {:error, {:has_tasks, pos_integer()}}
-  def delete_project(%Project{id: id} = project) do
+  @spec delete_project(Scope.t() | nil, Project.t()) ::
+          {:ok, Project.t()} | {:error, :unauthorized | {:has_tasks, pos_integer()}}
+  def delete_project(scope, %Project{} = project) do
+    with :ok <- Policy.authorize(scope, :delete_project, project) do
+      do_delete_project(project)
+    end
+  end
+
+  defp do_delete_project(%Project{id: id} = project) do
     case project_usage(id) do
-      %{tasks: 0} -> Repo.delete(project)
+      %{tasks: 0} -> delete_and_notify_members(project)
       %{tasks: count} -> {:error, {:has_tasks, count}}
+    end
+  end
+
+  # The cascade removes the membership rows silently; tell the members'
+  # open sessions their scope shrank.
+  defp delete_and_notify_members(project) do
+    member_ids = Enum.map(Accounts.list_project_members(project.id), & &1.user_id)
+
+    with {:ok, deleted} <- Repo.delete(project) do
+      Enum.each(member_ids, &Accounts.notify_scope_changed/1)
+      {:ok, deleted}
     end
   end
 
@@ -106,11 +166,19 @@ defmodule CodeLead.Projects do
   repository in the same transaction — a rejected git URL must not leave a
   half-created project behind. Pass `nil` to create the project alone.
   """
-  @spec create_project_with_repository(map(), map() | nil) ::
-          {:ok, Project.t()} | {:error, :project | :repository, Ecto.Changeset.t()}
-  def create_project_with_repository(project_attrs, repository_attrs) do
+  @spec create_project_with_repository(Scope.t() | nil, map(), map() | nil) ::
+          {:ok, Project.t()}
+          | {:error, :unauthorized}
+          | {:error, :project | :repository, Ecto.Changeset.t()}
+  def create_project_with_repository(scope, project_attrs, repository_attrs) do
+    with :ok <- Policy.authorize(scope, :create_project) do
+      transact_project_with_repository(scope, project_attrs, repository_attrs)
+    end
+  end
+
+  defp transact_project_with_repository(scope, project_attrs, repository_attrs) do
     Repo.transact(fn ->
-      with {:ok, project} <- tag_error(create_project(project_attrs), :project),
+      with {:ok, project} <- tag_error(create_project(scope, project_attrs), :project),
            {:ok, _repository} <- maybe_link_repository(project, repository_attrs) do
         {:ok, project}
       end
@@ -430,6 +498,38 @@ defmodule CodeLead.Projects do
 
   defp tag_error({:error, changeset}, tag), do: {:error, {tag, changeset}}
   defp tag_error(result, _tag), do: result
+
+  @budget_attr_keys [
+    :budget_limit_cents,
+    :budget_limit_tokens,
+    "budget_limit_cents",
+    "budget_limit_tokens"
+  ]
+
+  defp drop_budget_attrs(attrs), do: Map.drop(attrs, @budget_attr_keys)
+
+  defp insert_project(organization, scope, attrs) do
+    attrs = if Policy.can?(scope, :set_project_budget), do: attrs, else: drop_budget_attrs(attrs)
+
+    %Project{org_id: organization.id}
+    |> Project.changeset(attrs)
+    |> default_budget(:budget_limit_cents, organization.default_project_budget_limit_cents)
+    |> default_budget(:budget_limit_tokens, organization.default_project_budget_limit_tokens)
+    |> Repo.insert()
+  end
+
+  defp default_budget(changeset, _field, nil), do: changeset
+
+  defp default_budget(changeset, field, default) do
+    case Ecto.Changeset.fetch_change(changeset, field) do
+      {:ok, value} when not is_nil(value) -> changeset
+      _blank -> Ecto.Changeset.put_change(changeset, field, default)
+    end
+  end
+
+  defp insert_creator_membership(project, user) do
+    Repo.insert(%ProjectMembership{project_id: project.id, user_id: user.id, role: :maintainer})
+  end
 
   defp first_repository?(project_id) do
     not Repo.exists?(from r in Repository, where: r.project_id == ^project_id)

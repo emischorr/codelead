@@ -47,10 +47,21 @@ Kandev validates the shape (self-hosted, worktree isolation, review-first Kanban
 
 ## 4. Roles (MVP)
 
-- **Admin** — first user; manages users, providers, org-level agents, org budgets, instance settings.
-- **Member** — creates projects/tasks/agents, runs and reviews work.
+Two flat layers; a single policy module enforces both (see the
+architecture spec's Authorization subsection).
 
-Fine-grained permissions are out of scope for MVP.
+**Instance role** (`users.role`):
+
+- **Admin** — instance operator; manages users, providers, org-level agents, org budgets, instance settings, license. Admins bypass project membership and act as maintainer on every project. The last admin can be neither demoted nor deleted.
+- **Member** — everything else; can create projects (the creator becomes that project's maintainer).
+
+**Project role** (per membership, ordered `reporter < member < maintainer`):
+
+- **Reporter** — stakeholders and clients; the "idea inbox". Views the project and its board; creates tasks; edits, deletes, and runs planning agents on **their own** tasks while in Planning. Nothing that moves a card out of Planning, nothing on other people's tasks. Reporters do spend money (planning agents cost tokens) — the project budget is the guardrail.
+- **Member** — people doing the work: all of the above on any task, plus every human gate (start/schedule, cancel, retry, answer questions and permission requests, request changes, send back, approve, archive) and task assignment.
+- **Maintainer** — the project owner: also project settings *except budgets* (name/color, repositories, environment store, finalize defaults, project agents, default reviewers) and the member list. Can delete the project.
+
+Fine-grained permission sets, teams, and a viewer role are out of scope for MVP.
 
 ---
 
@@ -171,7 +182,7 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 ## 10. Cost, tokens & budgets
 
 - Every run's token usage and cost are **captured and persisted** (per task, and rolled up per project per day).
-- **Budgets/limits** (money or tokens) can be set at **project** and **organization** level. A limit covers the **current calendar month (UTC)** and resets on the 1st — the number a user sets is what may be spent per month, not for all time.
+- **Budgets/limits** (money or tokens) can be set at **project** and **organization** level. A limit covers the **current calendar month (UTC)** and resets on the 1st — the number a user sets is what may be spent per month, not for all time. Project budgets are **admin-only to set** (maintainers and members still see the limit and month-to-date spend); the organization additionally carries **default project budget limits** that are **copied onto each new project at creation** — changing the default later leaves existing projects alone, and an admin can adjust any project individually.
 - **MVP scope:** reliably track/persist usage and **enforce limits** — a task that would exceed a limit is *held* rather than started. The full review UI (per-project graphs by day/week/month/year) is iteration two, built on the same data.
 
 ---

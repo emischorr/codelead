@@ -158,8 +158,10 @@ IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 6 a
 alias CodeLead.Projects
 alias CodeLead.Tasks
 
+admin_scope = CodeLead.Accounts.Scope.for_user(admin)
+
 unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
-  {:ok, project} = Projects.create_project(%{name: "Demo Product"})
+  {:ok, project} = Projects.create_project(admin_scope, %{name: "Demo Product"})
 
   # A local git origin so the whole repo flow (worktree → commit →
   # push → compare) works offline. Lives under the workspace root.
@@ -656,7 +658,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Marketing Site")) do
   alias CodeLead.Repo
   alias CodeLead.Reviews.Review
 
-  {:ok, marketing} = Projects.create_project(%{name: "Marketing Site"})
+  {:ok, marketing} = Projects.create_project(admin_scope, %{name: "Marketing Site"})
 
   copywriter = Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
   style = Repo.get_by!(CodeLead.Agents.Agent, name: "Style Editor")

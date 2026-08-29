@@ -4,9 +4,9 @@ defmodule CodeLeadWeb.SettingsLive do
   enough of a summary that the page answers "what does this instance look
   like?" without a click.
 
-  Everything the first-run wizard creates is editable from here. The
-  organization tile is a placeholder — see `docs/web-ui.md` for why editing
-  `organizations.settings` needs a merging setter first.
+  Admin-only sections (users, providers, organization) render their tiles
+  only for admins — hidden rather than disabled, since the routes behind
+  them bounce non-admins anyway. Projects and agents stay for everyone.
   """
 
   use CodeLeadWeb, :live_view
@@ -14,20 +14,22 @@ defmodule CodeLeadWeb.SettingsLive do
   import CodeLeadWeb.SettingsLive.Components
 
   alias CodeLead.Accounts
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Agents
   alias CodeLead.Projects
   alias CodeLeadWeb.FormOptions
 
   @impl true
   def mount(_params, _session, socket) do
-    users = Accounts.list_users()
-    providers = Agents.list_providers()
+    admin? = Scope.admin?(socket.assigns.current_scope)
+    users = if admin?, do: Accounts.list_users(), else: []
+    providers = if admin?, do: Agents.list_providers(), else: []
     agents = Agents.list_all_agents()
-    projects = Projects.list_projects()
+    projects = Projects.list_projects(socket.assigns.current_scope)
 
     {:ok,
      socket
-     |> assign(page_title: "Settings")
+     |> assign(page_title: "Settings", admin?: admin?)
      |> assign(organization: Accounts.get_organization!())
      |> assign(users: users, providers: providers, agents: agents, projects: projects)}
   end
@@ -60,6 +62,7 @@ defmodule CodeLeadWeb.SettingsLive do
 
           <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
             <.settings_tile
+              :if={@admin?}
               id="settings-tile-users"
               icon="hero-users"
               label="Users"
@@ -68,6 +71,7 @@ defmodule CodeLeadWeb.SettingsLive do
               navigate={~p"/settings/users"}
             />
             <.settings_tile
+              :if={@admin?}
               id="settings-tile-providers"
               icon="hero-cloud"
               label="Providers"
@@ -92,11 +96,13 @@ defmodule CodeLeadWeb.SettingsLive do
               navigate={~p"/settings/projects"}
             />
             <.settings_tile
+              :if={@admin?}
               id="settings-tile-organization"
               icon="hero-building-office"
               label="Organization"
               stat={@organization.name}
               detail="Budget limits and instance config"
+              navigate={~p"/settings/organization"}
             />
           </div>
         </div>

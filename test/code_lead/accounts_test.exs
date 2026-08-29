@@ -103,43 +103,57 @@ defmodule CodeLead.AccountsTest do
   end
 
   describe "users" do
-    test "create_user/1 with just a username" do
-      assert {:ok, %User{role: :member} = user} = Accounts.create_user(%{username: "abe"})
+    setup do
+      %{scope: user_scope_fixture(admin_fixture())}
+    end
+
+    test "create_user/2 with just a username", %{scope: scope} do
+      assert {:ok, %User{role: :member} = user} = Accounts.create_user(scope, %{username: "abe"})
       refute user.email
     end
 
-    test "create_user/1 requires a username" do
-      assert {:error, changeset} = Accounts.create_user(%{email: "a@b.de"})
+    test "create_user/2 requires a username", %{scope: scope} do
+      assert {:error, changeset} = Accounts.create_user(scope, %{email: "a@b.de"})
       assert %{username: _} = errors_on(changeset)
     end
 
-    test "create_user/1 rejects malformed email" do
+    test "create_user/2 refuses a non-admin caller" do
+      member_scope = user_scope_fixture(user_fixture())
+
+      assert {:error, :unauthorized} = Accounts.create_user(member_scope, %{username: "abe"})
+      assert {:error, :unauthorized} = Accounts.create_user(nil, %{username: "abe"})
+    end
+
+    test "create_user/2 rejects malformed email", %{scope: scope} do
       assert {:error, changeset} =
-               Accounts.create_user(%{username: "abe", email: "not an email"})
+               Accounts.create_user(scope, %{username: "abe", email: "not an email"})
 
       assert %{email: _} = errors_on(changeset)
     end
 
-    test "create_user/1 accepts a blank email as no email at all" do
-      assert {:ok, user} = Accounts.create_user(%{username: "abe", email: ""})
+    test "create_user/2 accepts a blank email as no email at all", %{scope: scope} do
+      assert {:ok, user} = Accounts.create_user(scope, %{username: "abe", email: ""})
       assert is_nil(user.email)
     end
 
-    test "usernames are unique" do
+    test "usernames are unique", %{scope: scope} do
       user = user_fixture()
-      assert {:error, changeset} = Accounts.create_user(%{username: user.username})
+      assert {:error, changeset} = Accounts.create_user(scope, %{username: user.username})
       assert %{username: _} = errors_on(changeset)
     end
 
-    test "emails are unique when present" do
+    test "emails are unique when present", %{scope: scope} do
       user = user_fixture()
-      assert {:error, changeset} = Accounts.create_user(%{username: "another", email: user.email})
+
+      assert {:error, changeset} =
+               Accounts.create_user(scope, %{username: "another", email: user.email})
+
       assert %{email: _} = errors_on(changeset)
     end
 
-    test "two users can both have no email" do
-      assert {:ok, _} = Accounts.create_user(%{username: "abe"})
-      assert {:ok, _} = Accounts.create_user(%{username: "bea"})
+    test "two users can both have no email", %{scope: scope} do
+      assert {:ok, _} = Accounts.create_user(scope, %{username: "abe"})
+      assert {:ok, _} = Accounts.create_user(scope, %{username: "bea"})
     end
 
     test "get_user_by_email/1 finds the user" do
@@ -154,9 +168,9 @@ defmodule CodeLead.AccountsTest do
       assert Accounts.get_user_by_username("missing") == nil
     end
 
-    test "create_user/1 with a password sets the hash and confirms the account" do
+    test "create_user/2 with a password sets the hash and confirms the account", %{scope: scope} do
       assert {:ok, user} =
-               Accounts.create_user(%{username: "abe", password: "hello world!123"})
+               Accounts.create_user(scope, %{username: "abe", password: "hello world!123"})
 
       assert user.confirmed_at
       assert User.valid_password?(user, "hello world!123")
@@ -164,9 +178,13 @@ defmodule CodeLead.AccountsTest do
 
     # `login_user_by_magic_link/1` raises for an unconfirmed user that has a
     # password, so the confirm on the password path is load-bearing.
-    test "create_user/1 with a password still allows a later magic-link login" do
+    test "create_user/2 with a password still allows a later magic-link login", %{scope: scope} do
       {:ok, user} =
-        Accounts.create_user(%{username: "abe", email: "pw@b.de", password: "hello world!123"})
+        Accounts.create_user(scope, %{
+          username: "abe",
+          email: "pw@b.de",
+          password: "hello world!123"
+        })
 
       token =
         extract_user_token(fn url ->
@@ -177,16 +195,16 @@ defmodule CodeLead.AccountsTest do
       assert logged_in.id == user.id
     end
 
-    test "create_user/1 without a password leaves the invite path open" do
-      assert {:ok, user} = Accounts.create_user(%{username: "abe", email: "invite@b.de"})
+    test "create_user/2 without a password leaves the invite path open", %{scope: scope} do
+      assert {:ok, user} = Accounts.create_user(scope, %{username: "abe", email: "invite@b.de"})
 
       refute user.hashed_password
       refute user.confirmed_at
     end
 
-    test "create_user/1 rejects a password under 12 characters" do
+    test "create_user/2 rejects a password under 12 characters", %{scope: scope} do
       assert {:error, changeset} =
-               Accounts.create_user(%{username: "abe", password: "short"})
+               Accounts.create_user(scope, %{username: "abe", password: "short"})
 
       assert %{password: _} = errors_on(changeset)
     end
@@ -198,19 +216,72 @@ defmodule CodeLead.AccountsTest do
                errors_on(Accounts.change_user(%User{}, %{}, with_password: true))
     end
 
-    test "delete_user/1 removes the user when another one remains" do
-      user_fixture()
+    test "delete_user/2 removes the user when another one remains", %{scope: scope} do
       doomed = user_fixture()
 
-      assert {:ok, _user} = Accounts.delete_user(doomed)
+      assert {:ok, _user} = Accounts.delete_user(scope, doomed)
       refute Accounts.get_user_by_email(doomed.email)
     end
 
-    test "delete_user/1 refuses the last user" do
-      only = user_fixture()
+    test "delete_user/2 refuses the last user", %{scope: scope} do
+      assert {:error, :last_user} = Accounts.delete_user(scope, scope.user)
+      assert Accounts.get_user_by_email(scope.user.email)
+    end
 
-      assert {:error, :last_user} = Accounts.delete_user(only)
-      assert Accounts.get_user_by_email(only.email)
+    test "delete_user/2 refuses the last admin", %{scope: scope} do
+      _member = user_fixture()
+
+      assert {:error, :last_admin} = Accounts.delete_user(scope, scope.user)
+      assert Accounts.get_user_by_email(scope.user.email)
+    end
+
+    test "delete_user/2 refuses a non-admin caller", %{scope: scope} do
+      member = user_fixture()
+      member_scope = user_scope_fixture(member)
+
+      assert {:error, :unauthorized} = Accounts.delete_user(member_scope, scope.user)
+    end
+  end
+
+  describe "update_user_role/3" do
+    setup do
+      %{scope: user_scope_fixture(admin_fixture())}
+    end
+
+    test "promotes and demotes when another admin remains", %{scope: scope} do
+      member = user_fixture()
+
+      assert {:ok, %User{role: :admin} = promoted} =
+               Accounts.update_user_role(scope, member, :admin)
+
+      assert {:ok, %User{role: :member}} = Accounts.update_user_role(scope, promoted, :member)
+    end
+
+    test "refuses to demote the last admin", %{scope: scope} do
+      assert {:error, :last_admin} = Accounts.update_user_role(scope, scope.user, :member)
+      assert Accounts.get_user!(scope.user.id).role == :admin
+    end
+
+    test "keeping an admin an admin is not a demotion", %{scope: scope} do
+      assert {:ok, %User{role: :admin}} = Accounts.update_user_role(scope, scope.user, :admin)
+    end
+
+    test "refuses a non-admin caller", %{scope: scope} do
+      member = user_fixture()
+      member_scope = user_scope_fixture(member)
+
+      assert {:error, :unauthorized} = Accounts.update_user_role(member_scope, member, :admin)
+      assert Accounts.get_user!(scope.user.id).role == :admin
+    end
+
+    test "broadcasts a scope change to the affected user", %{scope: scope} do
+      member = user_fixture()
+      Accounts.subscribe_user(member.id)
+
+      {:ok, _} = Accounts.update_user_role(scope, member, :admin)
+
+      assert_receive {:scope_changed, user_id}
+      assert user_id == member.id
     end
   end
 

@@ -9,6 +9,8 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
   alias CodeLead.Agents
   alias CodeLead.Projects
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   setup do
@@ -47,7 +49,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     # An empty number input arrives as "", which must clear the limit rather
     # than fail the integer cast.
     test "a blank budget clears the limit", %{conn: conn, project: project} do
-      {:ok, _project} = Projects.update_project(project, %{budget_limit_cents: 2500})
+      _project = set_project_budget!(project, %{budget_limit_cents: 2500})
 
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
 
@@ -80,7 +82,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     end
 
     test "leaves unrelated settings keys alone", %{conn: conn, project: project} do
-      {:ok, _project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+      _project = set_project_budget!(project, %{settings: %{"theme" => "dark"}})
 
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
 
@@ -136,7 +138,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
     end
 
     test "leaves unrelated settings keys alone", %{conn: conn, project: project} do
-      {:ok, _project} = Projects.update_project(project, %{settings: %{"theme" => "dark"}})
+      _project = set_project_budget!(project, %{settings: %{"theme" => "dark"}})
 
       {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
 

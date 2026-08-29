@@ -10,6 +10,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   import CodeLeadWeb.SettingsLive.Components
 
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Agents
   alias CodeLead.Agents.Agent
   alias CodeLead.Projects
@@ -18,12 +19,25 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   @impl true
   def mount(_params, _session, socket) do
+    scope = socket.assigns.current_scope
+    admin? = Scope.admin?(scope)
+    maintained_ids = Scope.maintained_project_ids(scope)
+
+    manageable_projects =
+      if admin?,
+        do: Projects.list_projects(),
+        else: Enum.filter(Projects.list_projects(scope), &(&1.id in maintained_ids))
+
     {:ok,
      socket
      |> assign(
        page_title: "Agents",
        providers: Agents.list_providers(),
-       projects: Projects.list_projects()
+       # For scope labels only; the form offers `manageable_projects`.
+       projects: Projects.list_projects(scope),
+       admin?: admin?,
+       maintained_ids: maintained_ids,
+       manageable_projects: manageable_projects
      )
      |> load_agents()}
   end
@@ -45,6 +59,21 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
   def handle_params(%{"id" => id}, _uri, %{assigns: %{live_action: :edit}} = socket) do
     agent = Agents.get_agent!(id)
 
+    if manageable?(agent, socket.assigns) do
+      open_edit(socket, agent)
+    else
+      {:noreply,
+       socket
+       |> put_flash(:error, "You can't manage that agent.")
+       |> push_patch(to: ~p"/settings/agents")}
+    end
+  end
+
+  def handle_params(_params, _uri, socket) do
+    {:noreply, assign(socket, form: nil, agent: nil)}
+  end
+
+  defp open_edit(socket, agent) do
     {:noreply,
      socket
      |> assign(agent: agent)
@@ -61,37 +90,52 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
      })}
   end
 
-  def handle_params(_params, _uri, socket) do
-    {:noreply, assign(socket, form: nil, agent: nil)}
-  end
-
   @impl true
   def handle_event("validate", %{"agent" => params}, socket) do
     {:noreply, assign_form(socket, socket.assigns.agent, params)}
   end
 
   def handle_event("save", %{"agent" => params}, %{assigns: %{live_action: :new}} = socket) do
-    case Agents.create_agent(agent_attrs(params)) do
+    case Agents.create_agent(socket.assigns.current_scope, agent_attrs(params)) do
       {:ok, agent} -> saved(socket, agent)
+      {:error, :unauthorized} -> refused(socket)
       {:error, changeset} -> {:noreply, assign(socket, form: to_form(changeset, as: "agent"))}
     end
   end
 
   def handle_event("save", %{"agent" => params}, socket) do
-    case Agents.update_agent(socket.assigns.agent, agent_attrs(params)) do
+    case Agents.update_agent(
+           socket.assigns.current_scope,
+           socket.assigns.agent,
+           agent_attrs(params)
+         ) do
       {:ok, agent} -> saved(socket, agent)
+      {:error, :unauthorized} -> refused(socket)
       {:error, changeset} -> {:noreply, assign(socket, form: to_form(changeset, as: "agent"))}
     end
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
-    case id |> Agents.get_agent!() |> Agents.delete_agent() do
+    case Agents.delete_agent(socket.assigns.current_scope, Agents.get_agent!(id)) do
       {:ok, agent} ->
         {:noreply, socket |> put_flash(:info, "#{agent.name} deleted.") |> load_agents()}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, FlashMessages.delete_error(reason))}
     end
+  end
+
+  defp refused(socket) do
+    {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
+  end
+
+  # Admins manage everything; maintainers only their projects' agents.
+  # Takes a plain map, not `%Agent{}` — the list rows carry a `:usage`
+  # key `load_agents/1` merged in.
+  defp manageable?(_agent, %{admin?: true}), do: true
+
+  defp manageable?(agent, %{maintained_ids: ids}) do
+    agent.scope == :project and agent.project_id in ids
   end
 
   ## Template
@@ -103,7 +147,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
       <.settings_page_header title="Agents" back={~p"/settings"}>
         <:actions>
           <.button
-            :if={@providers != []}
+            :if={@providers != [] and (@admin? or @manageable_projects != [])}
             id="new-agent"
             variant="primary"
             patch={~p"/settings/agents/new"}
@@ -146,8 +190,14 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
                   <.badge variant={:neutral}>{scope_label(agent, @projects)}</.badge>
                 </:badges>
                 <:actions>
-                  <.button patch={~p"/settings/agents/#{agent.id}/edit"}>Edit</.button>
+                  <.button
+                    :if={manageable?(agent, assigns)}
+                    patch={~p"/settings/agents/#{agent.id}/edit"}
+                  >
+                    Edit
+                  </.button>
                   <.delete_button
+                    :if={manageable?(agent, assigns)}
                     id={"delete-agent-#{agent.id}"}
                     value={agent.id}
                     reason={usage_reason(agent.usage)}
@@ -178,7 +228,7 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
             field={@form[:project_id]}
             type="select"
             label="Project"
-            options={FormOptions.project_options(@projects)}
+            options={agent_project_options(@admin?, @manageable_projects)}
           />
           <.input
             field={@form[:work_type]}
@@ -235,12 +285,16 @@ defmodule CodeLeadWeb.SettingsLive.Agents do
 
   defp load_agents(socket) do
     agents =
-      Enum.map(Agents.list_all_agents(), fn agent ->
+      Enum.map(Agents.list_agents_for_settings(socket.assigns.maintained_ids), fn agent ->
         Map.put(agent, :usage, Agents.agent_usage(agent.id))
       end)
 
     assign(socket, agents: agents)
   end
+
+  # Only admins may leave an agent org-wide, so only they get the option.
+  defp agent_project_options(true, projects), do: FormOptions.project_options(projects)
+  defp agent_project_options(false, projects), do: Enum.map(projects, &{&1.name, &1.id})
 
   defp assign_form(socket, agent, params) do
     changeset =

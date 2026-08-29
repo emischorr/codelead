@@ -13,10 +13,10 @@ defmodule CodeLead.TasksBoardEventsTest do
       project_id = project.id
       task_id = task.id
 
-      {:ok, task} = Tasks.move_to_running(task)
+      {:ok, task} = Tasks.move_to_running(admin_scope(), task)
       assert_receive {:board_changed, ^project_id, ^task_id}
 
-      {:ok, _task} = Tasks.cancel_run(task)
+      {:ok, _task} = Tasks.cancel_run(admin_scope(), task)
       assert_receive {:board_changed, ^project_id, ^task_id}
     end
 
@@ -72,11 +72,11 @@ defmodule CodeLead.TasksBoardEventsTest do
       project_id = project.id
       task_id = task.id
 
-      {:ok, task} = Tasks.update_task(task, %{title: "renamed"})
+      {:ok, task} = Tasks.update_task(admin_scope(), task, %{title: "renamed"})
       assert_receive {:board_changed, ^project_id, ^task_id}
 
       task = task |> Ecto.Changeset.change(state: :done) |> Repo.update!()
-      {:ok, _task} = Tasks.archive(task)
+      {:ok, _task} = Tasks.archive(admin_scope(), task)
       assert_receive {:board_changed, ^project_id, ^task_id}
     end
   end

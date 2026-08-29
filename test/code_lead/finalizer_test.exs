@@ -73,7 +73,7 @@ defmodule CodeLead.FinalizerTest do
     test "commits the remainder, pushes the branch, and moves to Done" do
       %{task: task, context: context} = reviewed_repo_task()
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert task.state == :done
       assert outcome.branch == context.branch_name
       assert outcome.note =~ "pushed"
@@ -102,7 +102,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context} = reviewed_repo_task()
       File.rm_rf!(context.path)
 
-      assert {:error, {:push_failed, :worktree_missing}} = Runtime.approve(task)
+      assert {:error, {:push_failed, :worktree_missing}} = Runtime.approve(admin_scope(), task)
       assert Tasks.get_task!(task.id).state == :review
     end
 
@@ -110,7 +110,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context} = reviewed_repo_task()
       {:ok, _} = Git.git(context.path, ["remote", "set-url", "origin", "/nope.git"])
 
-      assert {:error, {:push_failed, {:remote, remote}}} = Runtime.approve(task)
+      assert {:error, {:push_failed, {:remote, remote}}} = Runtime.approve(admin_scope(), task)
 
       # `create_origin!/0` yields a file:// URL, so :other is the honest
       # classification here; the forge-specific wording is unit-tested in
@@ -124,7 +124,7 @@ defmodule CodeLead.FinalizerTest do
     test "prunes the worktree but keeps the remote branch the PR points at" do
       %{task: task, context: context} = reviewed_repo_task()
 
-      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(task)
+      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(admin_scope(), task)
 
       refute File.dir?(context.path)
       assert task.worktree_path == nil
@@ -138,7 +138,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context} = reviewed_repo_task()
       {:ok, _} = Git.git(context.path, ["remote", "set-url", "origin", "/nope.git"])
 
-      assert {:error, _reason} = Runtime.approve(task)
+      assert {:error, _reason} = Runtime.approve(admin_scope(), task)
 
       assert File.dir?(context.path)
       assert Tasks.get_task!(task.id).worktree_path == context.path
@@ -154,7 +154,7 @@ defmodule CodeLead.FinalizerTest do
 
     test "merges the branch into the default branch and deletes it",
          %{task: task, context: context} do
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert task.state == :done
       assert outcome.merged_into == "main"
       assert outcome.note =~ "merged into main"
@@ -173,7 +173,7 @@ defmodule CodeLead.FinalizerTest do
     end
 
     test "prunes the worktree and its staging worktree", %{task: task, context: context} do
-      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(task)
+      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(admin_scope(), task)
 
       refute File.dir?(context.path)
       refute File.dir?(CodeLead.Workspace.merge_worktree_path(task.id))
@@ -182,7 +182,7 @@ defmodule CodeLead.FinalizerTest do
     end
 
     test "records no forge link for a remote with no forge convention", %{task: task} do
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
 
       refute Map.has_key?(outcome, :url)
       assert task.pr_url == nil
@@ -194,7 +194,7 @@ defmodule CodeLead.FinalizerTest do
       File.write!(Path.join(context.path, "README.md"), "# Branch\n")
       commit_on_origin!(repository.git_url, "README.md", "# Origin\n")
 
-      assert {:error, {:merge_failed, {:remote, remote}}} = Runtime.approve(task)
+      assert {:error, {:merge_failed, {:remote, remote}}} = Runtime.approve(admin_scope(), task)
       assert remote.base_branch == "main"
       assert Git.merge_refusal(remote.output) == :conflict
 
@@ -211,7 +211,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context, project: project} = reviewed_repo_task()
       {:ok, _project} = Projects.put_finalize_defaults(project, %{"repo" => "squash"})
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert task.state == :done
       assert outcome.note =~ "squash-merged into main"
 
@@ -234,7 +234,7 @@ defmodule CodeLead.FinalizerTest do
       {:ok, _repo} =
         Projects.update_repository(repository, %{git_url: "https://github.com/acme/site.git"})
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert outcome.url_kind == :commit
       assert outcome.url =~ "https://github.com/acme/site/commit/"
       assert task.pr_url_kind == :commit
@@ -255,7 +255,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert task.state == :done
       assert outcome.artifact_path == context.path
       assert File.dir?(outcome.artifact_path)
@@ -293,7 +293,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert task.state == :done
       assert outcome.note =~ "marketing/task-#{task.id}-hero-copy"
 
@@ -324,7 +324,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:error, :no_artifact} = Runtime.approve(task)
+      assert {:error, :no_artifact} = Runtime.approve(admin_scope(), task)
       assert Tasks.get_task!(task.id).state == :review
     end
 
@@ -340,7 +340,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:error, :no_artifact_repository} = Runtime.approve(task)
+      assert {:error, :no_artifact_repository} = Runtime.approve(admin_scope(), task)
       assert Tasks.get_task!(task.id).state == :review
     end
   end
@@ -369,14 +369,14 @@ defmodule CodeLead.FinalizerTest do
         |> Req.Test.json(%{"html_url" => "https://github.com/acme/site/pull/7"})
       end)
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert outcome.url_kind == :pull_request
       assert task.pr_url == "https://github.com/acme/site/pull/7"
       assert task.pr_url_kind == :pull_request
     end
 
     test "falls back to the compare link when no token is configured", %{task: task} do
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert outcome.url_kind == :compare
       assert task.pr_url =~ "https://github.com/acme/site/compare/main..."
       assert task.pr_url_kind == :compare
@@ -393,7 +393,7 @@ defmodule CodeLead.FinalizerTest do
         conn |> Plug.Conn.put_status(422) |> Req.Test.json(%{"message" => "already exists"})
       end)
 
-      assert {:ok, task, outcome} = Runtime.approve(task)
+      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
       assert outcome.url_kind == :compare
       assert task.pr_url_kind == :compare
       assert task.pr_url =~ "/compare/"

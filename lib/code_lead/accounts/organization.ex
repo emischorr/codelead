@@ -16,6 +16,8 @@ defmodule CodeLead.Accounts.Organization do
     field :settings, :map, default: %{}
     field :budget_limit_cents, :integer
     field :budget_limit_tokens, :integer
+    field :default_project_budget_limit_cents, :integer
+    field :default_project_budget_limit_tokens, :integer
     field :singleton, :boolean, default: true
 
     timestamps(type: :utc_datetime)
@@ -27,10 +29,41 @@ defmodule CodeLead.Accounts.Organization do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(organization, attrs) do
     organization
-    |> cast(attrs, [:name, :settings, :budget_limit_cents, :budget_limit_tokens])
+    |> cast(attrs, [
+      :name,
+      :settings,
+      :budget_limit_cents,
+      :budget_limit_tokens,
+      :default_project_budget_limit_cents,
+      :default_project_budget_limit_tokens
+    ])
     |> validate_required([:name])
     |> validate_number(:budget_limit_cents, greater_than_or_equal_to: 0)
     |> validate_number(:budget_limit_tokens, greater_than_or_equal_to: 0)
+    |> validate_number(:default_project_budget_limit_cents, greater_than_or_equal_to: 0)
+    |> validate_number(:default_project_budget_limit_tokens, greater_than_or_equal_to: 0)
+    |> unique_constraint(:singleton)
+  end
+
+  @doc """
+  Changeset for the admin-editable organization details. Deliberately never
+  casts `settings`, so the `"setup_done"` flag cannot be clobbered.
+  """
+  @spec details_changeset(t(), map()) :: Ecto.Changeset.t()
+  def details_changeset(organization, attrs) do
+    organization
+    |> cast(attrs, [
+      :name,
+      :budget_limit_cents,
+      :budget_limit_tokens,
+      :default_project_budget_limit_cents,
+      :default_project_budget_limit_tokens
+    ])
+    |> validate_required([:name])
+    |> validate_number(:budget_limit_cents, greater_than_or_equal_to: 0)
+    |> validate_number(:budget_limit_tokens, greater_than_or_equal_to: 0)
+    |> validate_number(:default_project_budget_limit_cents, greater_than_or_equal_to: 0)
+    |> validate_number(:default_project_budget_limit_tokens, greater_than_or_equal_to: 0)
     |> unique_constraint(:singleton)
   end
 end

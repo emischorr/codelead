@@ -14,6 +14,8 @@ defmodule CodeLeadWeb.Plugs.RequirePreviewAccess do
   import Plug.Conn
 
   alias CodeLead.Accounts
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Tasks
   alias CodeLeadWeb.PreviewProxy.ErrorPages
 
   # Mirrors `CodeLeadWeb.Endpoint`'s `@session_options[:key]` and
@@ -25,7 +27,8 @@ defmodule CodeLeadWeb.Plugs.RequirePreviewAccess do
 
   @impl true
   def call(%Plug.Conn{assigns: %{current_scope: scope}} = conn, _opts) do
-    if Accounts.setup_done?() and scope != nil and scope.user != nil do
+    if Accounts.setup_done?() and scope != nil and scope.user != nil and
+         project_allowed?(scope, conn.path_info) do
       conn
     else
       {conn, shadowed?} = evict_shadow_cookies(conn)
@@ -36,6 +39,24 @@ defmodule CodeLeadWeb.Plugs.RequirePreviewAccess do
       |> halt()
     end
   end
+
+  # A preview proxies into the task's execution context, so it needs
+  # `:view_project` on the task's project — the same rule as the task
+  # page. An unknown or unparseable task id passes through: the
+  # controllers own the branded 404 for those.
+  defp project_allowed?(scope, path_info) do
+    with raw when is_binary(raw) <- preview_task_id(path_info),
+         {task_id, ""} <- Integer.parse(raw),
+         project_id when is_integer(project_id) <- Tasks.task_project_id(task_id) do
+      Policy.can?(scope, :view_project, project_id)
+    else
+      _unresolved -> true
+    end
+  end
+
+  defp preview_task_id(["preview", "launch", raw | _rest]), do: raw
+  defp preview_task_id(["preview", raw | _rest]), do: raw
+  defp preview_task_id(_path_info), do: nil
 
   # An earlier build let a previewed CodeLead plant its own
   # `_code_lead_key` on this origin under the preview path. Browsers send

@@ -8,6 +8,8 @@ defmodule CodeLeadWeb.TaskLive.PreviewButtonTest do
 
   alias CodeLead.Preview
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   defp review_task(repository_attrs) do

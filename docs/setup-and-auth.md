@@ -1,8 +1,8 @@
-# Setup & authentication (last updated: 2026-08-16)
+# Setup & authentication (last updated: 2026-08-29)
 
 How a fresh instance bootstraps itself and how requests are gated
 afterwards. Product spec §11/§12 (first-run `/setup` wizard) and §4
-(admin/member roles) are the target; this note maps what exists today.
+(roles) are the target; this note maps what exists today.
 
 ## The `setup_done` flag
 
@@ -20,16 +20,22 @@ because it is a JSON column. Two functions in `CodeLead.Accounts` own it:
 skips the wizard. `CodeLead.AccountsFixtures.organization_fixture/1`
 defaults to `true` for the same reason.
 
-## The two gates
+## The three gates
 
-`CodeLeadWeb.SetupGate` and the generated `CodeLeadWeb.UserAuth` stack in
-that order:
+`CodeLeadWeb.SetupGate`, the generated `CodeLeadWeb.UserAuth`, and
+`CodeLeadWeb.Authorization` stack in that order:
 
-1. `:browser` runs `fetch_current_scope_for_user` (session → `@current_scope`).
+1. `:browser` runs `fetch_current_scope_for_user` (session → `@current_scope`,
+   which loads the user's project memberships — see "Authorization" below).
 2. `SetupGate` sends the user to `/setup` until the instance is set up,
    and out of `/setup` once it is.
 3. `UserAuth.require_authenticated_user` sends the user to
    `/users/log-in`.
+4. `Authorization` gates the split app scopes: `require_admin` bounces
+   non-admins off the instance-administration pages to `/settings`, and
+   `require_project_access` sends anyone without `:view_project` on a
+   project-keyed route to `/` with a generic "Project not found" flash —
+   never a 403, so project ids don't enumerate.
 
 Each gate has **two faces** and the router uses both: the plug covers
 HTTP requests and the initial LiveView mount, the `on_mount` hook covers
@@ -42,7 +48,16 @@ pipelines.
 |---|---|---|---|
 | Wizard | `:browser, :setup_pending` | `:setup` | `live /setup`, `post /setup/admin` |
 | Auth | `:browser, :setup_done` | `:current_user` | log-in / magic-link confirmation |
-| App | `:browser, :setup_done, :require_authenticated_user` | `:require_authenticated_user` | `GET /`, account settings, board, task page, `/settings/*` |
+| App | `:browser, :setup_done, :require_authenticated_user` | `:require_authenticated_user` | `GET /`, account settings, `/settings` overview, agents, project list/create |
+| Admin | app pipelines + `:admin` | `:admin` | `/settings/users*`, `/settings/providers*`, `/settings/organization` |
+| Project | app pipelines + `:project_access` | `:project` | board, archive, task page, `/settings/projects/:id*`, artifact download |
+
+The `:project` live_session must hold **only** project-keyed routes —
+`require_project_access` reads `params["project_id"] || params["id"]`,
+and the fallback is safe only under that invariant (see the
+`CodeLeadWeb.Authorization` moduledoc). Crossing between the three app
+sessions is a full page load, so the router pipeline and the session
+hook are both always consulted.
 
 The wizard sits in its own `live_session` on purpose: leaving it forces a
 full page load, so the router re-evaluates the gate with the new flag
@@ -122,8 +137,11 @@ generated output:
   left unconfirmed and gains access by magic link — which requires an
   email to have been set, since that's the only way a magic link can be
   delivered.
-  `Accounts.delete_user/1` refuses the last user, since an instance with
-  no users can no longer be recovered through the browser.
+  `Accounts.delete_user/2` refuses the last user, since an instance with
+  no users can no longer be recovered through the browser — and the last
+  admin, since instance administration would become unreachable.
+  `Accounts.update_user_role/3` (the Users page's role select) refuses to
+  demote the last admin the same way.
   `register_user/1` is retained for the test fixtures.
 - **Two email token contexts reach `/users/log-in/:token`.** `"login"`
   tokens come from the login page and last 15 minutes; `"invite"` tokens
@@ -169,20 +187,59 @@ generated output:
   could in principle be treated as a "safe" field, because a hijacked
   session that can set a new password can lock the real owner out.
 
+## Authorization
+
+Two flat layers, one policy seam:
+
+- **Instance role** — `users.role` (`admin | member`). Admins own the
+  instance-administration pages (users, providers, organization) and
+  bypass project membership entirely: `Scope.project_role/2` answers
+  `:maintainer` for them on every project.
+- **Project role** — a `project_memberships` row per (project, user)
+  with an ordered role, `reporter < member < maintainer`. Reporters view
+  the project and file/refine/delete their **own** tasks while in
+  Planning (ownership = `tasks.created_by_id`); members work every human
+  gate; maintainers also manage the project's settings and members.
+  Project creation stays open to every signed-in user — the creator
+  becomes maintainer in the same transaction.
+
+`CodeLead.Accounts.Scope` carries `user`, `role`, and a
+`%{project_id => role}` memberships map, loaded once per request/mount
+by `Scope.for_user/1`. `CodeLead.Accounts.Policy` is the single seam:
+`can?(scope, action, subject)` / `authorize(scope, action, subject)`
+over a flat action list, comparing project roles through a rank map.
+Contexts enforce with `authorize/3` at the boundary
+(`{:error, :unauthorized}` alongside their existing error shapes); the
+UI hides what the context would refuse; reads are scoped at the query
+(`Projects.list_projects/1`, the dashboard/nav aggregates' optional
+`project_ids` filter).
+
+Membership and role writes broadcast `{:scope_changed, user_id}` on
+`Accounts.user_topic/1`; `CodeLeadWeb.NavContext` rebuilds the scope in
+open LiveViews (or forces a remount when the instance role changed or
+the open project was lost) — see [`navigation.md`](navigation.md).
+Revoking a membership deliberately does **not** log the person out;
+`UserAuth.disconnect_sessions/1` remains for password changes only.
+
+Budget limits are admin-only: `Projects.update_project/3` strips the
+budget attrs for everyone else, and new projects copy the organization's
+`default_project_budget_limit_*` at creation (never inherited live).
+
 ### Known gaps
 
-- `users.role` is stored, set and displayed, but nothing authorizes on
-  it — admin and member see the same surfaces, and every signed-in user
-  can manage users, providers, agents and projects from `/settings`. The
-  Users page therefore shows the role read-only rather than offering a
-  select that would imply enforcement.
 - Sudo mode guards the email- and password-change pages only
   (`/users/settings/email`, `/users/settings/password`); neither the
   account overview (`/users/settings`) nor `/settings/*` is sudo-gated.
+- The repository and env-store context functions still take a bare
+  `project_id` — they are protected by the maintainer gate on the
+  project settings page, not at the context boundary (parked on the
+  roadmap).
 
 ## Testing
 
 `CodeLeadWeb.ConnCase` creates the organization singleton (already set
 up) for every web test, so the gate does not redirect the whole suite.
 Tag a case `@moduletag :setup_pending` to get an empty instance and test
-the wizard itself. `setup :register_and_log_in_user` logs a user in.
+the wizard itself. `setup :register_and_log_in_user` logs a member in;
+tag the case `@moduletag role: :admin` to log an admin in instead, and
+`create_project_as_maintainer` sets up a project the user maintains.

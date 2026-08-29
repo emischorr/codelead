@@ -7,9 +7,9 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   `/users/log-in/:token` screen the login page uses, but carries its own
   longer-lived token context.
 
-  `role` is shown but not editable — the field is stored and nothing in the
-  app authorizes on it, so offering a select would advertise enforcement that
-  does not exist.
+  The role select is real: `users.role` gates the admin pages and the
+  Policy checks, changed through `Accounts.update_user_role/3` — which
+  also refuses to demote the last admin.
   """
 
   use CodeLeadWeb, :live_view
@@ -58,7 +58,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   def handle_event("save", %{"user" => params}, %{assigns: %{live_action: :new}} = socket) do
     access = Map.get(params, "access", "password")
 
-    case create_user_for_access(access, user_attrs(params, access)) do
+    case create_user_for_access(access, socket.assigns.current_scope, user_attrs(params, access)) do
       {:ok, user} ->
         {:noreply,
          socket
@@ -101,11 +101,35 @@ defmodule CodeLeadWeb.SettingsLive.Users do
     end
   end
 
+  def handle_event("change_role", %{"user_id" => id, "role" => role}, socket)
+      when role in ["admin", "member"] do
+    user = Accounts.get_user!(id)
+
+    case Accounts.update_user_role(
+           socket.assigns.current_scope,
+           user,
+           String.to_existing_atom(role)
+         ) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "#{updated.username} is now #{updated.role}.")
+         |> load_users()}
+
+      {:error, :last_admin} ->
+        {:noreply,
+         socket |> put_flash(:error, FlashMessages.delete_error(:last_admin)) |> load_users()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
+    end
+  end
+
   def handle_event("delete", %{"id" => id}, socket) do
     if String.to_integer(id) == socket.assigns.current_scope.user.id do
       {:noreply, put_flash(socket, :error, "You can't delete the account you're signed in with.")}
     else
-      case id |> Accounts.get_user!() |> Accounts.delete_user() do
+      case Accounts.delete_user(socket.assigns.current_scope, Accounts.get_user!(id)) do
         {:ok, user} ->
           {:noreply, socket |> put_flash(:info, "#{user.username} deleted.") |> load_users()}
 
@@ -140,13 +164,20 @@ defmodule CodeLeadWeb.SettingsLive.Users do
                 subtitle={row_subtitle(user)}
               >
                 <:badges>
-                  <.badge variant={if user.role == :admin, do: :accent, else: :neutral}>
-                    {user.role}
-                  </.badge>
                   <.badge :if={is_nil(user.confirmed_at)} variant={:warn}>Invite pending</.badge>
                   <.badge :if={user.id == @current_scope.user.id} variant={:ok}>You</.badge>
                 </:badges>
                 <:actions>
+                  <form id={"user-role-form-#{user.id}"} phx-change="change_role">
+                    <input type="hidden" name="user_id" value={user.id} />
+                    <select
+                      name="role"
+                      class="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] text-text focus:border-accent focus:outline-none"
+                    >
+                      <option value="member" selected={user.role == :member}>Member</option>
+                      <option value="admin" selected={user.role == :admin}>Admin</option>
+                    </select>
+                  </form>
                   <.button
                     :if={is_nil(user.confirmed_at) and @mail_enabled?}
                     id={"resend-invite-#{user.id}"}
@@ -281,7 +312,7 @@ defmodule CodeLeadWeb.SettingsLive.Users do
   # of a user in general, so it's enforced here rather than in the changeset.
   # It also needs a transport: the select is hidden without one, and this is
   # the server-side half of that check.
-  defp create_user_for_access("invite", attrs) do
+  defp create_user_for_access("invite", scope, attrs) do
     cond do
       not Mailer.enabled?() ->
         {:error, :mail_disabled}
@@ -296,11 +327,11 @@ defmodule CodeLeadWeb.SettingsLive.Users do
         {:error, changeset}
 
       true ->
-        Accounts.create_user(attrs)
+        Accounts.create_user(scope, attrs)
     end
   end
 
-  defp create_user_for_access(_access, attrs), do: Accounts.create_user(attrs)
+  defp create_user_for_access(_access, scope, attrs), do: Accounts.create_user(scope, attrs)
 
   defp mail_disabled_message,
     do: "This instance can't send email — set SMTP_HOST to enable invites."

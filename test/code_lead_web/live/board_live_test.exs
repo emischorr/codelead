@@ -8,6 +8,8 @@ defmodule CodeLeadWeb.BoardLiveTest do
 
   alias CodeLead.Tasks
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   # What the `.SchedulePicker` hook posts as `local_at`: minute precision,

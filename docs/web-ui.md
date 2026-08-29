@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-28, ArchiveLive)
+# Web UI (last updated: 2026-08-29, authorization)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -30,20 +30,24 @@ The project detail page also carries four patch-based sub-routes:
 and `/env/:key/edit`. `/settings/projects/new` is declared **before**
 `/settings/projects/:id` so the literal is not swallowed by the param.
 
-All of the above except `/setup`, `/users/log-in` and the artifact
-download live in `live_session :require_authenticated_user` behind both
-the setup gate and the auth gate. The artifact download is a
-**controller** route, which cannot live inside a `live_session`, so it
-sits in the same authenticated scope beside `post
-/users/update-password` — same pipeline, same gates — see [`setup-and-auth.md`](setup-and-auth.md). All of them
-render the same sidebar from the `@nav` map assigned by
+The app routes are split across three authenticated `live_session`s —
+general, admin-only, and project-keyed — each behind the setup gate, the
+auth gate, and (for the latter two) `CodeLeadWeb.Authorization`'s
+matching plug + hook pair; see [`setup-and-auth.md`](setup-and-auth.md)
+for the router shape and the two-layer role model. The artifact download
+is a **controller** route, which cannot live inside a `live_session`, so
+it sits in the project-keyed scope — same pipeline, same gates. All of
+them render the same sidebar from the `@nav` map assigned by
 `CodeLeadWeb.NavContext` — see [`navigation.md`](navigation.md).
 
-**There is no authorization.** Every signed-in user can reach every
-settings page and delete any user, provider, agent or project.
-`users.role` is stored and displayed but nothing reads it — the Users
-page shows the role as a badge and deliberately offers no way to change
-it, rather than implying enforcement that does not exist.
+**Authorization is enforced in the contexts and mirrored in the UI.**
+Admin-only settings tiles (Users, Providers, Organization) are hidden
+from members; project-keyed pages need `:view_project`; board and task
+action buttons render only when `Policy.can?/3` allows the action — and
+the context still refuses if someone gets past the hiding
+(`CodeLeadWeb.FlashMessages.transition_error(:unauthorized)` is the
+copy). Reporters see other people's tasks fully read-only, with no
+special chrome.
 
 ## Settings
 
@@ -55,9 +59,8 @@ sub-surfaces (its own dialogs are patched over it).
 `CodeLeadWeb.SettingsLive.Components` holds what the component library
 lacks — there is no table and no modal component: `settings_page_header`,
 `settings_tile` (a tile without `navigate` renders as a disabled
-placeholder — that is how the Organization tile is drawn),
-`list_row`, `modal`, `delete_button` (inert with a `reason`) and
-`secret_value`. `list_row` and `modal` are general enough to belong in
+placeholder), `list_row`, `modal`, `delete_button` (inert with a
+`reason`) and `secret_value`. `list_row` and `modal` are general enough to belong in
 `UIComponents`; promoting them means also refactoring `BoardLive`'s
 hand-rolled modal, so that is a follow-up.
 
@@ -93,18 +96,35 @@ and edited inline. Providers stay entirely write-only; a secret env entry
 can only be replaced, never read back.
 
 The agent form's **Project** select drives `scope`: left on "All
-projects" the agent stays org-wide (`Agents.list_all_agents/0` and the
-row's scope badge both read this), picking a project sets `scope:
+projects" the agent stays org-wide, picking a project sets `scope:
 :project` and casts `project_id` — `Agent.changeset/2` casts it directly,
 so moving an agent between scopes is a normal edit, not a dedicated
-function. The project detail page's **Agents** tile
-(`Agents.list_project_agents/1`) surfaces only that project's own
-agents — org-wide ones stay selectable there without cluttering the
-list — and links back to `/settings/agents` to manage or add one.
+function. The page itself is role-filtered rather than admin-gated:
+admins see and manage everything; everyone else sees the org pool
+read-only plus the project agents of the projects they maintain
+(`Agents.list_agents_for_settings/1`), with the org option absent from
+their form. `Agents.create_agent/2`, `update_agent/3` and
+`delete_agent/2` enforce the same split in the context — org agents need
+`:manage_org_agents`, project agents `:manage_project`, and an update is
+checked against both the current and the target scope. The project
+detail page's **Agents** tile (`Agents.list_project_agents/1`) surfaces
+only that project's own agents and links back to `/settings/agents`.
 
-Deferred here: the Organization tile is a placeholder because
-`Accounts.update_organization/1` replaces `settings` wholesale and would
-clobber `setup_done`; editing budgets there needs a merging setter first.
+**Organization** (`/settings/organization`, admin-only) edits the org
+name, the org-wide budget limits, and the default project budget limits
+that are copied onto each new project at creation.
+`Organization.details_changeset/2` never casts `settings`, so
+`setup_done` cannot be clobbered from there.
+
+**Members** live on the project detail page (maintainer/admin only —
+members and reporters bounce to the board): a `list_row` per membership
+with a role select and a remove button, plus an add-member modal over
+the users not yet on the project. Writes go through the
+`Accounts.add_project_member/4` family, which also broadcasts
+`{:scope_changed, user_id}` so the affected person's open sessions
+follow along. Budget inputs on the details card render disabled for
+non-admins ("Budget limits are set by an administrator.") —
+`Projects.update_project/3`'s server-side strip is the real guard.
 
 **One repository per project is always the default** (`repositories.is_default`,
 a partial unique index enforces exactly one), which is what a new `:repo`-target

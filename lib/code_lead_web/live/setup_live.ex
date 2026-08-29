@@ -150,7 +150,11 @@ defmodule CodeLeadWeb.SetupLive do
   def handle_event("create_project", %{"project" => params}, socket) do
     project_attrs = %{name: Map.get(params, "name")}
 
-    case Projects.create_project_with_repository(project_attrs, repository_attrs(params)) do
+    case Projects.create_project_with_repository(
+           socket.assigns.current_scope,
+           project_attrs,
+           repository_attrs(params)
+         ) do
       {:ok, project} ->
         {kind, message} =
           case store_access_token(project.id, params) do
@@ -166,6 +170,11 @@ defmodule CodeLeadWeb.SetupLive do
       {:error, :repository, changeset} ->
         errors = changeset |> changeset_errors() |> rename_error(:name, :repo_name)
         {:noreply, assign_project_form(socket, params, errors)}
+
+      {:error, :unauthorized} ->
+        # Reachable only when the wizard is opened without the admin's
+        # session (e.g. a second browser mid-setup) — send them to log in.
+        {:noreply, push_navigate(socket, to: ~p"/users/log-in")}
     end
   end
 

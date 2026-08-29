@@ -6,6 +6,8 @@ defmodule CodeLeadWeb.ArchiveLiveTest do
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   defp row_order(html) do

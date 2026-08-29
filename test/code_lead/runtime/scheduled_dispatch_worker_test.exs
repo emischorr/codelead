@@ -82,7 +82,7 @@ defmodule CodeLead.Runtime.ScheduledDispatchWorkerTest do
   describe "perform/1 self-verification" do
     test "no-ops when the task was cancelled back to Planning" do
       {task, at} = task_at_its_start_time()
-      {:ok, task} = Runtime.cancel_task(task)
+      {:ok, task} = Runtime.cancel_task(admin_scope(), task)
 
       assert task.state == :planning
       assert task.scheduled_at == nil
@@ -95,7 +95,7 @@ defmodule CodeLead.Runtime.ScheduledDispatchWorkerTest do
 
     test "no-ops when the schedule was cleared to run early" do
       {task, at} = task_at_its_start_time()
-      {:ok, _task} = Tasks.clear_schedule(task)
+      {:ok, _task} = Tasks.clear_schedule(admin_scope(), task)
 
       assert :ok = perform_job(ScheduledDispatchWorker, job_args(task, at))
 
@@ -151,7 +151,7 @@ defmodule CodeLead.Runtime.ScheduledDispatchWorkerTest do
   defp task_at_its_start_time do
     %{task: task} = runnable_task_fixture()
 
-    {:ok, task} = Runtime.start_task(task, scheduled_at: in_an_hour())
+    {:ok, task} = Runtime.start_task(admin_scope(), task, scheduled_at: in_an_hour())
     assert task.run_state == :queued
 
     at = DateTime.add(DateTime.utc_now(:second), -1)
@@ -171,10 +171,10 @@ defmodule CodeLead.Runtime.ScheduledDispatchWorkerTest do
   end
 
   defp put_over_budget(task) do
-    {:ok, _project} =
+    _project =
       task.project_id
       |> Projects.get_project!()
-      |> Projects.update_project(%{budget_limit_cents: 5})
+      |> CodeLead.ProjectsFixtures.set_project_budget!(%{budget_limit_cents: 5})
 
     {:ok, _run} =
       Costs.record_run(%{

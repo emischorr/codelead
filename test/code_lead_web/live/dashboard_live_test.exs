@@ -7,6 +7,8 @@ defmodule CodeLeadWeb.DashboardLiveTest do
 
   alias CodeLead.Tasks
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   defp tile_value(view, id) do

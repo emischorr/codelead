@@ -79,6 +79,7 @@ defmodule CodeLead.Tasks.Task do
     field :next_prompt, :string
     field :scheduled_at, :utc_datetime
     field :assignee_id, :id
+    field :created_by_id, :id
     field :archived_at, :utc_datetime
     field :completed_at, :utc_datetime
     field :parent_id, :id

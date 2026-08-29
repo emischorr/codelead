@@ -258,7 +258,7 @@ defmodule CodeLead.Runtime.TaskRunner do
           :agent,
           agent.name,
           "run started",
-          Integer.to_string(agent.id)
+          executor_ref: Integer.to_string(agent.id)
         )
 
       AgentFeed.record_event(task.id, %{

@@ -204,7 +204,7 @@ defmodule CodeLead.CostsTest do
 
       assert :ok = Costs.check_budget(project.id)
 
-      {:ok, _} = CodeLead.Projects.update_project(project, %{budget_limit_cents: 10})
+      _ = set_project_budget!(project, %{budget_limit_cents: 10})
       record!(task, cost_cents: 10)
 
       assert {:hold, :budget} = Costs.check_budget(project.id)
@@ -212,7 +212,7 @@ defmodule CodeLead.CostsTest do
 
     test "ignores spend from an earlier month" do
       project = project_fixture()
-      {:ok, _} = CodeLead.Projects.update_project(project, %{budget_limit_cents: 10})
+      _ = set_project_budget!(project, %{budget_limit_cents: 10})
 
       Repo.insert!(%DailyMetric{
         project_id: project.id,

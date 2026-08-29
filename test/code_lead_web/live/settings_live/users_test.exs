@@ -6,6 +6,8 @@ defmodule CodeLeadWeb.SettingsLive.UsersTest do
 
   alias CodeLead.Accounts
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   describe "list" do

@@ -5,6 +5,8 @@ defmodule CodeLeadWeb.SettingsLiveTest do
   import CodeLead.AgentsFixtures
   import CodeLead.ProjectsFixtures
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   describe "overview" do
@@ -30,11 +32,11 @@ defmodule CodeLeadWeb.SettingsLiveTest do
       assert render(element(view, "#settings-tile-projects")) =~ "1 project"
     end
 
-    test "the organization tile is a disabled placeholder", %{conn: conn} do
+    test "the organization tile links to the organization page", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/settings")
 
-      assert has_element?(view, "#settings-tile-organization[aria-disabled]")
-      refute has_element?(view, "a#settings-tile-organization")
+      assert has_element?(view, "a#settings-tile-organization")
+      refute has_element?(view, "#settings-tile-organization[aria-disabled]")
     end
 
     test "a tile navigates to its section", %{conn: conn} do

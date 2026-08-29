@@ -126,3 +126,22 @@ and ADR-0009 instead.)
 - **An npm/node-pty toolchain.** xterm.js is vendored like topbar;
   node-pty would drag a native build chain into the project for the
   sake of one ioctl — and ADR-0010 got the resize without it.
+
+## Authorization follow-ups (ADR-0014 non-goals)
+
+The multi-user model shipped deliberately flat. Parked, with the
+reasoning in ADR-0014:
+
+- **`viewer` role** below reporter — the ordered role enum leaves the
+  slot open; build it when a real read-only stakeholder shows up.
+- **Teams/groups** — indirection with no second customer yet.
+- **Per-seat licensing** — the seam is a `max_users` entry in the
+  license `limits` map gating `Accounts.create_user/2`; must never bite
+  a two-person household.
+- **Membership notifications** — a person added to a project learns it
+  from their sidebar; an email/notification is polish.
+- **Audit UI** — `task_steps.user_id` and the username in
+  `executor_name` are recorded; nothing renders them as an audit view.
+- **Scope-first repository/env-store functions** — they still take a
+  bare `project_id`, protected by the maintainer gate on the project
+  settings page rather than at the context boundary.

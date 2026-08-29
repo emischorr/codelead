@@ -142,7 +142,7 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
 
       assert_receive {:task_event, _id, {:run_started, _agent}}, 15_000
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
@@ -172,11 +172,11 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_started, _agent}}, 15_000
 
       task = Tasks.get_task!(task.id)
-      assert {:ok, cancelled} = Runtime.cancel_task(task)
+      assert {:ok, cancelled} = Runtime.cancel_task(admin_scope(), task)
       await_runner_down(task.id)
 
       assert cancelled.state == :planning
@@ -192,7 +192,7 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -200,7 +200,7 @@ defmodule CodeLead.RuntimeContainerTest do
       assert task.state == :review
       worktree = task.worktree_path
 
-      assert {:ok, task} = Runtime.send_back_to_planning(task)
+      assert {:ok, task} = Runtime.send_back_to_planning(admin_scope(), task)
 
       assert task.worktree_path == nil
       assert task.acp_session_id == nil
@@ -216,7 +216,7 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       await_runner_down(task.id)
 
@@ -226,7 +226,7 @@ defmodule CodeLead.RuntimeContainerTest do
       assert detail =~ "removed externally"
 
       # Retry re-provisions from scratch — same worktree, fresh environment.
-      assert {:ok, _task} = Runtime.retry_task(task)
+      assert {:ok, _task} = Runtime.retry_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, _detail}}, 15_000
       await_runner_down(task.id)
     end
@@ -240,7 +240,7 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
 
@@ -263,7 +263,7 @@ defmodule CodeLead.RuntimeContainerTest do
       %{task: task} = container_task()
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       await_runner_down(task.id)
 
@@ -302,7 +302,7 @@ defmodule CodeLead.RuntimeContainerTest do
 
       subscribe(task)
 
-      assert {:ok, _task} = Runtime.start_task(task)
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
       assert_receive {:task_event, _id, {:run_failed, detail}}, 15_000
       await_runner_down(task.id)
 

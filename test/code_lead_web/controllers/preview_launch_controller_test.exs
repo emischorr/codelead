@@ -21,6 +21,8 @@ defmodule CodeLeadWeb.PreviewLaunchControllerTest do
   end
 
   describe "authenticated" do
+    @moduletag role: :admin
+
     setup :register_and_log_in_user
 
     test "redirects onto the path-gateway URL", %{conn: conn} do

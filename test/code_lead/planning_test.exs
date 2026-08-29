@@ -120,7 +120,11 @@ defmodule CodeLead.PlanningTest do
     {:ok, _} = Git.ensure_clone(git_url, base_path)
     {:ok, repository} = Projects.update_repository(repository, %{base_clone_path: base_path})
 
-    {:ok, task} = CodeLead.Tasks.update_task(task, %{target: :repo, repository_id: repository.id})
+    {:ok, task} =
+      CodeLead.Tasks.update_task(admin_scope(), task, %{
+        target: :repo,
+        repository_id: repository.id
+      })
 
     stub_reply("Looks good", self())
     {:ok, _} = Planning.send_message(task, agent.id, "What files exist?")

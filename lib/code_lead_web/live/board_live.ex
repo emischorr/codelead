@@ -7,6 +7,7 @@ defmodule CodeLeadWeb.BoardLive do
   """
   use CodeLeadWeb, :live_view
 
+  alias CodeLead.Accounts.Policy
   alias CodeLead.Agents
   alias CodeLead.Costs
   alias CodeLead.Projects
@@ -26,6 +27,7 @@ defmodule CodeLeadWeb.BoardLive do
   @impl true
   def mount(%{"project_id" => project_id}, _session, socket) do
     project = Projects.get_project!(project_id)
+    scope = socket.assigns.current_scope
 
     if connected?(socket), do: Tasks.subscribe_board(project.id)
 
@@ -34,6 +36,8 @@ defmodule CodeLeadWeb.BoardLive do
       |> assign(
         page_title: "Board",
         project: project,
+        can_operate?: Policy.can?(scope, :operate_task, project.id),
+        can_create?: Policy.can?(scope, :create_task, project.id),
         columns: @columns,
         mobile_column: :planning,
         scheduling_task: nil,
@@ -57,7 +61,7 @@ defmodule CodeLeadWeb.BoardLive do
 
   @impl true
   def handle_event("start_task", %{"id" => id}, socket) do
-    case Runtime.start_task(Tasks.get_task!(id)) do
+    case Runtime.start_task(socket.assigns.current_scope, Tasks.get_task!(id)) do
       {:ok, _task} ->
         {:noreply, load_board(socket)}
 
@@ -78,8 +82,8 @@ defmodule CodeLeadWeb.BoardLive do
   def handle_event("schedule_task", %{"schedule" => params}, socket) do
     case ScheduleForm.parse(params) do
       {:ok, scheduled_at} ->
-        socket.assigns.scheduling_task
-        |> Runtime.start_task(scheduled_at: scheduled_at)
+        socket.assigns.current_scope
+        |> Runtime.start_task(socket.assigns.scheduling_task, scheduled_at: scheduled_at)
         |> case do
           {:ok, _task} ->
             {:noreply, socket |> close_schedule() |> load_board()}
@@ -97,7 +101,7 @@ defmodule CodeLeadWeb.BoardLive do
   end
 
   def handle_event("archive", %{"id" => id}, socket) do
-    case Tasks.archive(Tasks.get_task!(id)) do
+    case Tasks.archive(socket.assigns.current_scope, Tasks.get_task!(id)) do
       {:ok, _task} ->
         {:noreply, load_board(socket)}
 
@@ -119,13 +123,16 @@ defmodule CodeLeadWeb.BoardLive do
   end
 
   def handle_event("create_task", %{"task" => params}, socket) do
-    case Tasks.create_task(socket.assigns.project.id, params) do
+    case Tasks.create_task(socket.assigns.current_scope, socket.assigns.project.id, params) do
       {:ok, _task} ->
         {:noreply,
          socket
          |> put_flash(:info, "Task created.")
          |> push_patch(to: ~p"/projects/#{socket.assigns.project.id}/board")
          |> load_board()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, new_form: to_form(changeset))}
@@ -233,6 +240,7 @@ defmodule CodeLeadWeb.BoardLive do
         </span>
         <div class="flex-1" />
         <.button
+          :if={@can_create?}
           variant="primary"
           patch={~p"/projects/#{@project.id}/board/new"}
           id="new-task-button"
@@ -347,7 +355,7 @@ defmodule CodeLeadWeb.BoardLive do
         }
       </script>
 
-      <.fab patch={~p"/projects/#{@project.id}/board/new"} label="New task" />
+      <.fab :if={@can_create?} patch={~p"/projects/#{@project.id}/board/new"} label="New task" />
 
       <.new_task_modal
         :if={@live_action == :new && @new_form}
@@ -369,6 +377,7 @@ defmodule CodeLeadWeb.BoardLive do
   defp board_ctx(assigns) do
     Map.take(assigns, [
       :project,
+      :can_operate?,
       :spend,
       :agents,
       :queued_positions,
@@ -478,7 +487,7 @@ defmodule CodeLeadWeb.BoardLive do
     ~H"""
     <div class="flex items-center gap-1.5 text-[11px] text-text3">
       <span class="font-mono">{@task.work_type} · {@task.target}</span>
-      <div :if={@startable?} class="ml-auto flex items-center">
+      <div :if={@startable? and @ctx.can_operate?} class="ml-auto flex items-center">
         <button
           type="button"
           phx-click="start_task"
@@ -621,6 +630,7 @@ defmodule CodeLeadWeb.BoardLive do
         Download
       </.link>
       <button
+        :if={@ctx.can_operate?}
         type="button"
         phx-click="archive"
         phx-value-id={@task.id}

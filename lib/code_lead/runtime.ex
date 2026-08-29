@@ -13,6 +13,8 @@ defmodule CodeLead.Runtime do
   """
 
   alias CodeLead.AgentDriver
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.Scope
   alias CodeLead.Runtime.StageEffects
   alias CodeLead.Runtime.TaskRunner
   alias CodeLead.Tasks
@@ -37,7 +39,8 @@ defmodule CodeLead.Runtime do
     workflow = Workflow.fetch!(task.workflow_key)
     target = Workflow.stage(workflow, to)
 
-    with {:ok, edge} <- fetch_edge(workflow, task, edge_keys),
+    with :ok <- authorize_actor(task, opts),
+         {:ok, edge} <- fetch_edge(workflow, task, edge_keys),
          {:ok, prepared} <- StageEffects.prepare(target.stage_type, task),
          {:ok, updated} <- Tasks.apply_transition(task, edge_keys, opts) do
       cleanup = apply_worktree_policy(task, edge.worktree_policy)
@@ -55,8 +58,9 @@ defmodule CodeLead.Runtime do
   until its time comes. The executor guard therefore fires when the
   human schedules rather than at 2am.
   """
-  @spec start_task(Task.t(), keyword()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def start_task(%Task{} = task, opts \\ []) do
+  @spec start_task(Scope.t() | nil, Task.t(), keyword()) ::
+          {:ok, Task.t()} | Tasks.transition_error()
+  def start_task(scope, %Task{} = task, opts \\ []) do
     summary =
       case Keyword.get(opts, :scheduled_at) do
         nil -> "moved to Running (queued)"
@@ -64,16 +68,19 @@ defmodule CodeLead.Runtime do
       end
 
     task
-    |> advance({:planning, :running}, Keyword.merge(opts, actor: :human, summary: summary))
+    |> advance(
+      {:planning, :running},
+      Keyword.merge(opts, actor: :human, scope: scope, summary: summary)
+    )
     |> to_result()
   end
 
   @doc """
   Drops a queued task's start time and dispatches it immediately.
   """
-  @spec run_now(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def run_now(%Task{} = task) do
-    with {:ok, task} <- Tasks.clear_schedule(task) do
+  @spec run_now(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def run_now(scope, %Task{} = task) do
+    with {:ok, task} <- Tasks.clear_schedule(scope, task) do
       StageEffects.try_dispatch(task)
       {:ok, Tasks.get_task!(task.id)}
     end
@@ -83,14 +90,15 @@ defmodule CodeLead.Runtime do
   Aborts a run: terminates the agent, returns the card to Planning,
   keeps the worktree for inspection.
   """
-  @spec cancel_task(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def cancel_task(%Task{} = task) do
+  @spec cancel_task(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def cancel_task(scope, %Task{} = task) do
     _ = TaskRunner.cancel(task.id)
 
     result =
       task
       |> advance({:running, :planning},
         actor: :human,
+        scope: scope,
         summary: "run cancelled — back to Planning (worktree kept)"
       )
       |> to_result()
@@ -106,9 +114,9 @@ defmodule CodeLead.Runtime do
   the Running stage — it moves `run_state`, not the card — so it is not
   a workflow edge.
   """
-  @spec retry_task(Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def retry_task(%Task{} = task) do
-    with {:ok, task} <- Tasks.retry_run(task) do
+  @spec retry_task(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | Tasks.transition_error()
+  def retry_task(scope, %Task{} = task) do
+    with {:ok, task} <- Tasks.retry_run(scope, task) do
       StageEffects.try_dispatch(task)
       {:ok, Tasks.get_task!(task.id)}
     end
@@ -117,9 +125,12 @@ defmodule CodeLead.Runtime do
   @doc """
   Approves a surfaced permission escalation (or denies it).
   """
-  @spec answer_permission(Task.t(), term(), boolean()) :: :ok | {:error, term()}
-  def answer_permission(%Task{} = task, request_id, granted?) do
-    TaskRunner.answer_permission(task.id, request_id, granted?)
+  @spec answer_permission(Scope.t() | nil, Task.t(), term(), boolean()) ::
+          :ok | {:error, term()}
+  def answer_permission(scope, %Task{} = task, request_id, granted?) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      TaskRunner.answer_permission(task.id, request_id, granted?)
+    end
   end
 
   @doc """
@@ -129,20 +140,25 @@ defmodule CodeLead.Runtime do
   question (the agent proceeds without one), and `:cancel` aborts the
   request outright.
   """
-  @spec answer_question(Task.t(), term(), AgentDriver.question_answer()) :: :ok | {:error, term()}
-  def answer_question(%Task{} = task, request_id, answer) do
-    TaskRunner.answer_question(task.id, request_id, answer)
+  @spec answer_question(Scope.t() | nil, Task.t(), term(), AgentDriver.question_answer()) ::
+          :ok | {:error, term()}
+  def answer_question(scope, %Task{} = task, request_id, answer) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      TaskRunner.answer_question(task.id, request_id, answer)
+    end
   end
 
   @doc """
   Review → Running with the same agent, worktree, branch, and session:
   the feedback becomes the next prompt and commits accumulate.
   """
-  @spec request_changes(Task.t(), String.t()) :: {:ok, Task.t()} | Tasks.transition_error()
-  def request_changes(%Task{} = task, feedback) do
+  @spec request_changes(Scope.t() | nil, Task.t(), String.t()) ::
+          {:ok, Task.t()} | Tasks.transition_error()
+  def request_changes(scope, %Task{} = task, feedback) do
     task
     |> advance({:review, :running},
       actor: :human,
+      scope: scope,
       prompt: feedback,
       summary: "changes requested: #{feedback}"
     )
@@ -159,14 +175,15 @@ defmodule CodeLead.Runtime do
   comes back as `{:ok, task, {:cleanup_failed, reason}}` so the UI can
   say so instead of flashing a clean success.
   """
-  @spec send_back_to_planning(Task.t()) ::
+  @spec send_back_to_planning(Scope.t() | nil, Task.t()) ::
           {:ok, Task.t()}
           | {:ok, Task.t(), {:cleanup_failed, term()}}
           | Tasks.transition_error()
-  def send_back_to_planning(%Task{} = task) do
+  def send_back_to_planning(scope, %Task{} = task) do
     task
     |> advance({:review, :planning},
       actor: :human,
+      scope: scope,
       summary: "sent back to Planning — worktree, branch, and session discarded"
     )
     |> to_result()
@@ -194,15 +211,19 @@ defmodule CodeLead.Runtime do
   transitions. A finalizer failure keeps the task in Review. Returns the
   outcome map alongside the task.
   """
-  @spec approve(Task.t()) ::
+  @spec approve(Scope.t() | nil, Task.t()) ::
           {:ok, Task.t(), CodeLead.Finalizer.outcome()}
           | {:error, term()}
           | Tasks.transition_error()
-  def approve(%Task{} = task) do
+  def approve(scope, %Task{} = task) do
     # The Review → Done edge keeps the worktree (pruning is the finalize
     # outcome's call, applied in on_enter), so the cleanup element is
     # structurally :ok and carries nothing worth surfacing.
-    case advance(task, {:review, :done}, actor: :human, summary: "approved — Done") do
+    case advance(task, {:review, :done},
+           actor: :human,
+           scope: scope,
+           summary: "approved — Done"
+         ) do
       {:ok, task, outcome, _cleanup} -> {:ok, task, outcome}
       {:error, reason} -> {:error, reason}
     end
@@ -216,6 +237,15 @@ defmodule CodeLead.Runtime do
   @spec kick_queue() :: :ok
   def kick_queue do
     Enum.each(Tasks.queued_tasks(), &StageEffects.try_dispatch/1)
+  end
+
+  # Human moves must be authorized before any side effect fires; system
+  # moves (the runtime's own Running → Review) carry no scope and pass.
+  defp authorize_actor(task, opts) do
+    case Keyword.fetch!(opts, :actor) do
+      :human -> Policy.authorize(opts[:scope], :operate_task, task)
+      :system -> :ok
+    end
   end
 
   # The task must sit at the edge's from-stage; `Tasks.apply_transition/3`

@@ -34,6 +34,8 @@ defmodule CodeLeadWeb.MailDisabledTest do
   end
 
   describe "settings/users" do
+    @moduletag role: :admin
+
     setup :register_and_log_in_user
 
     setup do

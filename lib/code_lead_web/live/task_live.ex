@@ -8,6 +8,7 @@ defmodule CodeLeadWeb.TaskLive do
 
   require Logger
 
+  alias CodeLead.Accounts.Policy
   alias CodeLead.AgentFeed
   alias CodeLead.Agents
   alias CodeLead.Costs
@@ -145,15 +146,15 @@ defmodule CodeLeadWeb.TaskLive do
 
   @impl true
   def handle_event("start_run", _params, socket) do
-    socket.assigns.task |> Runtime.start_task() |> after_action(socket)
+    Runtime.start_task(socket.assigns.current_scope, socket.assigns.task) |> after_action(socket)
   end
 
   def handle_event("cancel_run", _params, socket) do
-    socket.assigns.task |> Runtime.cancel_task() |> after_action(socket)
+    Runtime.cancel_task(socket.assigns.current_scope, socket.assigns.task) |> after_action(socket)
   end
 
   def handle_event("run_now", _params, socket) do
-    socket.assigns.task |> Runtime.run_now() |> after_action(socket)
+    Runtime.run_now(socket.assigns.current_scope, socket.assigns.task) |> after_action(socket)
   end
 
   def handle_event("open_schedule", _params, socket) do
@@ -169,8 +170,8 @@ defmodule CodeLeadWeb.TaskLive do
       {:ok, scheduled_at} ->
         socket = assign(socket, schedule_form: nil)
 
-        socket.assigns.task
-        |> Runtime.start_task(scheduled_at: scheduled_at)
+        socket.assigns.current_scope
+        |> Runtime.start_task(socket.assigns.task, scheduled_at: scheduled_at)
         |> after_action(socket)
 
       {:error, form} ->
@@ -179,11 +180,11 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("retry_run", _params, socket) do
-    socket.assigns.task |> Runtime.retry_task() |> after_action(socket)
+    Runtime.retry_task(socket.assigns.current_scope, socket.assigns.task) |> after_action(socket)
   end
 
   def handle_event("approve", _params, socket) do
-    case Runtime.approve(socket.assigns.task) do
+    case Runtime.approve(socket.assigns.current_scope, socket.assigns.task) do
       {:ok, _task, outcome} ->
         {:noreply, socket |> put_flash(:info, outcome.note) |> load_task()}
 
@@ -193,7 +194,7 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("set_finalize_mode", %{"finalize_mode" => mode}, socket) do
-    case Tasks.set_finalize_mode(socket.assigns.task, mode) do
+    case Tasks.set_finalize_mode(socket.assigns.current_scope, socket.assigns.task, mode) do
       {:ok, _task} ->
         {:noreply, load_task(socket)}
 
@@ -204,7 +205,8 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("send_back", _params, socket) do
-    socket.assigns.task |> Runtime.send_back_to_planning() |> after_action(socket)
+    Runtime.send_back_to_planning(socket.assigns.current_scope, socket.assigns.task)
+    |> after_action(socket)
   end
 
   # Opening the modal collects the addressed review findings as the
@@ -228,12 +230,20 @@ defmodule CodeLeadWeb.TaskLive do
 
       feedback ->
         socket = assign(socket, show_feedback?: false)
-        socket.assigns.task |> Runtime.request_changes(feedback) |> after_action(socket)
+
+        socket.assigns.current_scope
+        |> Runtime.request_changes(socket.assigns.task, feedback)
+        |> after_action(socket)
     end
   end
 
   def handle_event("answer_permission", %{"ref" => ref, "granted" => granted}, socket) do
-    case Runtime.answer_permission(socket.assigns.task, ref, granted == "true") do
+    case Runtime.answer_permission(
+           socket.assigns.current_scope,
+           socket.assigns.task,
+           ref,
+           granted == "true"
+         ) do
       :ok ->
         {:noreply, load_task(socket)}
 
@@ -251,7 +261,7 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("archive", _params, socket) do
-    socket.assigns.task |> Tasks.archive() |> after_action(socket)
+    Tasks.archive(socket.assigns.current_scope, socket.assigns.task) |> after_action(socket)
   end
 
   ## Agent feed
@@ -363,10 +373,13 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("save_edit", %{"task" => params}, socket) do
-    case Tasks.update_task(socket.assigns.task, params) do
+    case Tasks.update_task(socket.assigns.current_scope, socket.assigns.task, params) do
       {:ok, _task} ->
         {:noreply,
          socket |> assign(editing?: false) |> put_flash(:info, "Task updated.") |> load_task()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, edit_form: to_form(changeset))}
@@ -374,7 +387,7 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("delete_task", _params, socket) do
-    case Tasks.delete_task(socket.assigns.task) do
+    case Tasks.delete_task(socket.assigns.current_scope, socket.assigns.task) do
       {:ok, _task} ->
         {:noreply,
          socket
@@ -390,6 +403,7 @@ defmodule CodeLeadWeb.TaskLive do
   # `execution_env` are simply absent while the target is `:folder`.
   def handle_event("set_target", params, socket) do
     case Tasks.update_task(
+           socket.assigns.current_scope,
            socket.assigns.task,
            Map.take(params, ["target", "repository_id", "execution_env"])
          ) do
@@ -404,17 +418,20 @@ defmodule CodeLeadWeb.TaskLive do
   def handle_event("set_executor", %{"agent_id" => ""}, socket), do: {:noreply, socket}
 
   def handle_event("set_executor", %{"agent_id" => agent_id}, socket) do
-    socket.assigns.task
-    |> Tasks.set_executor(String.to_integer(agent_id))
+    socket.assigns.current_scope
+    |> Tasks.set_executor(socket.assigns.task, String.to_integer(agent_id))
     |> after_action(socket)
   end
 
   def handle_event("set_reviewers", params, socket) do
     ids = params |> Map.get("reviewer_ids", []) |> Enum.map(&String.to_integer/1)
 
-    case Tasks.set_reviewers(socket.assigns.task, ids) do
+    case Tasks.set_reviewers(socket.assigns.current_scope, socket.assigns.task, ids) do
       :ok ->
         {:noreply, load_task(socket)}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.transition_error(:unauthorized))}
 
       {:error, {:ineligible, _ids}} ->
         {:noreply, put_flash(socket, :error, "Some selected agents can't review this work type.")}
@@ -430,7 +447,7 @@ defmodule CodeLeadWeb.TaskLive do
   def handle_event("run_refinement", _params, socket) do
     %{task: task, selected_planner: planner} = socket.assigns
 
-    case planner && Planning.start_refinement(task, planner.id) do
+    case planner && Planning.start_refinement(socket.assigns.current_scope, task, planner.id) do
       {:ok, :started} ->
         {:noreply, assign(socket, survey_pending?: true)}
 
@@ -681,6 +698,7 @@ defmodule CodeLeadWeb.TaskLive do
   defp load_task(socket) do
     task = Tasks.get_task!(socket.assigns.task.id)
     project = socket.assigns.project
+    scope = socket.assigns.current_scope
     planning? = task.state == :planning
 
     repository = task.repository_id && Projects.get_repository!(task.repository_id)
@@ -697,6 +715,9 @@ defmodule CodeLeadWeb.TaskLive do
     |> assign(
       task: task,
       page_title: task.title,
+      can_operate?: Policy.can?(scope, :operate_task, task),
+      can_edit?: Policy.can?(scope, :edit_task, task),
+      can_plan?: Policy.can?(scope, :run_planning, task),
       repository: repository,
       preview_available?: preview_available?(task),
       preview_command?: preview_command?(repository),
@@ -1341,7 +1362,7 @@ defmodule CodeLeadWeb.TaskLive do
   # The resolved row broadcasts itself back through `:agent_feed`, so the
   # card re-renders without any stream bookkeeping here.
   defp submit_answer(socket, ref, answer) do
-    case Runtime.answer_question(socket.assigns.task, ref, answer) do
+    case Runtime.answer_question(socket.assigns.current_scope, socket.assigns.task, ref, answer) do
       :ok ->
         {:noreply, load_task(socket)}
 
@@ -1410,6 +1431,7 @@ defmodule CodeLeadWeb.TaskLive do
           <div class="flex-1" />
           <div class="hidden items-center gap-2 lg:flex">
             <.header_actions
+              :if={@can_operate?}
               task={@task}
               scheduled?={Task.scheduled?(@task)}
               finalize_mode={@finalize_mode}
@@ -1456,6 +1478,9 @@ defmodule CodeLeadWeb.TaskLive do
           finalize_mode={@finalize_mode}
           project_finalize_mode={@project_finalize_mode}
           container_licensed?={@container_licensed?}
+          can_edit?={@can_edit?}
+          can_operate?={@can_operate?}
+          can_plan?={@can_plan?}
         />
         <AgentTab.agent_tab
           :if={@tab == :agent}
@@ -1465,6 +1490,7 @@ defmodule CodeLeadWeb.TaskLive do
           executing?={@task.run_state == :executing}
           all_runs?={@all_runs?}
           task_stat={@task_stat}
+          can_operate?={@can_operate?}
         />
         <ReviewTab.review_tab
           :if={@tab == :review}
@@ -1502,7 +1528,10 @@ defmodule CodeLeadWeb.TaskLive do
       <%!-- In flow, not `fixed`: it shortens the scroll pane above it, so a tab
             that docks its own bottom chrome (the Agent composer) lands above
             this bar instead of underneath it. --%>
-      <div class="flex shrink-0 gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden">
+      <div
+        :if={@can_operate?}
+        class="flex shrink-0 gap-2.5 border-t border-border bg-surface p-3.5 lg:hidden"
+      >
         <.header_actions
           task={@task}
           scheduled?={Task.scheduled?(@task)}

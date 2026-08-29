@@ -69,6 +69,19 @@ defmodule CodeLead.AccountsFixtures do
     Scope.for_user(user)
   end
 
+  @doc """
+  Makes the user a member of the project with the given role and returns the
+  membership. Rebuild the scope afterwards (`user_scope_fixture/1`) — an
+  existing scope does not see new rows.
+  """
+  def membership_fixture(project, user, role \\ :maintainer) do
+    CodeLead.Repo.insert!(%CodeLead.Accounts.ProjectMembership{
+      project_id: project.id,
+      user_id: user.id,
+      role: role
+    })
+  end
+
   def set_password(user) do
     {:ok, {user, _expired_tokens}} =
       Accounts.update_user_password(user, %{password: valid_user_password()})

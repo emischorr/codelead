@@ -57,7 +57,7 @@ defmodule CodeLead.Runtime.SendBackCleanupTest do
     worktree = context.path
 
     assert {:ok, task, {:cleanup_failed, {:leftover, ^worktree}}} =
-             Runtime.send_back_to_planning(task)
+             Runtime.send_back_to_planning(admin_scope(), task)
 
     # The human's decision stands: the task moved and forgot the context.
     assert task.state == :planning
@@ -99,7 +99,7 @@ defmodule CodeLead.Runtime.SendBackCleanupTest do
     task = task.id |> Tasks.get_task!() |> executing_task("sess-x")
     {:ok, task} = Tasks.complete_run(task)
 
-    assert {:ok, task} = Runtime.send_back_to_planning(task)
+    assert {:ok, task} = Runtime.send_back_to_planning(admin_scope(), task)
     assert task.state == :planning
     refute File.exists?(context.path)
   end

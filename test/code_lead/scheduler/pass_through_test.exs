@@ -34,7 +34,7 @@ defmodule CodeLead.Scheduler.PassThroughTest do
   defp over_budget_task do
     %{task: task, project: project} = runnable_task_fixture()
 
-    {:ok, _project} = Projects.update_project(project, %{budget_limit_cents: 5})
+    _project = CodeLead.ProjectsFixtures.set_project_budget!(project, %{budget_limit_cents: 5})
 
     {:ok, _run} =
       Costs.record_run(%{

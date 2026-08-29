@@ -29,16 +29,17 @@
 
 Key fields only. `enc` = encrypted at rest. `seam` = present for a future feature, unused in MVP logic.
 
-- **organization** — singleton for the instance: `name`, `settings` *(jsonb; includes `setup_done`, `max_concurrent_runs`)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
+- **organization** — singleton for the instance: `name`, `settings` *(jsonb; includes `setup_done`, `max_concurrent_runs`)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable), `default_project_budget_limit_cents` / `default_project_budget_limit_tokens` (nullable — copied onto each new project at creation, never inherited live).
 - **users** — `username` (required, unique login identifier), `email` (optional — only used for the magic-link/invite flow), `hashed_password`, `role` (`:admin` | `:member`), `locale`, `settings` *(jsonb: theme, UI preferences)*.
+- **project_memberships** — `project_id`, `user_id`, `role` (`:reporter` | `:member` | `:maintainer`, ordered), unique on `(project_id, user_id)`; cascades on delete of either side. Admins bypass membership and have no rows.
 - **projects** — `org_id`, `name`, `settings` *(jsonb; `finalize` holds the project's Done defaults: `{repo, folder, commit_path}` — see §6; `pr_template` holds the PR/MR description template used when Approve opens a pull request — see §7)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
 - **repositories** — `project_id`, `name`, `git_url`, `default_branch`, `base_clone_path`, `is_default` (bool; exactly one true per project, enforced by a partial unique index — the first repository linked to a project is marked default automatically, and a new `:repo`-target task prefills its `repository_id` from it).
 - **project_envs** — `project_id`, `key`, `value` *(enc)*. Injected as env vars at executor spawn.
 - **project_default_reviewers** — `project_id`, `work_type`, `agent_id`. Pre-fills a new task's reviewer set for that work type (editable per task).
 - **providers** — `name`, `kind` (`:anthropic_subscription` | `:anthropic_api` | `:openai` | `:ollama` | …), `config` *(enc: tokens/keys/endpoint)*. Instance-scoped.
 - **agents** — `name` (persona), `scope` (`:org` | `:project`), `project_id` (nullable), `roles` (array of `:execute` | `:review` | `:plan`), `work_type` (`:code`|`:design`|`:content`|`:file`), `driver` (`:acp` | `:llm_api`), `harness` (`:claude_code` | `:codex` | `nil`), `provider_id`, `model_variant`, `system_prompt`, `memory` *(jsonb, seam)*.
-- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `pr_url` (nullable — the finalizer's forge link), `pr_url_kind` (nullable — `:pull_request` | `:merge_request` | `:compare` | `:commit`, so the UI can label the link without parsing it), `finalize_mode` (nullable — `:pull_request`|`:merge`|`:squash` when `target = :repo`, `:artifact`|`:commit_to_path` when `:folder`; `NULL` inherits the project default), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `archived_at` (nullable — orthogonal to `state`), `scheduled_at` (nullable — when a queued run may start; `NULL` = as soon as the scheduler admits it, see §5.3; recurrence via a future `schedule_rule` is a `seam`, not built).
-- **task_steps** — audit trail: `task_id`, `executor_type` (`:agent`|`:system`|`:human`), `executor_name`, `executor_ref` (nullable), `kind` (`:run`|`:review`|`:plan`|`:transition`|`:commit`|…), `summary`, `inserted_at`. **Denormalized** so agent deletion is graceful.
+- **tasks** — `project_id`, `title`, `description`, `spec` (refined acceptance criteria), `work_type`, `target` (`:repo` | `:folder`), `priority`, `state` (`:planning`|`:running`|`:review`|`:done`|`:cancelled`), `run_state` (`:idle`|`:queued`|`:dispatched`|`:executing`|`:failed`), `agent_id`, `repository_id` (nullable; required when `target = :repo`), `worktree_path` (nullable), `branch_name` (nullable), `pr_url` (nullable — the finalizer's forge link), `pr_url_kind` (nullable — `:pull_request` | `:merge_request` | `:compare` | `:commit`, so the UI can label the link without parsing it), `finalize_mode` (nullable — `:pull_request`|`:merge`|`:squash` when `target = :repo`, `:artifact`|`:commit_to_path` when `:folder`; `NULL` inherits the project default), `acp_session_id` (nullable), `attention` (embedded: `type`, `detail`, `at`), `assignee_id` (nullable), `created_by_id` (nullable — the creating user; what the reporter own-task rule reads), `archived_at` (nullable — orthogonal to `state`), `scheduled_at` (nullable — when a queued run may start; `NULL` = as soon as the scheduler admits it, see §5.3; recurrence via a future `schedule_rule` is a `seam`, not built).
+- **task_steps** — audit trail: `task_id`, `executor_type` (`:agent`|`:system`|`:human`), `executor_name` (the acting user's username on human steps), `executor_ref` (nullable), `user_id` (nullable — the acting user on human steps, nilified on account deletion), `kind` (`:run`|`:review`|`:plan`|`:transition`|`:commit`|…), `summary`, `inserted_at`. **Denormalized** so agent and user deletion are graceful.
 - **task_reviewers** — `task_id`, `agent_id`. The reviewer set chosen for the task (each `agent_id` has `:review` in `roles` and matches the task's `work_type`).
 - **reviews** — one row per reviewer per review cycle: `task_id`, `agent_id`, `task_step_id`, `cycle` (int), `verdict` (`:pass`|`:concerns`|`:block`, **advisory**), `findings` (jsonb/text), `inserted_at`.
 - **agent_runs** — per-execution cost/usage: `task_id`, `task_step_id`, `agent_id`, `provider_id`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `cost_cents`, `status`, `started_at`, `finished_at`. **Prunable** (~14-day TTL).
@@ -47,6 +48,20 @@ Key fields only. `enc` = encrypted at rest. `seam` = present for a future featur
 - **task_comments** *(optional)* — `task_id`, `user_id`, `body`.
 
 ---
+
+### 3.1 Authorization
+
+`CodeLead.Accounts.Policy` is the single seam — `can?(scope, action, subject)` /
+`authorize(scope, action, subject)` over one flat action list, the counterpart of
+`@gated_features` in `CodeLead.License`. Instance-wide actions require `users.role
+= :admin`; project-keyed actions compare the caller's project role (from the
+`Scope`'s memberships map) against a required minimum through an explicit rank map
+(`reporter < member < maintainer`), with admins answering `:maintainer`
+everywhere. Contexts authorize at the boundary and return
+`{:error, :unauthorized}`; reads are scoped at the query; the web layer's
+`CodeLeadWeb.Authorization` (plug + `on_mount`, mirroring the setup/auth gates)
+guards the admin and project-keyed route groups. See ADR-0014 and
+`docs/setup-and-auth.md`.
 
 ## 4. Workflow state machine
 

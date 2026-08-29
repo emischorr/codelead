@@ -13,6 +13,8 @@ defmodule CodeLeadWeb.TaskLiveLicenseTest do
 
   alias CodeLead.LicenseHelpers
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   setup %{conn: conn} do

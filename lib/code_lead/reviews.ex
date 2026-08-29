@@ -168,7 +168,7 @@ defmodule CodeLead.Reviews do
         :agent,
         reviewer.name,
         "review cycle #{cycle}: #{verdict || "no verdict"}",
-        Integer.to_string(reviewer.id)
+        executor_ref: Integer.to_string(reviewer.id)
       )
 
     Costs.record_run(%{

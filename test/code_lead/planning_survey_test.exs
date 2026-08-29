@@ -97,7 +97,7 @@ defmodule CodeLead.PlanningSurveyTest do
       use_scenario("survey_findings", [findings_tail()])
       Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
 
       assert %{status: :ok, delta: %{new: 2, resolved: 0, not_applicable: 0, still_open: 0}} =
                await_survey(task.id)
@@ -124,7 +124,7 @@ defmodule CodeLead.PlanningSurveyTest do
       %{task: task, planner: planner} = survey_setup()
       Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
       assert %{status: :ok, delta: nil} = await_survey(task.id)
 
       assert Findings.list(task.id, :planning) == []
@@ -137,7 +137,7 @@ defmodule CodeLead.PlanningSurveyTest do
       use_scenario("survey_findings", [findings_tail()])
       Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
       await_survey(task.id)
 
       [high, low] = Findings.list(task.id, :planning)
@@ -153,7 +153,7 @@ defmodule CodeLead.PlanningSurveyTest do
         })
 
       use_scenario("survey_findings", [rerun_tail])
-      {:ok, :started} = Planning.start_refinement(task, planner.id)
+      {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
 
       assert %{delta: %{new: 0, resolved: 1, still_open: 1}} = await_survey(task.id)
 
@@ -177,7 +177,7 @@ defmodule CodeLead.PlanningSurveyTest do
     %{task: task, planner: planner, repository: repository} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    assert {:ok, :started} = Planning.start_refinement(task, planner.id)
+    assert {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
     assert %{status: :ok} = await_survey(task.id)
 
     assert [message] = Planning.list_messages(task.id)
@@ -218,12 +218,12 @@ defmodule CodeLead.PlanningSurveyTest do
     %{task: task, planner: planner} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    {:ok, :started} = Planning.start_refinement(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
     await_survey(task.id)
 
-    {:ok, task} = Tasks.update_task(task, %{spec: "Now with an enterprise tier."})
+    {:ok, task} = Tasks.update_task(admin_scope(), task, %{spec: "Now with an enterprise tier."})
 
-    {:ok, :started} = Planning.start_refinement(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
     await_survey(task.id)
 
     assert [_first, _second] = Planning.list_messages(task.id)
@@ -233,7 +233,7 @@ defmodule CodeLead.PlanningSurveyTest do
     %{task: task, planner: planner} = survey_setup()
     Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
 
-    {:ok, :started} = Planning.start_refinement(task, planner.id)
+    {:ok, :started} = Planning.start_refinement(admin_scope(), task, planner.id)
     await_survey(task.id)
 
     coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})
@@ -266,11 +266,14 @@ defmodule CodeLead.PlanningSurveyTest do
     executor =
       agent_fixture(%{driver: :acp, harness: :claude_code, work_type: :code, roles: [:execute]})
 
-    assert {:error, :planner_ineligible} = Planning.start_refinement(task, executor.id)
+    assert {:error, :planner_ineligible} =
+             Planning.start_refinement(admin_scope(), task, executor.id)
 
     folder_task = task_fixture(project.id, %{work_type: :code, target: :folder})
     planner = agent_fixture(%{driver: :acp, harness: :claude_code, roles: [:plan]})
-    assert {:error, :missing_repository} = Planning.start_refinement(folder_task, planner.id)
+
+    assert {:error, :missing_repository} =
+             Planning.start_refinement(admin_scope(), folder_task, planner.id)
   end
 
   test "a task-level refinement runs one llm completion and persists findings without a repo" do
@@ -299,7 +302,7 @@ defmodule CodeLead.PlanningSurveyTest do
       })
     end)
 
-    assert {:ok, :started} = Planning.start_refinement(task, coach.id)
+    assert {:ok, :started} = Planning.start_refinement(admin_scope(), task, coach.id)
     assert %{status: :ok, delta: %{new: 1}} = await_survey(task.id)
 
     # the default one-shot prompt, not a chat turn

@@ -32,6 +32,8 @@ defmodule CodeLead.Planning do
 
   require Logger
 
+  alias CodeLead.Accounts.Policy
+  alias CodeLead.Accounts.Scope
   alias CodeLead.AdvisoryRun
   alias CodeLead.AgentDriver.LlmApi
   alias CodeLead.Agents
@@ -94,11 +96,13 @@ defmodule CodeLead.Planning do
   topic. Nothing about the card moves and no attention is raised — the
   human pulled this.
   """
-  @spec start_refinement(Task.t(), pos_integer()) :: {:ok, :started} | {:error, term()}
-  def start_refinement(%Task{} = task, agent_id) do
+  @spec start_refinement(Scope.t() | nil, Task.t(), pos_integer()) ::
+          {:ok, :started} | {:error, term()}
+  def start_refinement(scope, %Task{} = task, agent_id) do
     agent = Agents.get_agent!(agent_id)
 
-    with :ok <- check_planner(agent, task),
+    with :ok <- Policy.authorize(scope, :run_planning, task),
+         :ok <- check_planner(agent, task),
          :ok <- check_repository(agent, task) do
       Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn ->
         run_refinement(task, agent)
@@ -200,7 +204,7 @@ defmodule CodeLead.Planning do
         :agent,
         agent.name,
         "#{summary_key}: #{result.status}",
-        Integer.to_string(agent.id)
+        executor_ref: Integer.to_string(agent.id)
       )
 
     Costs.record_run(%{

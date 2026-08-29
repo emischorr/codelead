@@ -32,6 +32,9 @@ defmodule CodeLeadWeb.FlashMessages do
       "Container execution requires a commercial license. Switch this task's " <>
         "execution back to Local, or set a LICENSE_KEY that grants it."
 
+  def transition_error(:unauthorized),
+    do: "You don't have permission to do that."
+
   def transition_error(other), do: "Action failed: #{inspect(other)}"
 
   @doc """
@@ -114,6 +117,12 @@ defmodule CodeLeadWeb.FlashMessages do
   @spec delete_error(term()) :: String.t()
   def delete_error(:last_user),
     do: "This is the last user — deleting it would lock everyone out of the instance."
+
+  def delete_error(:last_admin),
+    do: "This is the last administrator — the instance needs at least one."
+
+  def delete_error(:unauthorized),
+    do: "You don't have permission to do that."
 
   def delete_error({:in_use, names}) when is_list(names),
     do: "Still used by #{Enum.join(names, ", ")}. Point those agents at another provider first."

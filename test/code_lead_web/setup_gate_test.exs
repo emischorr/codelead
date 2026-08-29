@@ -36,8 +36,9 @@ defmodule CodeLeadWeb.SetupGateTest do
       assert conn |> get(~p"/setup") |> redirected_to() == ~p"/"
     end
 
-    test "app paths are reachable", %{conn: conn} do
+    test "app paths are reachable", %{conn: conn, user: user} do
       project = project_fixture()
+      membership_fixture(project, user, :member)
       html = conn |> get(~p"/") |> html_response(200)
 
       assert html =~ "Dashboard"

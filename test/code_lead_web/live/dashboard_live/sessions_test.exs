@@ -10,6 +10,8 @@ defmodule CodeLeadWeb.DashboardLive.SessionsTest do
   alias CodeLead.Preview
   alias CodeLead.Terminal
 
+  @moduletag role: :admin
+
   setup :register_and_log_in_user
 
   # Sessions started through `ensure_session/2` elsewhere in the suite
