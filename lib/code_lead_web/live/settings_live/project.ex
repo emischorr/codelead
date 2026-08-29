@@ -347,7 +347,9 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             label="Name"
             placeholder="GITHUB_TOKEN"
             spellcheck="false"
-            readonly={@live_action == :edit_env}
+            autocomplete="off"
+            readonly
+            phx-focus={if @live_action == :new_env, do: JS.remove_attribute("readonly")}
             required
           />
           <.input
@@ -359,8 +361,10 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             data-lpignore="true"
             data-bwignore="true"
             spellcheck="false"
+            readonly
             required
             phx-mounted={JS.focus()}
+            phx-focus={JS.remove_attribute("readonly")}
           />
           <.input type="checkbox" field={@env_form[:secret]} label="Encrypt this value" />
           <p class="mb-4 text-[12px] leading-relaxed text-text3">
