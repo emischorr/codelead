@@ -320,6 +320,29 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
       refute has_element?(view, "#env-row-API_KEY")
       assert Projects.list_env_keys(project.id) == []
     end
+
+    test "unchecking encrypt stores and displays a plain value", %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}/env/new")
+
+      view
+      |> form("#env-form", env: %{key: "ERL_FLAGS", value: "+K true", secret: "false"})
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/projects/#{project.id}")
+
+      assert Projects.env_var(project.id, "ERL_FLAGS") == "+K true"
+      assert render(element(view, "#env-row-ERL_FLAGS")) =~ "+K true"
+    end
+
+    test "editing a plain entry prefills its real value", %{conn: conn, project: project} do
+      {:ok, _env} = Projects.put_env(project.id, "ERL_FLAGS", "+K true", false)
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}/env/ERL_FLAGS/edit")
+
+      assert view
+             |> element("#env-form")
+             |> render() =~ "+K true"
+    end
   end
 
   describe "agents" do

@@ -1,7 +1,8 @@
 defmodule CodeLead.Projects do
   @moduledoc """
-  Projects, their linked repositories, and the encrypted project env
-  store.
+  Projects, their linked repositories, and the project env store. Env
+  entries are encrypted at rest by default; an entry can opt out to stay
+  plain and editable.
 
   `projects.settings` is a free-form jsonb column; the keys this module
   gives meaning to are `"finalize"`, holding the project's Done
@@ -22,6 +23,7 @@ defmodule CodeLead.Projects do
   alias CodeLead.Projects.Repository
   alias CodeLead.Repo
   alias CodeLead.Tasks.Task
+  alias CodeLead.Vault
   alias CodeLead.Workspace
 
   @default_commit_path "artifacts"
@@ -225,15 +227,18 @@ defmodule CodeLead.Projects do
   end
 
   @doc """
-  Upserts one env store entry.
+  Upserts one env store entry. `secret` (default `true`) controls whether
+  `value` is encrypted at rest; plain entries are stored and readable as-is.
   """
-  @spec put_env(pos_integer(), String.t(), String.t()) ::
+  @spec put_env(pos_integer(), String.t(), String.t(), boolean()) ::
           {:ok, ProjectEnv.t()} | {:error, Ecto.Changeset.t()}
-  def put_env(project_id, key, value) do
+  def put_env(project_id, key, value, secret \\ true) do
+    stored_value = if secret, do: Vault.encrypt!(value), else: value
+
     %ProjectEnv{project_id: project_id}
-    |> ProjectEnv.changeset(%{key: key, value: value})
+    |> ProjectEnv.changeset(%{key: key, value: stored_value, secret: secret})
     |> Repo.insert(
-      on_conflict: {:replace, [:value, :updated_at]},
+      on_conflict: {:replace, [:value, :secret, :updated_at]},
       conflict_target: [:project_id, :key],
       returning: true
     )
@@ -247,18 +252,18 @@ defmodule CodeLead.Projects do
   end
 
   @doc """
-  Env store keys without their values — what the settings UI lists. Selecting
-  a bare map keeps Cloak from decrypting anything; `env_vars/1` would hand
-  back every plaintext secret in the project.
+  Env store entries for the settings UI. Secret entries come back with
+  `value: nil` — a stored secret is never decrypted just to render a list;
+  plain entries carry their real value since they were never encrypted.
   """
-  @spec list_env_keys(pos_integer()) :: [%{key: String.t(), updated_at: DateTime.t()}]
+  @spec list_env_keys(pos_integer()) :: [
+          %{key: String.t(), updated_at: DateTime.t(), secret: boolean(), value: String.t() | nil}
+        ]
   def list_env_keys(project_id) do
-    Repo.all(
-      from e in ProjectEnv,
-        where: e.project_id == ^project_id,
-        order_by: e.key,
-        select: %{key: e.key, updated_at: e.updated_at}
-    )
+    Repo.all(from e in ProjectEnv, where: e.project_id == ^project_id, order_by: e.key)
+    |> Enum.map(fn %ProjectEnv{key: key, updated_at: updated_at, secret: secret, value: value} ->
+      %{key: key, updated_at: updated_at, secret: secret, value: if(secret, do: nil, else: value)}
+    end)
   end
 
   @doc """
@@ -267,7 +272,9 @@ defmodule CodeLead.Projects do
   @spec env_vars(pos_integer()) :: [{String.t(), String.t()}]
   def env_vars(project_id) do
     Repo.all(from e in ProjectEnv, where: e.project_id == ^project_id, order_by: e.key)
-    |> Enum.map(fn %ProjectEnv{key: key, value: value} -> {key, value} end)
+    |> Enum.map(fn %ProjectEnv{key: key, value: value, secret: secret} ->
+      {key, if(secret, do: Vault.decrypt!(value), else: value)}
+    end)
   end
 
   @doc """
@@ -275,11 +282,15 @@ defmodule CodeLead.Projects do
   """
   @spec env_var(pos_integer(), String.t()) :: String.t() | nil
   def env_var(project_id, key) do
-    Repo.one(
-      from e in ProjectEnv,
-        where: e.project_id == ^project_id and e.key == ^key,
-        select: e.value
-    )
+    case Repo.one(
+           from e in ProjectEnv,
+             where: e.project_id == ^project_id and e.key == ^key,
+             select: {e.value, e.secret}
+         ) do
+      nil -> nil
+      {value, true} -> Vault.decrypt!(value)
+      {value, false} -> value
+    end
   end
 
   @doc """

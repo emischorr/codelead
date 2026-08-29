@@ -8,7 +8,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and the project env store. Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
+| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and project env store entries marked secret (the default — an entry can opt out per-value). Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
 | `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Container execution requires it to be host-coincident** — when the app itself runs in a container, the host directory must be bind-mounted at the identical path (the deployed stack's `DATA_ROOT` bind), because the devcontainer CLI's bind sources are resolved by the host daemon (ADR-0009, [deployment.md](deployment.md#the-data-directory)). **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
 | `TEST_WORKSPACE_ROOT` | `<repo>/tmp/test_workspace` | Test-env-only workspace root override (for CI). Must resolve to a path inside the checkout — `test_helper.exs` refuses to wipe anything outside it. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
@@ -427,8 +427,8 @@ or a compose volume the repo's own compose file declares.
 ## Git credentials
 
 Cloning, fetching and pushing a **private** repository over `https://`
-needs a forge access token. It lives in the encrypted project env store
-under the key for the repository's forge:
+needs a forge access token. It lives in the project env store (encrypted —
+the store's default) under the key for the repository's forge:
 
 | Forge | Project env key |
 |---|---|

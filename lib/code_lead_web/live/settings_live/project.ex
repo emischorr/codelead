@@ -58,11 +58,19 @@ defmodule CodeLeadWeb.SettingsLive.Project do
   end
 
   def handle_params(_params, _uri, %{assigns: %{live_action: :new_env}} = socket) do
-    {:noreply, assign_env_form(socket, nil, %{"key" => "", "value" => ""})}
+    {:noreply, assign_env_form(socket, nil, %{"key" => "", "value" => "", "secret" => "true"})}
   end
 
   def handle_params(%{"key" => key}, _uri, %{assigns: %{live_action: :edit_env}} = socket) do
-    {:noreply, assign_env_form(socket, key, %{"key" => key, "value" => ""})}
+    entry = Enum.find(socket.assigns.env_keys, &(&1.key == key))
+
+    params = %{
+      "key" => key,
+      "value" => entry.value || "",
+      "secret" => to_string(entry.secret)
+    }
+
+    {:noreply, assign_env_form(socket, key, params)}
   end
 
   def handle_params(_params, _uri, socket) do
@@ -164,11 +172,16 @@ defmodule CodeLeadWeb.SettingsLive.Project do
 
   ## Env store
 
+  def handle_event("validate_env", %{"env" => params}, socket) do
+    {:noreply, assign_env_form(socket, socket.assigns.env_key, params)}
+  end
+
   def handle_event("save_env", %{"env" => params}, socket) do
     key = params |> Map.get("key", "") |> String.trim()
     value = Map.get(params, "value", "")
+    secret = Map.get(params, "secret", "true") == "true"
 
-    case Projects.put_env(socket.assigns.project.id, key, value) do
+    case Projects.put_env(socket.assigns.project.id, key, value, secret) do
       {:ok, _env} ->
         {:noreply,
          socket
@@ -325,10 +338,10 @@ defmodule CodeLeadWeb.SettingsLive.Project do
       <.modal
         :if={@live_action in [:new_env, :edit_env]}
         id="env-modal"
-        title={if @live_action == :new_env, do: "Add variable", else: "Replace value"}
+        title={if @live_action == :new_env, do: "Add variable", else: "Edit variable"}
         return_to={~p"/settings/projects/#{@project.id}"}
       >
-        <.form for={@env_form} id="env-form" phx-submit="save_env">
+        <.form for={@env_form} id="env-form" phx-change="validate_env" phx-submit="save_env">
           <.input
             field={@env_form[:key]}
             label="Name"
@@ -339,7 +352,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
           />
           <.input
             field={@env_form[:value]}
-            type="password"
+            type={if env_secret?(@env_form), do: "password", else: "text"}
             label="Value"
             autocomplete="new-password"
             data-1p-ignore="true"
@@ -349,9 +362,15 @@ defmodule CodeLeadWeb.SettingsLive.Project do
             required
             phx-mounted={JS.focus()}
           />
+          <.input type="checkbox" field={@env_form[:secret]} label="Encrypt this value" />
           <p class="mb-4 text-[12px] leading-relaxed text-text3">
-            Letters, digits and underscores; must not start with a digit. Encrypted at rest and
-            never displayed again.
+            <%= if env_secret?(@env_form) do %>
+              Letters, digits and underscores; must not start with a digit. Encrypted at rest and
+              never displayed again.
+            <% else %>
+              Letters, digits and underscores; must not start with a digit. Stored as plain text —
+              visible in this UI and editable later.
+            <% end %>
           </p>
 
           <div class="mt-4 flex justify-end gap-2">
@@ -447,6 +466,8 @@ defmodule CodeLeadWeb.SettingsLive.Project do
     |> assign(env_key: key)
     |> assign(env_form: to_form(params, as: "env", errors: errors))
   end
+
+  defp env_secret?(form), do: Phoenix.HTML.Form.normalize_value("checkbox", form[:secret].value)
 
   defp repository_saved({:ok, repository}, socket) do
     {:noreply,
