@@ -15,7 +15,7 @@ defmodule CodeLead.Executor.Devcontainer.Bootstrap do
   alias CodeLead.Executor.Devcontainer
   alias CodeLead.Executor.DockerCli
   alias CodeLead.Executor.HarnessStaging
-  alias CodeLead.Runtime.RunSupervisor
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
 
@@ -88,7 +88,7 @@ defmodule CodeLead.Executor.Devcontainer.Bootstrap do
     end
   end
 
-  # active_task_ids is re-checked per container rather than snapshotted:
+  # executor_task_ids is re-checked per container rather than snapshotted:
   # a task dispatched while the reaper walks the list must not lose its
   # freshly ensured environment.
   defp reap_line(line) do
@@ -113,7 +113,7 @@ defmodule CodeLead.Executor.Devcontainer.Bootstrap do
   # the environment, but a dev server running inside it would not come
   # back).
   defp keep_environment?(task_id) do
-    task_id in RunSupervisor.active_task_ids() or review_environment?(task_id)
+    task_id in LiveRuns.executor_task_ids() or review_environment?(task_id)
   end
 
   defp review_environment?(task_id) do

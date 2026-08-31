@@ -23,7 +23,7 @@ defmodule CodeLeadWeb.DashboardLive do
   alias CodeLead.Costs
   alias CodeLead.Preview
   alias CodeLead.Projects
-  alias CodeLead.Runtime.RunSupervisor
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Terminal
   alias CodeLeadWeb.NavContext
@@ -396,7 +396,7 @@ defmodule CodeLeadWeb.DashboardLive do
     organization = socket.assigns.organization
 
     active_runs = Tasks.active_runs(ids)
-    live_task_ids = MapSet.new(RunSupervisor.active_task_ids())
+    live_task_ids = MapSet.new(LiveRuns.executor_task_ids())
     recent_done = Tasks.recently_completed(6, ids)
     completions = Tasks.completions_by_day(@window_days, ids)
     completion_series = completion_series(completions)

@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-29, authorization + step attribution)
+# Task workflow (last updated: 2026-08-31, live-run guards on planning surveys)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -114,12 +114,22 @@ or failed task is in the Running stage with nothing to hand to Review.
   ineligible while the task sat in Review; previously that case slipped
   through to a failed dispatch.
   `Tasks.startable/2` / `startable?/2` expose the same check — eligible
-  executor, repository for `:repo` targets — for the board and task
-  page to hide or disable Start/Schedule before a click would hit the
-  guard and flash an error.
+  executor, repository for `:repo` targets. `Runtime.startable/2` /
+  `startable?/2` wrap it with the live-process rule below and are what
+  the board and task page call, so both surfaces hide or disable
+  Start/Schedule for the same reasons a click would be refused.
+- **A live planning survey freezes the card.** Edges leaving a `:plan`
+  stage — and `Runtime.delete_task/2`, since delete is not an edge —
+  refuse with `{:error, :planning_agent_running}` while the task's
+  `{task_id, :plan}` registry slot is held (see
+  [`planning.md`](planning.md)). The guard lives in `CodeLead.Runtime`
+  (`check_stage_exit/2` inside `advance/3`), not in `Tasks`: knowing
+  about live processes is the runtime layer's job.
 - **`move_to_running/1` no longer requires `run_state: :idle`.** The
   edge lookup rejects every from-state but `:planning`, and a Planning
-  task is always idle. The redundant guard went with the hand-written
+  task is always idle. (A Planning task *can* now have a live survey
+  process — that is the runtime-layer guard above, still not a
+  `run_state`.) The redundant guard went with the hand-written
   transition bodies.
 - **`attention` clears on human edges only.** Every human handoff
   resolves whatever flagged the card; the one `:auto` edge (completion)
@@ -154,6 +164,7 @@ console) calls for those actions:
 | send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
 | approve → Done (finalize by mode: PR, merge, squash, artifact, commit-to-path) | `Runtime.approve(task)` |
 | run completed → Review (called by the runner) | `Runtime.complete_run(task)` |
+| delete a Planning task (guarded against a live survey) | `Runtime.delete_task(scope, task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
 
 Each of those is `Runtime.advance/3` with an edge and a summary. The
@@ -173,6 +184,11 @@ the execution context if the outcome asked it to, `:plan` and
 the Running stage, so it calls `Tasks.retry_run/1` and re-dispatches
 directly. `cancel_task/1` terminates the agent before advancing;
 stopping a process is an exit effect, and the seam has no exit hook.
+The Review-exit actions (`request_changes/3`, `send_back_to_planning/2`,
+`approve/2`) do the advisory analogue: they call
+`LiveRuns.cancel_advisory/1` before advancing, so no reviewer is still
+reading a worktree the edge is about to discard or prune (see
+[`reviews.md`](reviews.md)).
 
 ## Finalize modes
 
@@ -249,7 +265,9 @@ the agent — that is handled) can leave a task in `:executing` until a
 human cancels; runners are deliberately not restarted.
 
 Each active run is a `Runtime.TaskRunner` GenServer (DynamicSupervisor
-+ Registry by task id). It provisions the context, starts the driver,
++ the run-kind Registry, key `{task_id, :execute}` — see
+[`architecture.md`](architecture.md)). It provisions the context,
+starts the driver,
 persists the ACP session id, writes an `llm_api` executor's text
 output to `<context>/output.md` as the artifact, records usage on
 result, and broadcasts run events over PubSub:

@@ -111,6 +111,17 @@ defmodule CodeLead.Tasks do
     Phoenix.PubSub.subscribe(CodeLead.PubSub, org_topic())
   end
 
+  @doc """
+  Notifies board and organization subscribers about the task without a
+  write — for changes to *live-process* state (a survey starting or
+  ending) that surfaces like the board render but no row records.
+  """
+  @spec notify_board_change(Task.t()) :: :ok
+  def notify_board_change(%Task{} = task) do
+    _result = broadcast_board_change({:ok, task})
+    :ok
+  end
+
   @spec board_topic(pos_integer()) :: String.t()
   def board_topic(project_id), do: "project:#{project_id}"
 

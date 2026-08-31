@@ -32,6 +32,11 @@ defmodule CodeLeadWeb.FlashMessages do
       "Container execution requires a commercial license. Switch this task's " <>
         "execution back to Local, or set a LICENSE_KEY that grants it."
 
+  def transition_error(:planning_agent_running),
+    do:
+      "A planning agent is still surveying this task. Wait for it to finish " <>
+        "before starting the run."
+
   def transition_error(:unauthorized),
     do: "You don't have permission to do that."
 
@@ -109,6 +114,9 @@ defmodule CodeLeadWeb.FlashMessages do
   def survey_error(:missing_repository),
     do: "Link a repository before running a repo-level refinement."
 
+  def survey_error(:already_running),
+    do: "A refinement is already running for this task."
+
   def survey_error(other), do: "Refinement failed to start: #{inspect(other)}"
 
   @doc """
@@ -139,6 +147,9 @@ defmodule CodeLeadWeb.FlashMessages do
 
   def delete_error(:not_deletable),
     do: "This task can no longer be deleted — it has left Planning."
+
+  def delete_error(:planning_agent_running),
+    do: "A planning agent is still surveying this task. Wait for it to finish before deleting."
 
   def delete_error(other), do: "Delete failed: #{inspect(other)}"
 

@@ -1,9 +1,12 @@
 defmodule CodeLead.Runtime.RunSupervisor do
   @moduledoc """
-  DynamicSupervisor for active task runners, with a Registry keyed by
-  task id.
+  DynamicSupervisor for active task runners. The Registry it declares
+  is keyed by `{task_id, kind[, agent_id]}` and shared with advisory
+  runs — `CodeLead.Runtime.LiveRuns` owns the key shape; the helpers
+  here are executor-only views of it.
   """
 
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Runtime.TaskRunner
 
   @registry CodeLead.Runtime.Registry
@@ -27,30 +30,12 @@ defmodule CodeLead.Runtime.RunSupervisor do
 
   @spec whereis(pos_integer()) :: pid() | nil
   def whereis(task_id) do
-    case Registry.lookup(@registry, task_id) do
-      [{pid, _value}] -> pid
-      [] -> nil
+    case LiveRuns.lookup(task_id, :execute) do
+      {pid, _meta} -> pid
+      nil -> nil
     end
   end
 
-  @spec active_count() :: non_neg_integer()
-  def active_count do
-    Registry.count(@registry)
-  end
-
-  @doc """
-  The task ids that currently have a runner process. This is the truth
-  about *processes*, not about `run_state` — a task persisted as
-  `:executing` whose id is missing here has lost its runner. Node-local,
-  like the registry itself.
-  """
-  @spec active_task_ids() :: [pos_integer()]
-  def active_task_ids do
-    Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-  end
-
-  @spec via(pos_integer()) :: {:via, Registry, {module(), pos_integer()}}
-  def via(task_id) do
-    {:via, Registry, {@registry, task_id}}
-  end
+  @spec via(pos_integer()) :: {:via, Registry, {module(), tuple(), LiveRuns.meta()}}
+  def via(task_id), do: LiveRuns.via(task_id)
 end

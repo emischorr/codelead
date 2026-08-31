@@ -36,6 +36,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :eligible_planners, :list, default: []
   attr :selected_planner, :map, default: nil
   attr :survey_pending?, :boolean, default: false
+  attr :surveying_agent, :string, default: nil
   attr :eligible_executors, :list, default: []
   attr :eligible_reviewers, :list, default: []
   attr :edit_form, :any, required: true
@@ -106,6 +107,10 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           decisions={@decisions}
           editable?={@task.state == :planning && @can_edit?}
           editing?={@editing? && @task.state == :planning}
+          delete_hint={
+            @survey_pending? &&
+              "A planning agent is still surveying this task. Wait for it to finish before deleting."
+          }
         />
 
         <.planning_card
@@ -124,6 +129,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           eligible_planners={@eligible_planners}
           selected_planner={@selected_planner}
           survey_pending?={@survey_pending?}
+          surveying_agent={@surveying_agent}
           can_plan?={@can_plan?}
         />
 
@@ -172,6 +178,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :decisions, :string, default: ""
   attr :editable?, :boolean, required: true
   attr :editing?, :boolean, required: true
+  attr :delete_hint, :any, default: nil
 
   defp description_card(assigns) do
     ~H"""
@@ -190,7 +197,9 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
             type="button"
             phx-click="delete_task"
             data-confirm="Delete this task? This can't be undone."
-            class="cursor-pointer text-xs font-semibold text-del-text hover:underline"
+            disabled={!!@delete_hint}
+            title={@delete_hint || nil}
+            class="cursor-pointer text-xs font-semibold text-del-text hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
             id="delete-task"
           >
             Delete
@@ -277,6 +286,7 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
   attr :eligible_planners, :list, default: []
   attr :selected_planner, :map, default: nil
   attr :survey_pending?, :boolean, default: false
+  attr :surveying_agent, :string, default: nil
   attr :can_plan?, :boolean, default: true
 
   # One card for the whole planning-agent lifecycle: pick an agent and
@@ -368,9 +378,15 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           </button>
         </div>
 
-        <div :if={@survey_pending?} class="flex items-center gap-2 text-xs text-text3">
+        <div
+          :if={@survey_pending?}
+          id="survey-running-hint"
+          class="flex items-center gap-2 text-xs text-text3"
+        >
           <span class="size-1.5 animate-pulse rounded-full bg-accent" />
-          Refinement running — this can take a few minutes…
+          {if @surveying_agent,
+            do: "Surveying with #{@surveying_agent} — this can take a few minutes…",
+            else: "Refinement running — this can take a few minutes…"}
         </div>
       </div>
 

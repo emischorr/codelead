@@ -46,6 +46,7 @@ defmodule CodeLead.Planning do
   alias CodeLead.Planning.PlanningMessage
   alias CodeLead.Projects
   alias CodeLead.Repo
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLead.Workspace
@@ -92,9 +93,16 @@ defmodule CodeLead.Planning do
   over the task fields. Both report gaps in the task's spec.
 
   Runs asynchronously and appends its findings as a `:survey` turn;
-  completion is announced as `{:survey_completed, _}` on the task
-  topic. Nothing about the card moves and no attention is raised — the
-  human pulled this.
+  start and completion are announced as `{:survey_started, _}` /
+  `{:survey_completed, _}` on the task topic. Nothing about the card
+  moves and no attention is raised — the human pulled this.
+
+  One refinement per task: the run claims the `{task_id, :plan}` slot
+  in `CodeLead.Runtime.LiveRuns` before touching the survey worktree
+  (a second run would tear that worktree out from under the first),
+  and `{:error, :already_running}` is the honest answer to a second
+  click. The claim happens in the spawned child — it must die with the
+  run — so the parent waits for the child's verdict before returning.
   """
   @spec start_refinement(Scope.t() | nil, Task.t(), pos_integer()) ::
           {:ok, :started} | {:error, term()}
@@ -104,11 +112,20 @@ defmodule CodeLead.Planning do
     with :ok <- Policy.authorize(scope, :run_planning, task),
          :ok <- check_planner(agent, task),
          :ok <- check_repository(agent, task) do
-      Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn ->
-        run_refinement(task, agent)
-      end)
+      parent = self()
+      ref = make_ref()
 
-      {:ok, :started}
+      {:ok, _pid} =
+        Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn ->
+          claim_and_run(task, agent, parent, ref)
+        end)
+
+      receive do
+        {^ref, :started} -> {:ok, :started}
+        {^ref, {:error, :already_running} = error} -> error
+      after
+        5_000 -> {:error, :timeout}
+      end
     end
   end
 
@@ -180,6 +197,27 @@ defmodule CodeLead.Planning do
 
   defp check_repository(%Agent{}, %Task{}), do: :ok
 
+  # Runs inside the spawned child. Claiming the `{task_id, :plan}` slot
+  # is its first act — before the worktree, which provisioning would
+  # otherwise tear out from under an already-running survey — and the
+  # verdict is reported back so `start_refinement/3` can answer honestly.
+  defp claim_and_run(%Task{} = task, %Agent{} = agent, parent, ref) do
+    case LiveRuns.register(task.id, :plan, %{agent_id: agent.id, agent_name: agent.name}) do
+      :ok ->
+        send(parent, {ref, :started})
+        broadcast_survey_started(task, agent)
+
+        try do
+          run_refinement(task, agent)
+        after
+          Tasks.notify_board_change(task)
+        end
+
+      {:error, :already_running} = error ->
+        send(parent, {ref, error})
+    end
+  end
+
   defp run_refinement(%Task{} = task, %Agent{} = agent) do
     started_at = DateTime.utc_now(:second)
     monotonic_start = System.monotonic_time(:millisecond)
@@ -231,6 +269,16 @@ defmodule CodeLead.Planning do
     )
   end
 
+  defp broadcast_survey_started(%Task{} = task, %Agent{} = agent) do
+    Phoenix.PubSub.broadcast(
+      CodeLead.PubSub,
+      Tasks.task_topic(task.id),
+      {:task_event, task.id, {:survey_started, %{agent: agent.name}}}
+    )
+
+    Tasks.notify_board_change(task)
+  end
+
   # A report whose findings block does not parse writes no rows and
   # degrades to the raw turn (delta nil) — never a survey failure.
   defp apply_findings(task, step, agent, %{status: :ok, content: content}) do
@@ -279,6 +327,7 @@ defmodule CodeLead.Planning do
 
           case AdvisoryRun.run(survey, agent, context, survey_prompt(task), run_opts) do
             {:ok, result} -> result
+            {:error, :cancelled} -> %{status: :cancelled, content: "survey cancelled", usage: nil}
             {:error, reason} -> failed("survey failed: #{inspect(reason)}")
           end
         after

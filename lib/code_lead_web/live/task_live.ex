@@ -24,6 +24,7 @@ defmodule CodeLeadWeb.TaskLive do
   alias CodeLead.Projects
   alias CodeLead.Reviews
   alias CodeLead.Runtime
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Attention
   alias CodeLead.Tasks.Task
@@ -72,7 +73,6 @@ defmodule CodeLeadWeb.TaskLive do
             live_message: nil,
             feed_blocks: [],
             all_runs?: false,
-            survey_pending?: false,
             survey_delta: nil,
             finding_expanded: MapSet.new(),
             finding_action: nil,
@@ -387,7 +387,7 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("delete_task", _params, socket) do
-    case Tasks.delete_task(socket.assigns.current_scope, socket.assigns.task) do
+    case Runtime.delete_task(socket.assigns.current_scope, socket.assigns.task) do
       {:ok, _task} ->
         {:noreply,
          socket
@@ -449,7 +449,7 @@ defmodule CodeLeadWeb.TaskLive do
 
     case planner && Planning.start_refinement(socket.assigns.current_scope, task, planner.id) do
       {:ok, :started} ->
-        {:noreply, assign(socket, survey_pending?: true)}
+        {:noreply, assign(socket, survey_pending?: true, surveying_agent: planner.name)}
 
       nil ->
         {:noreply, put_flash(socket, :error, FlashMessages.survey_error(:no_planner))}
@@ -711,6 +711,10 @@ defmodule CodeLeadWeb.TaskLive do
     findings = Findings.list(task.id, :planning)
     reviews = Reviews.list_reviews(task.id)
 
+    # The registry, not this socket, is the truth about a running
+    # survey — a fresh mount or reconnect during one renders it too.
+    %{pending?: survey_pending?, agent: surveying_agent} = planner_run(task.id)
+
     socket
     |> assign(
       task: task,
@@ -726,7 +730,9 @@ defmodule CodeLeadWeb.TaskLive do
       project_finalize_mode: finalize.project_mode,
       forge_known?: finalize.forge_known?,
       executor: executor,
-      startable_reason: Tasks.startable(task, executor),
+      startable_reason: Runtime.startable(task, executor),
+      survey_pending?: survey_pending?,
+      surveying_agent: surveying_agent,
       agents: agents,
       steps: steps,
       run_started_at: last_run_started_at(steps),
@@ -756,6 +762,13 @@ defmodule CodeLeadWeb.TaskLive do
     |> NavContext.put_stats(Costs.project_spend_month(project.id))
     |> drop_stale_live_usage()
     |> reschedule_tick()
+  end
+
+  defp planner_run(task_id) do
+    case LiveRuns.lookup(task_id, :plan) do
+      {_pid, meta} -> %{pending?: true, agent: meta.agent_name}
+      nil -> %{pending?: false, agent: nil}
+    end
   end
 
   # Everything the Approve button and the finalize selector need. The
@@ -1328,13 +1341,17 @@ defmodule CodeLeadWeb.TaskLive do
     socket |> assign(live_usage: snapshot) |> put_task_stat()
   end
 
+  # `survey_pending?`/`surveying_agent` need no clause here: both
+  # events are state-bearing, and the reload derives the pair from the
+  # registry. Only the delta exists nowhere but in the message.
   defp ingest_event(socket, {:survey_completed, summary}) do
-    assign(socket, survey_pending?: false, survey_delta: Map.get(summary, :delta))
+    assign(socket, survey_delta: Map.get(summary, :delta))
   end
 
   defp ingest_event(socket, _event), do: socket
 
   @state_bearing_events [
+    :survey_started,
     :run_started,
     :run_completed,
     :run_failed,
@@ -1470,6 +1487,7 @@ defmodule CodeLeadWeb.TaskLive do
           eligible_planners={@eligible_planners}
           selected_planner={@selected_planner}
           survey_pending?={@survey_pending?}
+          surveying_agent={@surveying_agent}
           eligible_executors={@eligible_executors}
           eligible_reviewers={@eligible_reviewers}
           edit_form={@edit_form}

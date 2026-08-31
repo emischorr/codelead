@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-29, authorization)
+# Web UI (last updated: 2026-08-31, registry-derived survey state)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -306,8 +306,10 @@ Four refresh mechanics, all load-bearing:
   restart would kill.
 
 "Stalled runs" cross-checks `Tasks.active_runs/0` against
-`RunSupervisor.active_task_ids/0`: a task persisted as `:executing`
-whose id has no runner process has lost it.
+`LiveRuns.executor_task_ids/0`: a task persisted as `:executing`
+whose id has no runner process has lost it. (Executor ids only —
+surveys and reviewers in the same registry must not mask a lost
+runner.)
 
 The lead-time tile is labelled **"Avg lead time · created → approved"**,
 not cycle time — `Tasks.avg_lead_time_ms/1` includes however long the
@@ -334,9 +336,15 @@ whether the point is today.
 Plain assigns (whole-board reload); `Tasks.subscribe_board/1` +
 `{:board_changed, _, _}` → `load_board/1`, which batch-loads
 `Costs.spend_by_task/1`, `Reviews.verdicts_by_task/1`,
-`Tasks.commit_notes/1`, and queue positions from `Tasks.queued_tasks/0`
+`Tasks.commit_notes/1`, queue positions from `Tasks.queued_tasks/0`
 (tasks waiting on a future `scheduled_at` are excluded from the
-numbering — they are not in line behind anything).
+numbering — they are not in line behind anything), and the surveying
+set from `LiveRuns.surveying_task_ids/0` — a Planning card with a live
+survey wears a pulsing `<card_id>-surveying-hint` pill. That state is
+registry-derived on every load; the survey's start/end reach the board
+as writeless `{:board_changed, _, _}` broadcasts
+(`Tasks.notify_board_change/1`), so a missed broadcast merely delays
+the pill until the next reload.
 No drag & drop — explicit Start (planning footer) and Archive (done
 footer) actions. It was considered and turned down. A board move here is
 not the harmless reordering it is in a generic issue tracker: every edge
@@ -358,9 +366,9 @@ from `tasks.pr_url_kind` — the URL comes off the task, not from
 what the single `ml-auto` in the footer assumes. The planning footer's Start is a split control: the
 clock button opens the shared `schedule_modal` and starts the run at a
 chosen time instead of now. Both are hidden — not just disabled —
-when `Tasks.startable?/2` is false: no eligible executor, or a `:repo`
-target with no repository, the same guard `move_to_running/1` would
-otherwise reject the transition on. A queued task with a future
+when `Runtime.startable?/2` is false: no eligible executor, a `:repo`
+target with no repository, or a live planning survey — the same guards
+a click on `Runtime.start_task/3` would otherwise be refused on. A queued task with a future
 `scheduled_at` shows `⏱ starts …` in place of the `⏸ queued · #N`
 badge, derived from the task rather than from a persisted hold reason.
 On desktop **each column scrolls on its own**: the pane is
@@ -424,10 +432,12 @@ to flashes.
 Header actions are chosen by `{state, run_state}` plus a precomputed
 `scheduled?` flag: planning offers **Schedule** (`#action-schedule-run`,
 opening the shared `schedule_modal`) alongside **Start run**, both
-`disabled` with the reason as their `title` when `Tasks.startable/2`
-(precomputed as `@startable_reason` in `load_task/1`) returns an
-error instead of `:ok` — unlike the board card, the task page keeps
-them visible so the tooltip can explain why. A queued task whose start
+`disabled` with the reason as their `title` when `Runtime.startable/2`
+(precomputed as `@startable_reason` in `load_task/1`; the data checks
+of `Tasks.startable/2` plus the live-survey freeze,
+`:planning_agent_running`) returns an error instead of `:ok` — unlike
+the board card, the task page keeps them visible so the tooltip can
+explain why. A queued task whose start
 time has not arrived offers **Run now**
 (`#action-run-now`, `Runtime.run_now/1`) beside Cancel run. A
 `#scheduled-hint` badge next to the state badge shows the start time. A
@@ -464,22 +474,31 @@ above the bar instead of underneath it.
   would otherwise leave the form open over stale values, and
   `load_task/1` conversely leaves an open form's contents alone).
   The same planning-only actions row carries `#delete-task`, a
-  `data-confirm`-guarded hard delete (`Tasks.delete_task/1`) that
-  redirects to the board on success and flashes
-  `FlashMessages.delete_error/1` on refusal — the guard is the context
-  function's `state in [:planning, :cancelled]` match, the UI only
-  shows the link in Planning,
+  `data-confirm`-guarded hard delete (`Runtime.delete_task/2`, which
+  refuses while a survey runs and delegates to `Tasks.delete_task/2`)
+  that redirects to the board on success and flashes
+  `FlashMessages.delete_error/1` on refusal — the data guard is the
+  context function's `state in [:planning, :cancelled]` match, the UI
+  only shows the link in Planning and disables it (with the reason as
+  `title`) during a survey,
   the **Planning agent card** (`#planning-card`, one card for the whole
   planning-agent lifecycle: `#planner-form` selects a `:plan` agent from
   `Agents.eligible_planners/2` — options suffixed `· Repo level` (acp)
   / `· Task level` (llm_api) — beside the one `#run-refinement` button,
   in a single controls row on top. The button fires
-  `Planning.start_refinement/2` for either level and waits for
-  `{:survey_completed, _}` on the task topic; for a repo-level agent
-  without a linked repository it is disabled ("Link a repository
-  first"). There is no chat UI — the console chat remains IEx-only. The
-  selected planner lives in the socket, not on the task — see
-  [`planning.md`](planning.md)). Refinement output lands on the
+  `Planning.start_refinement/3` for either level; for a repo-level
+  agent without a linked repository it is disabled ("Link a repository
+  first"). Whether a survey is *running* is **derived, not held**:
+  `load_task/1` reads `LiveRuns.lookup(task_id, :plan)` into
+  `survey_pending?`/`surveying_agent` (rendering the
+  `#survey-running-hint` line and disabling `#run-refinement`), and
+  `{:survey_started, _}` / `{:survey_completed, _}` on the task topic
+  are state-bearing reload hints — so a fresh mount or a second tab
+  during a survey shows the same truth as the tab that clicked, and a
+  second click is refused (`{:error, :already_running}` →
+  `FlashMessages.survey_error/1`). There is no chat UI — the console
+  chat remains IEx-only. The selected planner lives in the socket, not
+  on the task — see [`planning.md`](planning.md)). Refinement output lands on the
   same card: parsed findings as an expandable checklist with
   Address/Dismiss/Reopen and per-item notes (planning only; read-only
   afterwards, and every resolution broadcasts `{:findings_changed, _}`

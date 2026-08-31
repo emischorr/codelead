@@ -11,6 +11,7 @@ defmodule CodeLead.ReviewsTest do
   alias CodeLead.Findings.Finding
   alias CodeLead.Reviews
   alias CodeLead.Runtime
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Tasks
 
@@ -390,6 +391,51 @@ defmodule CodeLead.ReviewsTest do
     refute File.dir?(context.path)
     {:ok, branches} = CodeLead.Git.git(context.base_clone_path, ["branch", "--list"])
     refute branches =~ context.branch_name
+  end
+
+  test "leaving Review cancels a live reviewer and records a cancelled row" do
+    %{task: task, reviewers: [reviewer]} = content_task_with_reviewers(1)
+    task_id = task.id
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+    test_pid = self()
+
+    stub_llm(fn conn, body ->
+      if body["system"] in [nil, ""] do
+        reply(conn, "Executor output.")
+      else
+        # The reviewer's completion hangs until the driver is cancelled.
+        send(test_pid, :reviewer_running)
+        Process.sleep(:infinity)
+        conn
+      end
+    end)
+
+    {:ok, _} = Runtime.start_task(admin_scope(), task)
+    assert_receive {:task_event, ^task_id, {:run_completed, _result}}, 20_000
+    assert_receive :reviewer_running, 20_000
+
+    task = Tasks.get_task!(task.id)
+    assert task.state == :review
+    assert Enum.any?(LiveRuns.list(task.id), fn {_pid, meta} -> meta.kind == :review end)
+
+    assert {:ok, sent_back} = Runtime.send_back_to_planning(admin_scope(), task)
+    assert sent_back.state == :planning
+
+    # The cycle still completes; the cancelled reviewer recorded its rows.
+    assert_receive {:task_event, ^task_id, {:review_cycle_completed, 1}}, 20_000
+
+    assert [review] = Reviews.list_reviews(task.id)
+    assert review.verdict == nil
+    assert review.findings =~ "review cancelled"
+    assert review.task_step_id != nil
+
+    assert %AgentRun{status: :cancelled} = Repo.get_by(AgentRun, agent_id: reviewer.id)
+
+    # No :review_ready attention lands on the card back in Planning.
+    assert Tasks.get_task!(task.id).attention == nil
+
+    _ = :sys.get_state(CodeLead.Runtime.Registry)
+    assert LiveRuns.list(task.id) == []
   end
 
   test "acp reviewers get a read-only context: writes are denied" do

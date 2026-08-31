@@ -340,6 +340,72 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "a running survey" do
+    # Holds the task's `{task_id, :plan}` registry slot the way a real
+    # survey does: registered from the blocked child itself.
+    defp stub_planner(task_id, agent_name) do
+      test_pid = self()
+
+      start_supervised!(
+        Supervisor.child_spec(
+          {Elixir.Task,
+           fn ->
+             :ok =
+               CodeLead.Runtime.LiveRuns.register(task_id, :plan, %{agent_name: agent_name})
+
+             send(test_pid, :planner_registered)
+
+             receive do
+               :advisory_cancel -> :ok
+             end
+           end},
+          id: make_ref(),
+          restart: :temporary
+        )
+      )
+
+      assert_receive :planner_registered
+      :ok
+    end
+
+    test "a fresh mount derives the running survey from the registry", %{conn: conn} do
+      project = project_fixture()
+      planner = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+      task = task_fixture(project.id, %{work_type: :code, target: :folder})
+
+      stub_planner(task.id, planner.name)
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+
+      assert has_element?(view, "#survey-running-hint")
+      assert render(element(view, "#survey-running-hint")) =~ planner.name
+      assert has_element?(view, "#run-refinement[disabled]")
+
+      # The frozen-card guard surfaces on Delete and Start/Schedule too.
+      assert has_element?(view, "#delete-task[disabled]")
+      assert render(element(view, "#delete-task")) =~ "surveying"
+      assert has_element?(view, "#action-start-run[disabled]")
+      assert render(element(view, "#action-start-run")) =~ "planning agent is still surveying"
+      assert has_element?(view, "#action-schedule-run[disabled]")
+    end
+
+    test "a second view learns about the survey from the started broadcast", %{conn: conn} do
+      project = project_fixture()
+      _planner = agent_fixture(%{roles: [:plan], work_type: :code, driver: :llm_api})
+      task = task_fixture(project.id, %{work_type: :code, target: :folder})
+
+      {:ok, view, _html} = live(conn, task_path(project, task))
+      refute has_element?(view, "#survey-running-hint")
+
+      stub_planner(task.id, "Scout")
+      send(view.pid, {:task_event, task.id, {:survey_started, %{agent: "Scout"}}})
+
+      assert has_element?(view, "#survey-running-hint")
+      assert render(element(view, "#survey-running-hint")) =~ "Scout"
+      assert has_element?(view, "#run-refinement[disabled]")
+    end
+  end
+
   describe "planning agent selection" do
     test "both planner levels offer the same run button, labelled by level", %{conn: conn} do
       project = project_fixture()

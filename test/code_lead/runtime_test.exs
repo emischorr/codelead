@@ -13,6 +13,7 @@ defmodule CodeLead.RuntimeTest do
   alias CodeLead.Costs.AgentRun
   alias CodeLead.Projects
   alias CodeLead.Runtime
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Runtime.RunSupervisor
   alias CodeLead.Runtime.ScheduledDispatchWorker
   alias CodeLead.Tasks
@@ -72,6 +73,40 @@ defmodule CodeLead.RuntimeTest do
         assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 15_000
         :ok
     end
+  end
+
+  # Holds a task's `{task_id, :plan}` registry slot the way a real
+  # survey does: registered from the blocked child itself.
+  defp start_stub_planner(task_id) do
+    test_pid = self()
+
+    pid =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Elixir.Task,
+           fn ->
+             :ok = LiveRuns.register(task_id, :plan, %{agent_name: "Scout"})
+             send(test_pid, :planner_registered)
+
+             receive do
+               :advisory_cancel -> :ok
+             end
+           end},
+          id: make_ref(),
+          restart: :temporary
+        )
+      )
+
+    assert_receive :planner_registered
+    pid
+  end
+
+  defp kill_and_sync(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+    _ = :sys.get_state(CodeLead.Runtime.Registry)
+    :ok
   end
 
   describe "the full run loop" do
@@ -264,6 +299,62 @@ defmodule CodeLead.RuntimeTest do
       assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
       await_runner_down(task.id)
       assert Tasks.get_task!(task.id).state == :review
+    end
+
+    test "advisory runs never eat an executor slot" do
+      use_scenario("happy")
+      %{task: task} = acp_task()
+      subscribe(task)
+
+      # With the cap at 1, a live survey (on an unrelated task) must
+      # not count against it — only :execute registrations do.
+      Application.put_env(:code_lead, :max_concurrent_runs, 1)
+      start_stub_planner(task.id + 1)
+
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+      assert Tasks.get_task!(task.id).state == :review
+    end
+  end
+
+  describe "a live planning survey freezes the card" do
+    test "start, schedule, and delete refuse until the planner is gone" do
+      use_scenario("happy")
+      %{task: task, agent: agent} = acp_task()
+      subscribe(task)
+
+      planner = start_stub_planner(task.id)
+
+      assert {:error, :planning_agent_running} = Runtime.start_task(admin_scope(), task)
+
+      assert {:error, :planning_agent_running} =
+               Runtime.start_task(admin_scope(), task,
+                 scheduled_at: DateTime.add(DateTime.utc_now(:second), 3600)
+               )
+
+      assert {:error, :planning_agent_running} = Runtime.delete_task(admin_scope(), task)
+      assert Runtime.startable(task, agent) == {:error, :planning_agent_running}
+      refute Runtime.startable?(task, agent)
+      assert Tasks.get_task!(task.id).state == :planning
+
+      kill_and_sync(planner)
+
+      assert Runtime.startable(task, agent) == :ok
+      assert {:ok, _task} = Runtime.start_task(admin_scope(), task)
+      assert_receive {:task_event, _id, {:run_completed, _result}}, 15_000
+      await_runner_down(task.id)
+    end
+
+    test "delete works again once the planner is gone" do
+      %{task: task} = acp_task()
+
+      planner = start_stub_planner(task.id)
+      assert {:error, :planning_agent_running} = Runtime.delete_task(admin_scope(), task)
+
+      kill_and_sync(planner)
+      assert {:ok, _task} = Runtime.delete_task(admin_scope(), task)
+      assert Tasks.get_task(task.project_id, task.id) == nil
     end
   end
 

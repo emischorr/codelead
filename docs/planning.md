@@ -1,4 +1,4 @@
-# Planning surface (last updated: 2026-08-28, shared report contract with reviews)
+# Planning surface (last updated: 2026-08-31, surveys registered as live runs)
 
 Implemented in `CodeLead.Planning`, rendered by the Task tab's Planning
 agent card (`CodeLeadWeb.TaskLive.TaskTab`). A one-shot agent
@@ -12,7 +12,7 @@ spec.
 A planning agent is an ordinary agent with `:plan` in `roles`, filtered
 into the surface by role **and** the task's `work_type`, exactly like
 executors and reviewers (`Agents.eligible_planners/2`). One entry
-point, `Planning.start_refinement/2` — the **driver** decides the
+point, `Planning.start_refinement/3` — the **driver** decides the
 refinement's depth in that slot:
 
 | Driver | Depth | Capability |
@@ -87,6 +87,37 @@ Invariants, each structural rather than conventional:
   `task.acp_session_id` via `session/load` when it is set.
 - `<root>/surveys/` is dropped by `mix code_lead.workspace.clean`
   (wired into `mix ecto.reset`), like `worktrees/` and `tasks/`.
+
+## One survey per task, and who knows about it
+
+The spawned run's **first act** — before any worktree work — is to claim
+the task's `{task_id, :plan}` slot in `CodeLead.Runtime.LiveRuns` (see
+[`architecture.md`](architecture.md)); the key's uniqueness *is* the
+one-planner rule, and `start_refinement/3` answers a second click with
+an honest `{:error, :already_running}` (the child reports its claim back
+to the caller before the function returns). Registering first matters
+structurally: provisioning removes any leftover survey worktree at the
+task's fixed path, so an unguarded second run would tear the first one's
+worktree out from under it.
+
+The run's start broadcasts `{:task_event, task_id, {:survey_started,
+%{agent: name}}}` on the task topic, and a `{:board_changed, _, _}` on
+the board/org topics at start and end (via
+`Tasks.notify_board_change/1` — no task write; the survey never touches
+the row). The UI **derives** the running state from the registry —
+`TaskLive.load_task/1` and the board's load both query `LiveRuns` — and
+treats the broadcasts as reload hints only, so a fresh mount during a
+survey is just as informed as the tab that clicked. Live-run state is
+deliberately not persisted: if the node restarts the survey is gone,
+and the registry honestly shows nothing running.
+
+While the planner is live the card is **frozen**: Planning → Running
+(start and schedule) and delete refuse with
+`{:error, :planning_agent_running}` — the guard lives in
+`CodeLead.Runtime` (`advance/3` for edges leaving a `:plan` stage,
+`Runtime.delete_task/2` for delete), because knowing about live
+processes is the runtime layer's job. The survey's output must land on
+the task the human asked about; nothing forbids the move technically.
 
 ## Findings
 
@@ -222,16 +253,19 @@ LiveView. A question or a permission escalation raises the ordinary
 type, no new machinery.
 
 **Known gap.** An advisory run's escalation surfaces but is not
-answerable. The Allow/Deny buttons route through
-`Runtime.answer_permission/3` → `RunSupervisor.whereis/1`, which finds
-only executor runs; an advisory run is not in `CodeLead.Runtime.Registry`
-(keyed on task id, where it would collide with the executor run). Such a
-run ends on `AdvisoryRun`'s deadline. Wiring interactive answering for
-advisory runs is a separate change.
+answerable. The *lookup* half is closed: advisory runs now register in
+`CodeLead.Runtime.Registry` under run-kind keys, so the process is
+findable. What remains is the *routing* half — the Allow/Deny buttons
+still go through `Runtime.answer_permission/4` →
+`TaskRunner.answer_permission/3`, which addresses the executor's
+GenServer, not `AdvisoryRun`'s receive loop. Such a run still ends on
+`AdvisoryRun`'s deadline (or on `:advisory_cancel`, see
+[`reviews.md`](reviews.md)). Wiring the answer into the advisory
+receive loop is a separate change.
 
 Questions are answerable on the executor path — `{:question, _}` is
 emitted from an ACP elicitation and settled with
-`Runtime.answer_question/3` (see [`agent-drivers.md`](agent-drivers.md)).
+`Runtime.answer_question/4` (see [`agent-drivers.md`](agent-drivers.md)).
 An advisory run cannot receive one at all: it provisions a **read-only**
 context, and the driver withholds the elicitation capability there, so
 the harness keeps its ask-the-human tool disabled. That is deliberate —

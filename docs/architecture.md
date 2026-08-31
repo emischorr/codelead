@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-19)
+# Architecture overview (last updated: 2026-08-31, run-kind live-run registry)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -41,14 +41,26 @@ note is the "how it works today" map.
   post-finalize teardown a finalize outcome asks for). It also owns
   `discard_context/1`, the one teardown both the `:discard` worktree
   policy and that outcome go through.
+- `CodeLead.Runtime.LiveRuns` — the live-process truth for every agent
+  run, over the one `CodeLead.Runtime.Registry` (`keys: :unique`,
+  node-local — a restart empties it, honestly). Keys carry the run
+  *kind*: `{task_id, :execute}` (the runner), `{task_id, :plan}` (the
+  survey), `{task_id, :review, agent_id}` (one per reviewer); key
+  uniqueness is the concurrency rule, and the executor-only views
+  (`executor_count/0` for the capacity gate, `executor_task_ids/0` for
+  the stalled-run check and container reaper) filter by kind.
+  Advisory runs self-register as their first act and are stopped
+  through `cancel_advisory/1` (ADR-0015).
 - `CodeLead.Runtime.TaskRunner` — one GenServer per active run
-  (DynamicSupervisor + Registry), consumes driver events, persists the
-  transcript through `CodeLead.AgentFeed` (which broadcasts
-  `{:agent_feed, task_id, row}`), broadcasts task events on
+  (DynamicSupervisor + the registry above), consumes driver events,
+  persists the transcript through `CodeLead.AgentFeed` (which
+  broadcasts `{:agent_feed, task_id, row}`), broadcasts task events on
   `task:<id>`, records usage/audit. It is the single writer of a task's
   transcript, so tool-call correlation and the open message row live in
   its state rather than in SQL. Board notifications (`project:<id>` →
-  `:board_changed`) come from `CodeLead.Tasks` on every task write.
+  `:board_changed`) come from `CodeLead.Tasks` on every task write —
+  and, writeless, from `Tasks.notify_board_change/1` when live-run
+  state changes (survey start/end).
 - `CodeLead.Acp.Connection` — Port bridge per ACP subprocess.
 - `CodeLead.Executor.Devcontainer.Bootstrap` — one-shot boot task:
   stages baked harness runtimes onto the workspace and reaps labeled

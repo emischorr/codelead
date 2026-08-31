@@ -34,6 +34,7 @@ defmodule CodeLead.Reviews do
   alias CodeLead.Projects
   alias CodeLead.Repo
   alias CodeLead.Reviews.Review
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
 
@@ -132,11 +133,32 @@ defmodule CodeLead.Reviews do
         record_review(task, reviewer, cycle, nil, "review crashed: #{inspect(reason)}", nil)
     end)
 
-    {:ok, updated} = Tasks.set_attention(Tasks.get_task!(task.id), :review_ready, nil, :advisory)
+    # A cancelled cycle's task has already left Review under a human
+    # decision — raising :review_ready on the Planning card would lie.
+    refreshed = Tasks.get_task!(task.id)
+
+    updated =
+      if refreshed.state == :review do
+        {:ok, updated} = Tasks.set_attention(refreshed, :review_ready, nil, :advisory)
+        updated
+      else
+        refreshed
+      end
+
     broadcast(updated, {:review_cycle_completed, cycle})
   end
 
   defp run_reviewer(task, %Agent{} = reviewer, cycle, artifact) do
+    # Claimed before any work so the key's uniqueness holds; the exit
+    # path (`on_timeout: :kill_task`) unregisters via the registry's
+    # pid monitor. A clash here is a duplicate reviewer in one cycle —
+    # a bug upstream, so crashing into the exit row is correct.
+    :ok =
+      LiveRuns.register(task.id, {:review, reviewer.id}, %{
+        agent_id: reviewer.id,
+        agent_name: reviewer.name
+      })
+
     started_at = DateTime.utc_now(:second)
     monotonic_start = System.monotonic_time(:millisecond)
     prompt = review_prompt(task, reviewer, artifact)
@@ -146,6 +168,9 @@ defmodule CodeLead.Reviews do
       case AdvisoryRun.run(task, reviewer, context, prompt, timeout: @review_run_timeout) do
         {:ok, result} ->
           result
+
+        {:error, :cancelled} ->
+          %{status: :cancelled, content: "task left Review", usage: nil}
 
         {:error, reason} ->
           %{status: :error, content: "review failed: #{inspect(reason)}", usage: nil}

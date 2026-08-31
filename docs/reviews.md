@@ -1,4 +1,4 @@
-# Review cycle (last updated: 2026-08-28)
+# Review cycle (last updated: 2026-08-31, reviewers registered as live runs)
 
 Implemented in `CodeLead.Reviews`. Reviewers are ordinary agents with
 `:review` in `roles`, matched to the task's work type, selected per
@@ -75,9 +75,17 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
   a minute longer, so the deadline that cancels the driver and still
   records a row is the one that fires). Neither is answerable for an
   advisory run — see the gap noted in [`planning.md`](planning.md).
+- Each reviewer run registers itself in `CodeLead.Runtime.LiveRuns`
+  under `{task_id, :review, agent_id}` as its first act — the key's
+  uniqueness is the one-run-per-reviewer rule, and the registry (not
+  any state on the task) is the truth about which reviewers are still
+  live. See [`architecture.md`](architecture.md).
 - When the cycle completes: attention `:review_ready` +
-  `{:review_cycle_completed, cycle}` on the task topic. Cycles
-  increment per Review entry; prior cycles are retained for audit.
+  `{:review_cycle_completed, cycle}` on the task topic — unless the
+  task has already left Review under a human decision (a cancelled
+  cycle must not raise attention on a card back in Planning; the
+  broadcast still fires). Cycles increment per Review entry; prior
+  cycles are retained for audit.
 
 ## Human decision (all via `CodeLead.Runtime`)
 
@@ -90,3 +98,20 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
 - `Tasks.approve(task)` — → Done (finalization in Step 12).
 
 Verdicts gate nothing; the human weighs all findings.
+
+## Leaving Review cancels live reviewers
+
+All three decisions above supersede pending advisory output, so each
+first calls `LiveRuns.cancel_advisory/1`: every registered advisory run
+on the task receives `:advisory_cancel`, on which `AdvisoryRun` cancels
+its driver and returns `{:error, :cancelled}` — the reviewer still
+records its rows (`reviews` row with no verdict, `agent_runs` with
+status `:cancelled`, its `:review` step) and the cycle completes
+normally. `cancel_advisory/1` **waits** (bounded, 15s) for the
+processes to exit before the transition proceeds, because
+send-back's worktree discard and approve's finalize-prune must not run
+under a live reader; a straggler past the deadline is logged and the
+human's decision stands. Never cancel a reviewer by killing its
+process: the driver is linked, so a kill takes the harness down with
+no rows recorded — that is what the `:advisory_cancel` path exists to
+avoid.

@@ -13,6 +13,7 @@ defmodule CodeLeadWeb.BoardLive do
   alias CodeLead.Projects
   alias CodeLead.Reviews
   alias CodeLead.Runtime
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Tasks
   alias CodeLead.Tasks.Task
   alias CodeLeadWeb.FlashMessages
@@ -183,6 +184,9 @@ defmodule CodeLeadWeb.BoardLive do
       review_verdicts: Reviews.verdicts_by_task(review_ids),
       reviewer_counts: Map.new(review_ids, &{&1, length(Tasks.reviewers(&1))}),
       done_notes: Tasks.commit_notes(Enum.map(board.done, & &1.id)),
+      # Live-process truth, not task state: surveys write nothing to the
+      # row, so the board reads the registry on every (re)load.
+      surveying: MapSet.new(LiveRuns.surveying_task_ids()),
       agents: Map.new(Agents.list_agents(project.id), &{&1.id, &1})
     )
     |> NavContext.put_stats(Costs.project_spend_month(project.id))
@@ -383,7 +387,8 @@ defmodule CodeLeadWeb.BoardLive do
       :queued_positions,
       :review_verdicts,
       :reviewer_counts,
-      :done_notes
+      :done_notes,
+      :surveying
     ])
   end
 
@@ -482,11 +487,23 @@ defmodule CodeLeadWeb.BoardLive do
 
   defp card_footer(%{column: :planning} = assigns) do
     agent = assigns.ctx.agents[assigns.task.agent_id]
-    assigns = assign(assigns, startable?: Tasks.startable?(assigns.task, agent))
+
+    assigns =
+      assign(assigns,
+        startable?: Runtime.startable?(assigns.task, agent),
+        surveying?: MapSet.member?(assigns.ctx.surveying, assigns.task.id)
+      )
 
     ~H"""
     <div class="flex items-center gap-1.5 text-[11px] text-text3">
       <span class="font-mono">{@task.work_type} · {@task.target}</span>
+      <span
+        :if={@surveying?}
+        id={"#{@card_id}-surveying-hint"}
+        class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2"
+      >
+        <span class="size-1.5 animate-pulse rounded-full bg-accent" /> surveying
+      </span>
       <div :if={@startable? and @ctx.can_operate?} class="ml-auto flex items-center">
         <button
           type="button"

@@ -323,6 +323,57 @@ defmodule CodeLeadWeb.BoardLiveTest do
     end
   end
 
+  describe "a live planning survey" do
+    # Holds the task's `{task_id, :plan}` registry slot the way a real
+    # survey does: registered from the blocked child itself.
+    defp stub_planner(task_id) do
+      test_pid = self()
+
+      start_supervised!(
+        Supervisor.child_spec(
+          {Elixir.Task,
+           fn ->
+             :ok = CodeLead.Runtime.LiveRuns.register(task_id, :plan, %{agent_name: "Scout"})
+             send(test_pid, :planner_registered)
+
+             receive do
+               :advisory_cancel -> :ok
+             end
+           end},
+          id: make_ref(),
+          restart: :temporary
+        )
+      )
+
+      assert_receive :planner_registered
+      :ok
+    end
+
+    test "the planning card shows the surveying hint and hides Start/Schedule", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      stub_planner(task.id)
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#task-card-#{task.id}-surveying-hint")
+      refute has_element?(view, "#task-card-#{task.id}-start")
+      refute has_element?(view, "#task-card-#{task.id}-schedule")
+    end
+
+    test "the hint appears on the survey's board change without a task write", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+      refute has_element?(view, "#task-card-#{task.id}-surveying-hint")
+
+      stub_planner(task.id)
+      send(view.pid, {:board_changed, project.id, task.id})
+
+      assert has_element?(view, "#task-card-#{task.id}-surveying-hint")
+      refute has_element?(view, "#task-card-#{task.id}-start")
+    end
+  end
+
   describe "PubSub" do
     test "board refreshes when another session changes a task", %{conn: conn} do
       project = project_fixture()

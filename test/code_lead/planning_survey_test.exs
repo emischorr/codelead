@@ -276,6 +276,45 @@ defmodule CodeLead.PlanningSurveyTest do
              Planning.start_refinement(admin_scope(), folder_task, planner.id)
   end
 
+  test "one refinement per task: a second start is refused while one runs" do
+    project = project_fixture()
+    coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})
+    task = task_fixture(project.id, %{work_type: :code, target: :folder})
+    task_id = task.id
+    Phoenix.PubSub.subscribe(CodeLead.PubSub, Tasks.task_topic(task.id))
+
+    test_pid = self()
+
+    Req.Test.stub(CodeLead.LlmApiStub, fn conn ->
+      send(test_pid, {:survey_blocked, self()})
+
+      receive do
+        :release -> :ok
+      end
+
+      Req.Test.json(conn, %{
+        "content" => [%{"type" => "text", "text" => "Done."}],
+        "usage" => %{"input_tokens" => 1, "output_tokens" => 1}
+      })
+    end)
+
+    assert {:ok, :started} = Planning.start_refinement(admin_scope(), task, coach.id)
+    assert_receive {:task_event, ^task_id, {:survey_started, %{agent: agent_name}}}
+    assert agent_name == coach.name
+    assert_receive {:survey_blocked, request_pid}
+
+    assert CodeLead.Runtime.LiveRuns.planner_running?(task.id)
+    assert {:error, :already_running} = Planning.start_refinement(admin_scope(), task, coach.id)
+
+    send(request_pid, :release)
+    assert %{status: :ok} = await_survey(task.id)
+
+    # exactly one row set exists — the refused start did no work
+    assert [_step] = Enum.filter(Tasks.steps(task.id), &(&1.kind == :plan))
+    assert [_run] = Repo.all(AgentRun)
+    assert [%{kind: :survey}] = Planning.list_messages(task.id)
+  end
+
   test "a task-level refinement runs one llm completion and persists findings without a repo" do
     project = project_fixture()
     coach = agent_fixture(%{driver: :llm_api, work_type: :code, roles: [:plan]})

@@ -7,10 +7,11 @@ defmodule CodeLead.AdvisoryRun do
   own run loop.
 
   What this is *not* is the executor path. An advisory run has no
-  `run_state`, is not registered in `CodeLead.Runtime.Registry`, and
-  writes no `agent_events` transcript; the caller owns its rows. It is
-  a blocking call that consumes the driver's event stream and returns
-  the terminal result.
+  `run_state` and writes no `agent_events` transcript; the caller owns
+  its rows — including its `CodeLead.Runtime.LiveRuns` registration,
+  which the caller claims *before* doing any work so the key's
+  uniqueness can refuse a duplicate run. It is a blocking call that
+  consumes the driver's event stream and returns the terminal result.
 
   ## Caller obligations
 
@@ -19,17 +20,27 @@ defmodule CodeLead.AdvisoryRun do
   therefore be an isolated supervised child (`CodeLead.TaskSupervisor`)
   or trap exits — otherwise a crashing harness takes the caller with it.
 
+  ## Cancellation
+
+  An `:advisory_cancel` message — sent by
+  `CodeLead.Runtime.LiveRuns.cancel_advisory/1` when a human decision
+  supersedes pending advisory output — cancels the driver run and
+  returns `{:error, :cancelled}`, so the caller still records its rows.
+  Cancelling by killing the caller instead would take the linked driver
+  down rows-unrecorded; never do that.
+
   ## Escalations
 
   A question or a permission request raises the ordinary `attention`
   field on the task, tagged `source: :advisory`, and the run keeps
-  waiting. Neither is answerable for an advisory run today — the UI's
-  Allow/Deny and Answer route through `CodeLead.Runtime`, which only
-  finds executor runs — so `:timeout` is what ends a run that blocks on
-  one. Surfacing it is still strictly better than the silent drop it
-  replaces. The `:advisory` tag also keeps it out of
-  `CodeLead.Tasks.Attention.blocks_agent?/1`: nothing is actually stuck
-  waiting on an executor here, so it shouldn't raise the hand icon.
+  waiting. Neither is answerable for an advisory run today — the
+  registry now *finds* the run, but the UI's Allow/Deny and Answer
+  still route into the executor's `TaskRunner` — so `:timeout` is what
+  ends a run that blocks on one. Surfacing it is still strictly better
+  than the silent drop it replaces. The `:advisory` tag also keeps it
+  out of `CodeLead.Tasks.Attention.blocks_agent?/1`: nothing is
+  actually stuck waiting on an executor here, so it shouldn't raise
+  the hand icon.
 
   A question is in practice unreachable here: an advisory run provisions
   a read-only context, and the ACP driver only advertises the elicitation
@@ -86,8 +97,10 @@ defmodule CodeLead.AdvisoryRun do
       {:agent_event, ^handle, {:message_chunk, text}} ->
         await(handle, driver, task_id, deadline, content_acc <> text)
 
-      # Deliberately raised without a `ref`: an advisory run is not in the
-      # registry, so an answerable card would have nothing to submit to.
+      # Deliberately raised without a `ref`: nothing routes an answer
+      # into an advisory run yet — the registry finds it, but Answer
+      # targets the executor's TaskRunner — so an answerable card would
+      # have nothing real to submit to.
       {:agent_event, ^handle, {:question, %{detail: detail}}} ->
         raise_attention(task_id, :agent_question, detail, nil)
         await(handle, driver, task_id, deadline, content_acc)
@@ -98,6 +111,10 @@ defmodule CodeLead.AdvisoryRun do
 
       {:agent_event, ^handle, _other} ->
         await(handle, driver, task_id, deadline, content_acc)
+
+      :advisory_cancel ->
+        driver.cancel(handle)
+        {:error, :cancelled}
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
         driver.cancel(handle)

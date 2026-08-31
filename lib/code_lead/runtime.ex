@@ -15,6 +15,8 @@ defmodule CodeLead.Runtime do
   alias CodeLead.AgentDriver
   alias CodeLead.Accounts.Policy
   alias CodeLead.Accounts.Scope
+  alias CodeLead.Agents.Agent
+  alias CodeLead.Runtime.LiveRuns
   alias CodeLead.Runtime.StageEffects
   alias CodeLead.Runtime.TaskRunner
   alias CodeLead.Tasks
@@ -41,6 +43,7 @@ defmodule CodeLead.Runtime do
 
     with :ok <- authorize_actor(task, opts),
          {:ok, edge} <- fetch_edge(workflow, task, edge_keys),
+         :ok <- check_stage_exit(workflow, task),
          {:ok, prepared} <- StageEffects.prepare(target.stage_type, task),
          {:ok, updated} <- Tasks.apply_transition(task, edge_keys, opts) do
       cleanup = apply_worktree_policy(task, edge.worktree_policy)
@@ -110,6 +113,38 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
+  Whether the human may start (or schedule) the task right now: the
+  pure data checks from `Tasks.startable/2` plus the live-process rule
+  that a running planning survey freezes the card. Board and task page
+  both derive their Start/Schedule affordances from this one answer.
+  """
+  @spec startable(Task.t(), Agent.t() | nil) :: :ok | {:error, atom()}
+  def startable(%Task{} = task, executor) do
+    if LiveRuns.planner_running?(task.id) do
+      {:error, :planning_agent_running}
+    else
+      Tasks.startable(task, executor)
+    end
+  end
+
+  @spec startable?(Task.t(), Agent.t() | nil) :: boolean()
+  def startable?(%Task{} = task, executor), do: startable(task, executor) == :ok
+
+  @doc """
+  Deletes the task unless a planning agent is still surveying it.
+  Delete is not a workflow edge, so the live-process guard lives in
+  this wrapper; `Tasks.delete_task/2` stays the pure operation.
+  """
+  @spec delete_task(Scope.t() | nil, Task.t()) :: {:ok, Task.t()} | {:error, term()}
+  def delete_task(scope, %Task{} = task) do
+    if LiveRuns.planner_running?(task.id) do
+      {:error, :planning_agent_running}
+    else
+      Tasks.delete_task(scope, task)
+    end
+  end
+
+  @doc """
   Re-queues a failed run and kicks the scheduler. A retry stays inside
   the Running stage — it moves `run_state`, not the card — so it is not
   a workflow edge.
@@ -150,11 +185,15 @@ defmodule CodeLead.Runtime do
 
   @doc """
   Review → Running with the same agent, worktree, branch, and session:
-  the feedback becomes the next prompt and commits accumulate.
+  the feedback becomes the next prompt and commits accumulate. Live
+  reviewers are cancelled first — the human's decision supersedes
+  their pending verdicts.
   """
   @spec request_changes(Scope.t() | nil, Task.t(), String.t()) ::
           {:ok, Task.t()} | Tasks.transition_error()
   def request_changes(scope, %Task{} = task, feedback) do
+    :ok = cancel_advisory_first(scope, task)
+
     task
     |> advance({:review, :running},
       actor: :human,
@@ -174,12 +213,17 @@ defmodule CodeLead.Runtime do
   container run) still transitions — the human's decision stands — but
   comes back as `{:ok, task, {:cleanup_failed, reason}}` so the UI can
   say so instead of flashing a clean success.
+
+  Live reviewers are cancelled — and waited out — first: the discard
+  must not remove the worktree under a reader.
   """
   @spec send_back_to_planning(Scope.t() | nil, Task.t()) ::
           {:ok, Task.t()}
           | {:ok, Task.t(), {:cleanup_failed, term()}}
           | Tasks.transition_error()
   def send_back_to_planning(scope, %Task{} = task) do
+    :ok = cancel_advisory_first(scope, task)
+
     task
     |> advance({:review, :planning},
       actor: :human,
@@ -216,6 +260,11 @@ defmodule CodeLead.Runtime do
           | {:error, term()}
           | Tasks.transition_error()
   def approve(scope, %Task{} = task) do
+    # Reviews are advisory, so approving over live reviewers is legal —
+    # but the finalize stage may prune the worktree on entry, which
+    # must not happen under a reader, so they are cancelled first.
+    :ok = cancel_advisory_first(scope, task)
+
     # The Review → Done edge keeps the worktree (pruning is the finalize
     # outcome's call, applied in on_enter), so the cleanup element is
     # structurally :ok and carries nothing worth surfacing.
@@ -259,6 +308,34 @@ defmodule CodeLead.Runtime do
   end
 
   defp fetch_edge(_workflow, %Task{}, _edge_keys), do: {:error, :invalid_state}
+
+  # A live planning survey freezes the card: its output must land on
+  # the task the human asked about, so edges leaving a :plan stage
+  # refuse until it finishes. Runs after `fetch_edge/3`, so the task is
+  # known to sit at the edge's from-stage.
+  defp check_stage_exit(workflow, %Task{} = task) do
+    source = Workflow.stage(workflow, task.state)
+
+    if source.stage_type == :plan and LiveRuns.planner_running?(task.id) do
+      {:error, :planning_agent_running}
+    else
+      :ok
+    end
+  end
+
+  # Terminating reviewers is a side effect, so it takes the same
+  # authorization as the edge it precedes — an unauthorized click must
+  # not kill anything (`advance/3` still re-authorizes before writing).
+  # Off the Review column this is a no-op; the edge lookup will refuse.
+  defp cancel_advisory_first(scope, %Task{state: :review} = task) do
+    if Policy.authorize(scope, :operate_task, task) == :ok do
+      LiveRuns.cancel_advisory(task.id)
+    end
+
+    :ok
+  end
+
+  defp cancel_advisory_first(_scope, %Task{}), do: :ok
 
   defp apply_worktree_policy(%Task{} = task, :discard), do: StageEffects.discard_context(task)
   defp apply_worktree_policy(%Task{}, :keep), do: :ok

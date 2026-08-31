@@ -75,6 +75,15 @@ Operator-facing files (`deployment/*`) stay minimal: one-line comments with doc
 pointers, no architecture explanations — first-time operators haven't read the
 architecture and shouldn't need to. Technical depth belongs in `docs/`.
 
+**LiveViews do not own work.** A LiveView initiates side-effecting work through a
+context or `Runtime` function that returns immediately, subscribes to the task topic,
+and renders from two sources of truth: the task row for durable state and
+`CodeLead.Runtime.Registry` (via `CodeLead.Runtime.LiveRuns`) for live processes.
+`start_async` is for read-only fetches (the diff). Anything that writes, pushes, or
+calls a model runs under `TaskSupervisor`, a `GenServer`, or Oban, and must stay
+correct if every browser tab closes. See ADR-0002 (the transcript) and ADR-0015
+(live runs).
+
 ## Architecture to build toward
 
 CodeLead is a self-hosted, human-in-the-loop platform where a product owner directs a team of AI agents. The organizing principle: **humans own every handoff between workflow states.** Automation that bypasses a human decision point is a design failure. The single exception is Running→Review on success, which is a completion signal rather than a decision.
