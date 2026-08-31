@@ -1,4 +1,4 @@
-# Git plumbing & workspace (last updated: 2026-08-20)
+# Git plumbing & workspace (last updated: 2026-08-31, background finalization + PR reuse)
 
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
@@ -191,6 +191,31 @@ Three things about that order are deliberate:
 Nothing is ever force-pushed. Deleting the remote branch is best-effort
 and swallowed: the merge has landed by then, so a leftover branch on
 the forge is cosmetic, not a reason to fail Done.
+
+## Finalization is background work, and PR creation is idempotent
+
+Since ADR-0016 all of the above runs in a supervised worker, not in
+the approving user's LiveView; the task carries
+`run_state: :finalizing` for the duration and is frozen against other
+edges. Two consequences for the remote:
+
+- **PR reuse.** Before opening a PR/MR the finalizer asks the forge for
+  an open one whose head is the task's branch (GitHub
+  `GET /pulls?head=<owner>:<branch>&state=open`, GitLab
+  `GET /merge_requests?source_branch=<branch>&state=opened`) and reuses
+  its URL — the outcome note says "already open — reused", so approving
+  a task whose earlier finalization already opened a PR never opens a
+  second. A failed lookup degrades to the POST, whose 422 duplicate
+  answer still falls back to the compare link.
+- **Interrupted finalization.** A restart mid-finalize leaves no
+  worker; at boot the task is reset to `review/idle` with a
+  `:finalize_interrupted` attention telling the operator to check the
+  remote for a pushed branch or an open pull request before approving
+  again. It is never retried automatically: the push may or may not
+  have landed, and a blind re-run could double-merge — the PR-reuse GET
+  above is what makes the *human's* second approve safe. Merge/squash
+  have no equivalent dedupe; their protection is the pushed-first
+  branch and the readable conflict error.
 
 ## Credentials
 

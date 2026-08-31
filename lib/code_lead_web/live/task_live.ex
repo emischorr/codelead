@@ -184,9 +184,11 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   def handle_event("approve", _params, socket) do
+    # Returns immediately with run_state :finalizing; the outcome flash
+    # arrives with {:finalize_completed, _} / {:finalize_failed, _}.
     case Runtime.approve(socket.assigns.current_scope, socket.assigns.task) do
-      {:ok, _task, outcome} ->
-        {:noreply, socket |> put_flash(:info, outcome.note) |> load_task()}
+      {:ok, _task} ->
+        {:noreply, load_task(socket)}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, FlashMessages.finalize_error(reason))}
@@ -197,6 +199,9 @@ defmodule CodeLeadWeb.TaskLive do
     case Tasks.set_finalize_mode(socket.assigns.current_scope, socket.assigns.task, mode) do
       {:ok, _task} ->
         {:noreply, load_task(socket)}
+
+      {:error, :finalizing} ->
+        {:noreply, put_flash(socket, :error, FlashMessages.finalize_error(:finalizing))}
 
       {:error, _changeset} ->
         {:noreply,
@@ -1348,10 +1353,24 @@ defmodule CodeLeadWeb.TaskLive do
     assign(socket, survey_delta: Map.get(summary, :delta))
   end
 
+  # The finalize worker's terminal events flash — a departure from the
+  # assign-only clauses above, deliberate: the click already returned,
+  # so the message is the only carrier of the outcome. Both events are
+  # state-bearing, so `maybe_reload` refreshes the page around them.
+  defp ingest_event(socket, {:finalize_completed, outcome}) do
+    put_flash(socket, :info, outcome.note)
+  end
+
+  defp ingest_event(socket, {:finalize_failed, reason}) do
+    put_flash(socket, :error, FlashMessages.finalize_error(reason))
+  end
+
   defp ingest_event(socket, _event), do: socket
 
   @state_bearing_events [
     :survey_started,
+    :finalize_completed,
+    :finalize_failed,
     :run_started,
     :run_completed,
     :run_failed,
@@ -1435,6 +1454,14 @@ defmodule CodeLeadWeb.TaskLive do
             class="hidden items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2 sm:inline-flex"
           >
             ⏱ starts {Format.absolute(@task.scheduled_at)}
+          </span>
+          <span
+            :if={@task.run_state == :finalizing}
+            id="finalizing-hint"
+            class="hidden items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2 sm:inline-flex"
+          >
+            <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+            {Format.finalizing_hint(@finalize_mode)}
           </span>
           <.agent_pill :if={@executor} name={@executor.name} harness={@executor.harness} />
           <.cost_stat
@@ -1655,10 +1682,14 @@ defmodule CodeLeadWeb.TaskLive do
   end
 
   defp header_actions(%{task: %{state: :review}} = assigns) do
+    assigns = assign(assigns, :finalizing?, assigns.task.run_state == :finalizing)
+
     ~H"""
     <.button
       variant="ghost"
       phx-click="send_back"
+      disabled={@finalizing?}
+      title={@finalizing? && "This task is being finalized."}
       id={action_id("send-back", @mobile)}
       class={@mobile && "flex-1"}
     >
@@ -1666,6 +1697,8 @@ defmodule CodeLeadWeb.TaskLive do
     </.button>
     <.button
       phx-click="toggle_feedback"
+      disabled={@finalizing?}
+      title={@finalizing? && "This task is being finalized."}
       class={@mobile && "flex-1"}
       id={action_id("request-changes", @mobile)}
     >
@@ -1675,7 +1708,13 @@ defmodule CodeLeadWeb.TaskLive do
       variant="primary"
       phx-click="approve"
       phx-disable-with="Finalizing…"
-      title={Format.finalize_hint(@finalize_mode, @base_branch)}
+      disabled={@finalizing?}
+      title={
+        if(@finalizing?,
+          do: "This task is being finalized.",
+          else: Format.finalize_hint(@finalize_mode, @base_branch)
+        )
+      }
       class={@mobile && "flex-1"}
       id={action_id("approve", @mobile)}
     >

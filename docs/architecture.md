@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-31, run-kind live-run registry)
+# Architecture overview (last updated: 2026-08-31, background finalization)
 
 How the implemented modules map to the architecture spec. The specs
 (`../codelead-*.md`) remain the target-state source of truth; this
@@ -103,7 +103,17 @@ note is the "how it works today" map.
   publishing the preview port on an ephemeral host port (ADR-0009).
 - `CodeLead.Finalizer` — the system executor behind Approve → Done,
   dispatched on the task's target and its resolved finalize mode (PR,
-  merge, squash, artifact, commit-to-path).
+  merge, squash, artifact, commit-to-path). Since ADR-0016 it runs in a
+  supervised `TaskSupervisor` worker (`Runtime.finalize/1`, registered
+  as `{task_id, :finalize}` in the live-run registry) behind the atomic
+  `run_state: :finalizing` marker `Tasks.begin_finalize/2` claims —
+  never in the LiveView. PR creation is idempotent: an open PR/MR whose
+  head is the task's branch is reused, not duplicated.
+- `CodeLead.Runtime.FinalizeReconciler` — blocking boot one-shot
+  (gated off in test): resets `run_state: :finalizing` rows a restart
+  orphaned back to `review/idle` with a `:finalize_interrupted`
+  attention. Deliberately never retries — push/PR/merge are not
+  idempotent from the outside; a human judges the remote.
 - `CodeLead.Vault` — Cloak encryption (provider config, project env).
 - `CodeLead.Agents.SubscriptionUsageCache` — polls every
   `:anthropic_subscription` provider's rate-limit windows on a timer,

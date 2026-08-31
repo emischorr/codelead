@@ -105,7 +105,13 @@ defmodule CodeLead.RuntimeTest do
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
-    _ = :sys.get_state(CodeLead.Runtime.Registry)
+
+    # Drain the registry's partition processes (which handle the DOWNs;
+    # the registered name is only their supervisor).
+    CodeLead.Runtime.Registry
+    |> Supervisor.which_children()
+    |> Enum.each(fn {_id, partition, _type, _modules} -> _ = :sys.get_state(partition) end)
+
     :ok
   end
 

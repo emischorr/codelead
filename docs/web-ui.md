@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-31, registry-derived survey state)
+# Web UI (last updated: 2026-08-31, background finalization)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -344,7 +344,11 @@ survey wears a pulsing `<card_id>-surveying-hint` pill. That state is
 registry-derived on every load; the survey's start/end reach the board
 as writeless `{:board_changed, _, _}` broadcasts
 (`Tasks.notify_board_change/1`), so a missed broadcast merely delays
-the pill until the next reload.
+the pill until the next reload. A Review card whose task is being
+finalized wears the matching `<card_id>-finalizing-hint` pill — read
+straight off `task.run_state` (persisted state, unlike the surveying
+pill), refreshed by the ordinary board broadcasts every finalization
+write emits.
 No drag & drop — explicit Start (planning footer) and Archive (done
 footer) actions. It was considered and turned down. A board move here is
 not the harmless reordering it is in a generic issue tracker: every edge
@@ -458,6 +462,22 @@ label reads *Approve & push branch*.
 One `header_actions/1` clause feeds both the desktop toolbar and the
 mobile bar, so ids come from `action_id/2` (`m-` prefixed on mobile).
 
+Approve is **asynchronous** (ADR-0016): the click calls
+`Runtime.approve/2`, which claims the task (`run_state: :finalizing`)
+and returns; a supervised worker does the push/PR work. While
+finalizing, a pulsing `#finalizing-hint` next to the state badge reads
+the in-flight action from `Format.finalizing_hint/1` ("Finalizing —
+opening PR…"), and Approve / Request changes / Send back plus the
+`#finalize-form` selector are disabled with "This task is being
+finalized." as their tooltip — all derived from `@task.run_state`, so
+a fresh mount shows the same truth. The worker's terminal events on
+the task topic — `{:finalize_completed, outcome}` /
+`{:finalize_failed, reason}` — are state-bearing *and* flash
+(`outcome.note` / `FlashMessages.finalize_error/1`; the one place
+`ingest_event/2` flashes, because the click that would have carried
+the flash already returned). A failure lands as the task's
+`:finalize_failed` attention with the same text.
+
 The mobile bar is an in-flow `shrink-0` flex child of `<main>`, not
 `fixed` — it shortens the scroll pane above it rather than covering it.
 Tab panes therefore add **no** bottom padding to clear it (the pane used
@@ -554,7 +574,10 @@ above the bar instead of underneath it.
   carries the **On approve** selector (`#finalize-form`, another bare
   `phx-change` form) until the task is Done: its first option is
   *Project default · \<mode\>* with an empty value, so clearing the
-  override is distinguishable from choosing the project's current mode.
+  override is distinguishable from choosing the project's current mode;
+  it is disabled while the task is finalizing (server-guarded too —
+  `Tasks.set_finalize_mode/3` refuses with `:finalizing` — since a
+  mid-flight mode change would make the finalizing hint lie).
   A done `:folder` task shows its download here too
   (`#task-artifact-link`). Both surfaces go through
   `Tasks.update_task/2`, which re-normalizes a Planning edit: a `:repo`

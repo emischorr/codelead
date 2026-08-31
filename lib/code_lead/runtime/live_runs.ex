@@ -5,9 +5,10 @@ defmodule CodeLead.Runtime.LiveRuns do
 
   Keys encode the run *kind* — `{task_id, :execute}` for the task
   runner, `{task_id, :plan}` for the planning survey,
-  `{task_id, :review, agent_id}` per reviewer — so uniqueness of the
-  key is the concurrency rule: one executor, one planner, and one run
-  per reviewer agent per task. No counters, no policy code. The
+  `{task_id, :review, agent_id}` per reviewer, `{task_id, :finalize}`
+  for the background finalizer — so uniqueness of the key is the
+  concurrency rule: one executor, one planner, one finalizer, and one
+  run per reviewer agent per task. No counters, no policy code. The
   registry monitors registered pids, so a crashed run unregisters
   itself.
 
@@ -22,9 +23,9 @@ defmodule CodeLead.Runtime.LiveRuns do
 
   @cancel_timeout :timer.seconds(15)
 
-  @type advisory_kind :: :plan | {:review, pos_integer()}
+  @type registerable_kind :: :plan | :finalize | {:review, pos_integer()}
   @type meta :: %{
-          kind: :execute | :plan | :review,
+          kind: :execute | :plan | :review | :finalize,
           agent_id: pos_integer() | nil,
           agent_name: String.t() | nil,
           started_at: DateTime.t()
@@ -35,7 +36,7 @@ defmodule CodeLead.Runtime.LiveRuns do
   is deliberately self-only: the registry monitors the pid, so a crash
   cleans up without any caller bookkeeping.
   """
-  @spec register(pos_integer(), advisory_kind(), map()) :: :ok | {:error, :already_running}
+  @spec register(pos_integer(), registerable_kind(), map()) :: :ok | {:error, :already_running}
   def register(task_id, kind, extra \\ %{}) do
     case Registry.register(@registry, key(task_id, kind), build_meta(kind, extra)) do
       {:ok, _owner} -> :ok
@@ -96,10 +97,12 @@ defmodule CodeLead.Runtime.LiveRuns do
   end
 
   @doc """
-  Asks every advisory run on the task to stop and waits — bounded —
-  for the processes to exit, so a worktree discarded right after
-  cannot be pulled out from under a live reader. Always returns `:ok`;
-  stragglers past the deadline are logged, not fatal.
+  Asks every advisory run (`:plan` and `:review` — never the
+  `:finalize` worker, which is a caller of this) on the task to stop
+  and waits — bounded — for the processes to exit, so a worktree
+  discarded right after cannot be pulled out from under a live reader.
+  Always returns `:ok`; stragglers past the deadline are logged, not
+  fatal.
   """
   @spec cancel_advisory(pos_integer()) :: :ok
   def cancel_advisory(task_id) do
@@ -137,6 +140,7 @@ defmodule CodeLead.Runtime.LiveRuns do
 
   defp key(task_id, :execute), do: {task_id, :execute}
   defp key(task_id, :plan), do: {task_id, :plan}
+  defp key(task_id, :finalize), do: {task_id, :finalize}
   defp key(task_id, {:review, agent_id}), do: {task_id, :review, agent_id}
 
   defp build_meta(kind, extra) do
@@ -149,5 +153,5 @@ defmodule CodeLead.Runtime.LiveRuns do
   end
 
   defp kind_atom({:review, _agent_id}), do: :review
-  defp kind_atom(kind) when kind in [:execute, :plan], do: kind
+  defp kind_atom(kind) when kind in [:execute, :plan, :finalize], do: kind
 end

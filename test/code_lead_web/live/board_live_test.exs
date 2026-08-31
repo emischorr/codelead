@@ -374,6 +374,27 @@ defmodule CodeLeadWeb.BoardLiveTest do
     end
   end
 
+  describe "a running finalization" do
+    test "the review card wears the finalizing pill", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = task |> executing_task() |> put_context!(%{state: :review, run_state: :finalizing})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#task-card-#{task.id}-finalizing-hint")
+    end
+
+    test "an idle review card has no pill", %{conn: conn} do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = task |> executing_task() |> put_context!(%{state: :review, run_state: :idle})
+
+      {:ok, view, _html} = live(conn, ~p"/projects/#{project.id}/board")
+
+      assert has_element?(view, "#task-card-#{task.id}")
+      refute has_element?(view, "#task-card-#{task.id}-finalizing-hint")
+    end
+  end
+
   describe "PubSub" do
     test "board refreshes when another session changes a task", %{conn: conn} do
       project = project_fixture()

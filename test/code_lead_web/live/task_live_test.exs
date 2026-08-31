@@ -831,6 +831,58 @@ defmodule CodeLeadWeb.TaskLiveTest do
     end
   end
 
+  describe "a running finalization" do
+    defp finalizing_view(conn) do
+      %{task: task, project: project} = runnable_task_fixture()
+      task = task |> executing_task() |> put_context!(%{state: :review, run_state: :finalizing})
+
+      {:ok, view, _html} = live(conn, task_path(project, task, "task"))
+      %{view: view, task: task}
+    end
+
+    test "a fresh mount derives the hint and the frozen actions from the row", %{conn: conn} do
+      %{view: view} = finalizing_view(conn)
+
+      assert has_element?(view, "#finalizing-hint")
+      assert render(element(view, "#finalizing-hint")) =~ "Finalizing — opening PR…"
+
+      assert has_element?(view, "#action-approve[disabled]")
+      assert has_element?(view, "#action-request-changes[disabled]")
+      assert has_element?(view, "#action-send-back[disabled]")
+      assert render(element(view, "#action-approve")) =~ "This task is being finalized."
+      assert has_element?(view, "#finalize-form select[disabled]")
+    end
+
+    test "the completion event flashes the outcome and renders the Done actions", %{conn: conn} do
+      %{view: view, task: task} = finalizing_view(conn)
+
+      # The worker's transition already happened elsewhere; the event is
+      # the reload hint plus the only carrier of the outcome note.
+      put_context!(task, %{state: :done, run_state: :idle, pr_url: "https://x/pull/1"})
+
+      send(
+        view.pid,
+        {:task_event, task.id,
+         {:finalize_completed, %{note: "github pull request opened", cleanup: :prune_context}}}
+      )
+
+      assert render(view) =~ "github pull request opened"
+      refute has_element?(view, "#finalizing-hint")
+      assert has_element?(view, "#action-open-pr")
+    end
+
+    test "the failure event flashes the reason and re-enables the Review actions", %{conn: conn} do
+      %{view: view, task: task} = finalizing_view(conn)
+
+      put_context!(task, %{run_state: :idle})
+      send(view.pid, {:task_event, task.id, {:finalize_failed, :no_artifact}})
+
+      assert render(view) =~ "there is no artifact to hand over"
+      refute has_element?(view, "#action-approve[disabled]")
+      refute has_element?(view, "#finalizing-hint")
+    end
+  end
+
   describe "review findings" do
     defp review_fixture(task, agent, attrs \\ %{}) do
       step = Tasks.record_step(task.id, :review, :agent, agent.name, "review cycle 1: concerns")

@@ -33,11 +33,14 @@ defmodule CodeLead.Runtime.LiveRunsTest do
     pid
   end
 
-  # Registry entry cleanup after a DOWN is asynchronous; draining the
-  # partition process's queue makes it observable without sleeping.
+  # Registry entry cleanup after a DOWN is asynchronous, and the DOWN is
+  # handled by the registry's *partition* processes — the registered name
+  # is only their supervisor. Draining each partition's queue makes the
+  # cleanup observable without sleeping.
   defp sync_registry do
-    _ = :sys.get_state(CodeLead.Runtime.Registry)
-    :ok
+    CodeLead.Runtime.Registry
+    |> Supervisor.which_children()
+    |> Enum.each(fn {_id, pid, _type, _modules} -> _ = :sys.get_state(pid) end)
   end
 
   test "one planner per task: the key refuses a second registration" do

@@ -28,6 +28,10 @@ defmodule CodeLead.Application do
         {Oban, Application.fetch_env!(:code_lead, Oban)},
         {DNSCluster, query: Application.get_env(:code_lead, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: CodeLead.PubSub},
+        # Blocking one-shot (needs Repo and PubSub above): flags
+        # finalizations a restart interrupted for human review. Never
+        # retries them and never fails boot.
+        CodeLead.Runtime.FinalizeReconciler,
         CodeLead.Agents.SubscriptionUsageCache,
         # Before the run supervisor: TaskRunner preflights (and the
         # Bootstrap task below) call into it.

@@ -81,6 +81,17 @@ defmodule CodeLeadWeb.Format do
   def finalize_action(:commit_to_path, _forge_known?), do: "Approve & commit artifact"
 
   @doc """
+  The in-flight version of `finalize_action/2`: what the background
+  finalizer is doing right now, for the task header's pill.
+  """
+  @spec finalizing_hint(atom()) :: String.t()
+  def finalizing_hint(:pull_request), do: "Finalizing — opening PR…"
+  def finalizing_hint(:merge), do: "Finalizing — merging…"
+  def finalizing_hint(:squash), do: "Finalizing — squash-merging…"
+  def finalizing_hint(:artifact), do: "Finalizing — handing over…"
+  def finalizing_hint(:commit_to_path), do: "Finalizing — committing artifact…"
+
+  @doc """
   The same label for the mobile action bar, where only a verb fits.
   """
   @spec finalize_action_short(atom()) :: String.t()

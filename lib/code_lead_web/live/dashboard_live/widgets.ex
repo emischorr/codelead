@@ -292,12 +292,15 @@ defmodule CodeLeadWeb.DashboardLive.Widgets do
   defp run_state_label(:dispatched), do: "provisioning"
   defp run_state_label(:executing), do: "executing"
   defp run_state_label(:failed), do: "failed"
+  defp run_state_label(:finalizing), do: "finalizing"
   defp run_state_label(other), do: to_string(other)
 
   defp attention_label(:run_failed), do: "Failed"
   defp attention_label(:review_ready), do: "Review"
   defp attention_label(:agent_question), do: "Question"
   defp attention_label(:permission_request), do: "Permission"
+  defp attention_label(:finalize_failed), do: "Finalize failed"
+  defp attention_label(:finalize_interrupted), do: "Interrupted"
   defp attention_label(_other), do: "Attention"
 
   defp executor_chip(:human), do: "bg-accent-soft text-accent"

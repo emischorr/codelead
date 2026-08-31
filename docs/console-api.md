@@ -1,4 +1,4 @@
-# Console API walkthrough (last updated: 2026-08-15)
+# Console API walkthrough (last updated: 2026-08-31)
 
 The MVP has no web UI yet — the human interface is the IEx console.
 Everything below uses the exact context functions the future LiveView
@@ -85,7 +85,15 @@ CodeLead.Git.diff(task.worktree_path, repo.default_branch) |> elem(1) |> IO.puts
 # Decide:
 {:ok, task} = Runtime.request_changes(task, "Add tests for the toggle")  # same branch/session
 {:ok, task} = Runtime.send_back_to_planning(task)                        # discard everything
-{:ok, task, outcome} = Runtime.approve(task)                             # commit, push, PR/compare
+
+# Approve is asynchronous: it claims the task (run_state: :finalizing)
+# and a supervised worker does the commit/push/PR — the outcome arrives
+# as {:finalize_completed, outcome} on the task topic.
+{:ok, task} = Runtime.approve(scope, task)
+
+# Synchronous alternative for driving it from the shell:
+{:ok, task} = Tasks.begin_finalize(scope, task)
+{:ok, task, outcome} = Runtime.finalize(task)                            # commit, push, PR/compare
 ```
 
 ## 4. Costs & board

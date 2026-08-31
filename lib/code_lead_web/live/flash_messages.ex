@@ -5,8 +5,6 @@ defmodule CodeLeadWeb.FlashMessages do
   refusals for the settings pages.
   """
 
-  alias CodeLead.Git
-
   @spec transition_error(term()) :: String.t()
   def transition_error(:invalid_state),
     do: "That action isn't available in the task's current state."
@@ -31,6 +29,9 @@ defmodule CodeLeadWeb.FlashMessages do
     do:
       "Container execution requires a commercial license. Switch this task's " <>
         "execution back to Local, or set a LICENSE_KEY that grants it."
+
+  def transition_error(:finalizing),
+    do: "This task is being finalized. Wait for it to finish."
 
   def transition_error(:planning_agent_running),
     do:
@@ -58,48 +59,16 @@ defmodule CodeLeadWeb.FlashMessages do
 
   @doc """
   Explains why Approve → Done could not finalize the work product, in
-  terms of what the operator has to change.
+  terms of what the operator has to change. The failure texts live in
+  `CodeLead.Finalizer.error_message/1` — the background finalize path
+  persists the same string as the task's attention detail, so banner
+  and flash cannot drift.
   """
   @spec finalize_error(term()) :: String.t()
   def finalize_error(:invalid_state), do: transition_error(:invalid_state)
-
-  def finalize_error(
-        {:push_failed, {:remote, %{output: output, forge: forge, token_present?: present?}}}
-      ) do
-    "Could not finalize — " <> Git.remote_failure("push the branch", output, forge, present?)
-  end
-
-  def finalize_error({:push_failed, :no_worktree}),
-    do: "This task has no worktree to push. Send it back to Planning and run it again."
-
-  def finalize_error({:push_failed, :no_branch}),
-    do: "This task has no feature branch to push. Send it back to Planning and run it again."
-
-  def finalize_error({:push_failed, :worktree_missing}),
-    do:
-      "The task's worktree is gone from disk, so there is nothing to push. " <>
-        "Send it back to Planning and run it again."
-
-  def finalize_error(
-        {:merge_failed,
-         {:remote, %{output: output, forge: forge, token_present?: present?, base_branch: base}}}
-      ) do
-    "Could not finalize — " <> Git.merge_failure(base, output, forge, present?)
-  end
-
-  # A merge pushes the feature branch before it merges, so every way the
-  # push itself can fail reaches here too — with the same remedies.
-  def finalize_error({:merge_failed, reason}), do: finalize_error({:push_failed, reason})
-
-  def finalize_error(:no_artifact),
-    do: "The task folder is empty — there is no artifact to hand over."
-
-  def finalize_error(:no_artifact_repository),
-    do:
-      "This task finalizes by committing its artifact to a repository, but none is linked. " <>
-        "Pick one in the Target card, or switch the finalize mode to Artifact."
-
-  def finalize_error(other), do: "Finalization failed: #{inspect(other)}"
+  def finalize_error(:finalizing), do: "This task is already being finalized."
+  def finalize_error(:unauthorized), do: transition_error(:unauthorized)
+  def finalize_error(other), do: CodeLead.Finalizer.error_message(other)
 
   @doc """
   Explains why an agent refinement could not start.

@@ -81,8 +81,10 @@ and renders from two sources of truth: the task row for durable state and
 `CodeLead.Runtime.Registry` (via `CodeLead.Runtime.LiveRuns`) for live processes.
 `start_async` is for read-only fetches (the diff). Anything that writes, pushes, or
 calls a model runs under `TaskSupervisor`, a `GenServer`, or Oban, and must stay
-correct if every browser tab closes. See ADR-0002 (the transcript) and ADR-0015
-(live runs).
+correct if every browser tab closes. Worked examples: the transcript (ADR-0002),
+live runs (ADR-0015), and background finalization (ADR-0016 — an atomic
+`run_state` marker claims the work, a supervised worker does it, a boot reconciler
+tells the truth about interruptions and never retries the non-idempotent parts).
 
 ## Architecture to build toward
 

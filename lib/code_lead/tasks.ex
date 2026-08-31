@@ -15,10 +15,12 @@ defmodule CodeLead.Tasks do
   Human gates own every handoff; the single `trigger: :auto` edge is
   Running → Review on successful completion (`complete_run/1`).
 
-  `run_state` is deliberately outside the workflow graph: dispatch
+  `run_state` is deliberately outside the workflow graph: it tracks
+  *system execution inside a stage*, not only Running. Dispatch
   (`begin_dispatch/1`, `mark_executing/2`) and failure (`fail_run/2`,
-  `retry_run/1`) move a task *within* the Running stage and are not
-  edges.
+  `retry_run/1`) move a task within the Running stage; finalization
+  (`begin_finalize/2`, `fail_finalize/2`) within the Review stage.
+  None of them are edges.
 
   Transition map (see `docs/task-workflow.md`):
 
@@ -33,6 +35,8 @@ defmodule CodeLead.Tasks do
   | `cancel_run/1` (human) | running, any | planning, idle (worktree kept) |
   | `request_changes/2` (human) | review | running, queued (context kept) |
   | `send_back_to_planning/1` (human) | review | planning (context discarded) |
+  | `begin_finalize/2` (human) | review, idle | review, finalizing |
+  | `fail_finalize/2` (system) | review, finalizing | review, idle |
   | `approve/1` (human) | review | done |
 
   Side effects that accompany a transition (dispatching the agent,
@@ -60,6 +64,7 @@ defmodule CodeLead.Tasks do
 
   @type transition_error ::
           {:error, :invalid_state}
+          | {:error, :finalizing}
           | {:error, :unauthorized}
           | {:error, :no_executor}
           | {:error, :executor_ineligible}
@@ -318,6 +323,7 @@ defmodule CodeLead.Tasks do
     with :ok <- check_from_stage(task, from),
          {:ok, edge} <- fetch_edge(workflow, from, to),
          target = Workflow.stage(workflow, to),
+         :ok <- check_finalizing(task, target.stage_type, opts),
          :ok <- check_stage_entry(task, target.stage_type) do
       transition(task, transition_changes(edge, target, opts), opts)
     end
@@ -452,6 +458,56 @@ defmodule CodeLead.Tasks do
   end
 
   @doc """
+  Claims the Review task for finalization: the atomic conditional
+  update `review/idle → review/finalizing` that makes a double click —
+  or two users — start exactly one finalization. Clears `attention` (a
+  human acted) and records the human "approved" step; the actual
+  Review → Done transition is the system's, once the finalizer
+  succeeds. Not a workflow edge, so it keeps its own guard like
+  `begin_dispatch/1` — but enforced in the database, because the thing
+  it prevents (a duplicate PR) is not safely retryable.
+  """
+  @spec begin_finalize(Scope.t() | nil, Task.t()) ::
+          {:ok, Task.t()} | {:error, :unauthorized | :finalizing | :invalid_state}
+  def begin_finalize(scope, %Task{} = task) do
+    with :ok <- Policy.authorize(scope, :operate_task, task) do
+      {count, _} =
+        Repo.update_all(
+          from(t in Task,
+            where: t.id == ^task.id and t.state == :review and t.run_state == :idle
+          ),
+          set: [
+            run_state: :finalizing,
+            attention: nil,
+            updated_at: DateTime.utc_now(:second)
+          ]
+        )
+
+      settle_finalize_claim(count, task, scope)
+    end
+  end
+
+  # `update_all` bypasses `transition/3`, so a won claim replicates its
+  # tail here: the audit step and the board broadcast. (No
+  # `task_state_transitions` row — a run_state-only change never
+  # records one, exactly like `begin_dispatch/1`.)
+  defp settle_finalize_claim(1, task, scope) do
+    updated = get_task!(task.id)
+    {name, user_id} = step_actor(:human, scope)
+
+    record_step(updated.id, :transition, :human, name, "approved — finalizing", user_id: user_id)
+
+    broadcast_board_change({:ok, updated})
+  end
+
+  defp settle_finalize_claim(0, task, _scope) do
+    case get_task!(task.id) do
+      %Task{state: :review, run_state: :finalizing} -> {:error, :finalizing}
+      %Task{} -> {:error, :invalid_state}
+    end
+  end
+
+  @doc """
   Review → Done. Finalization (commit/push/PR or artifact) is performed
   by the system executor around this transition.
 
@@ -491,7 +547,10 @@ defmodule CodeLead.Tasks do
   "follow the project", including after the project changes its mind.
   """
   @spec set_finalize_mode(Scope.t() | nil, Task.t(), String.t() | nil) ::
-          {:ok, Task.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+          {:ok, Task.t()} | {:error, :unauthorized | :finalizing | Ecto.Changeset.t()}
+  def set_finalize_mode(_scope, %Task{run_state: :finalizing}, _value),
+    do: {:error, :finalizing}
+
   def set_finalize_mode(scope, %Task{} = task, value) do
     with :ok <- Policy.authorize(scope, :operate_task, task) do
       task
@@ -639,6 +698,57 @@ defmodule CodeLead.Tasks do
   end
 
   def fail_run(%Task{}, _detail), do: {:error, :invalid_state}
+
+  @doc """
+  Finalization error/crash: the task returns to `review/idle` with a
+  `:finalize_failed` attention carrying the human-readable reason —
+  the `fail_run/2` of the Review stage.
+  """
+  @spec fail_finalize(Task.t(), String.t()) :: {:ok, Task.t()} | {:error, :invalid_state}
+  def fail_finalize(%Task{state: :review, run_state: :finalizing} = task, detail) do
+    transition(
+      task,
+      %{
+        run_state: :idle,
+        attention: %{type: :finalize_failed, detail: detail, source: :executor}
+      },
+      actor: :system,
+      summary: "finalization failed: #{String.slice(detail, 0, 160)}"
+    )
+  end
+
+  def fail_finalize(%Task{}, _detail), do: {:error, :invalid_state}
+
+  @doc """
+  Boot-time honesty for finalizations a restart cut down: every
+  `run_state: :finalizing` task — by definition no process is behind it
+  anymore — returns to `review/idle` with a `:finalize_interrupted`
+  attention telling the human what to check. Never retries: push is
+  idempotent, PR creation and merge are not, and only a human should
+  judge the remote's state. Returns the number of tasks reset.
+  """
+  @spec interrupt_finalizing() :: non_neg_integer()
+  def interrupt_finalizing do
+    detail =
+      "Finalization was interrupted by a restart. Check the remote for a pushed " <>
+        "branch or an open pull request before approving again."
+
+    from(t in Task, where: t.run_state == :finalizing)
+    |> Repo.all()
+    |> Enum.map(fn task ->
+      {:ok, _task} =
+        transition(
+          task,
+          %{
+            run_state: :idle,
+            attention: %{type: :finalize_interrupted, detail: detail, source: :executor}
+          },
+          actor: :system,
+          summary: "finalization interrupted by restart"
+        )
+    end)
+    |> length()
+  end
 
   @doc """
   Persists the provisioned execution context (worktree + branch) on the
@@ -1244,6 +1354,8 @@ defmodule CodeLead.Tasks do
   defp attention_type("review_ready"), do: :review_ready
   defp attention_type("agent_question"), do: :agent_question
   defp attention_type("permission_request"), do: :permission_request
+  defp attention_type("finalize_failed"), do: :finalize_failed
+  defp attention_type("finalize_interrupted"), do: :finalize_interrupted
   defp attention_type(_unknown), do: :other
 
   defp window_start(days) do
@@ -1333,6 +1445,24 @@ defmodule CodeLead.Tasks do
 
   defp check_from_stage(%Task{state: state}, state), do: :ok
   defp check_from_stage(%Task{}, _from), do: {:error, :invalid_state}
+
+  # A task the finalizer has claimed is frozen: only the finalizer's own
+  # system-actor edge (into a `:finalize` stage) may move it. This is a
+  # column check like `complete_run/1`'s `run_state` guard — the atomic
+  # claim in `begin_finalize/2` is what serializes concurrent approvals;
+  # this closes the other edges (request changes, send back, board
+  # moves) against the same window.
+  defp check_finalizing(%Task{run_state: :finalizing}, :finalize, opts) do
+    case Keyword.fetch!(opts, :actor) do
+      :system -> :ok
+      _human -> {:error, :finalizing}
+    end
+  end
+
+  defp check_finalizing(%Task{run_state: :finalizing}, _stage_type, _opts),
+    do: {:error, :finalizing}
+
+  defp check_finalizing(%Task{}, _stage_type, _opts), do: :ok
 
   defp fetch_edge(workflow, from, to) do
     case Workflow.fetch_transition(workflow, from, to) do

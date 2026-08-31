@@ -54,7 +54,7 @@ defmodule CodeLead.Tasks.Task do
   @finalize_modes [:pull_request, :merge, :squash, :artifact, :commit_to_path]
   @execution_envs [:local, :container]
   @states [:planning, :running, :review, :done, :cancelled]
-  @run_states [:idle, :queued, :dispatched, :executing, :failed]
+  @run_states [:idle, :queued, :dispatched, :executing, :failed, :finalizing]
   @priorities [:low, :normal, :high, :urgent]
 
   schema "tasks" do

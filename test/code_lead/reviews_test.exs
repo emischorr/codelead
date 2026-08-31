@@ -434,7 +434,12 @@ defmodule CodeLead.ReviewsTest do
     # No :review_ready attention lands on the card back in Planning.
     assert Tasks.get_task!(task.id).attention == nil
 
-    _ = :sys.get_state(CodeLead.Runtime.Registry)
+    # Drain the registry's partition processes (which handle the DOWNs;
+    # the registered name is only their supervisor) before asserting.
+    CodeLead.Runtime.Registry
+    |> Supervisor.which_children()
+    |> Enum.each(fn {_id, pid, _type, _modules} -> _ = :sys.get_state(pid) end)
+
     assert LiveRuns.list(task.id) == []
   end
 

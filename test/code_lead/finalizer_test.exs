@@ -25,6 +25,24 @@ defmodule CodeLead.FinalizerTest do
     :ok
   end
 
+  # The synchronous pair behind `Runtime.approve/2`: claim the task,
+  # then run the finalizer in this process — same shapes the worker sees.
+  defp approve_sync(task) do
+    {:ok, task} = Tasks.begin_finalize(admin_scope(), task)
+    Runtime.finalize(task)
+  end
+
+  # `create_pull_request/4` asks for an existing open PR before opening
+  # one, so every forge stub serves that GET too.
+  defp stub_forge(post_fun, get_body \\ []) do
+    Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+      case conn.method do
+        "GET" -> Req.Test.json(conn, get_body)
+        _post -> post_fun.(conn)
+      end
+    end)
+  end
+
   defp reviewed_repo_task do
     project = project_fixture()
     git_url = create_origin!()
@@ -73,7 +91,7 @@ defmodule CodeLead.FinalizerTest do
     test "commits the remainder, pushes the branch, and moves to Done" do
       %{task: task, context: context} = reviewed_repo_task()
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert task.state == :done
       assert outcome.branch == context.branch_name
       assert outcome.note =~ "pushed"
@@ -102,15 +120,22 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context} = reviewed_repo_task()
       File.rm_rf!(context.path)
 
-      assert {:error, {:push_failed, :worktree_missing}} = Runtime.approve(admin_scope(), task)
-      assert Tasks.get_task!(task.id).state == :review
+      assert {:error, {:push_failed, :worktree_missing}} = approve_sync(task)
+
+      # Back to review/idle with the failure as attention — the same
+      # text the flash shows, persisted where a later viewer finds it.
+      task = Tasks.get_task!(task.id)
+      assert task.state == :review
+      assert task.run_state == :idle
+      assert task.attention.type == :finalize_failed
+      assert task.attention.detail == Finalizer.error_message({:push_failed, :worktree_missing})
     end
 
     test "a failed push carries the forge and token facts, keeping the task in Review" do
       %{task: task, context: context} = reviewed_repo_task()
       {:ok, _} = Git.git(context.path, ["remote", "set-url", "origin", "/nope.git"])
 
-      assert {:error, {:push_failed, {:remote, remote}}} = Runtime.approve(admin_scope(), task)
+      assert {:error, {:push_failed, {:remote, remote}}} = approve_sync(task)
 
       # `create_origin!/0` yields a file:// URL, so :other is the honest
       # classification here; the forge-specific wording is unit-tested in
@@ -124,7 +149,7 @@ defmodule CodeLead.FinalizerTest do
     test "prunes the worktree but keeps the remote branch the PR points at" do
       %{task: task, context: context} = reviewed_repo_task()
 
-      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, %{cleanup: :prune_context}} = approve_sync(task)
 
       refute File.dir?(context.path)
       assert task.worktree_path == nil
@@ -138,7 +163,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context} = reviewed_repo_task()
       {:ok, _} = Git.git(context.path, ["remote", "set-url", "origin", "/nope.git"])
 
-      assert {:error, _reason} = Runtime.approve(admin_scope(), task)
+      assert {:error, _reason} = approve_sync(task)
 
       assert File.dir?(context.path)
       assert Tasks.get_task!(task.id).worktree_path == context.path
@@ -154,7 +179,7 @@ defmodule CodeLead.FinalizerTest do
 
     test "merges the branch into the default branch and deletes it",
          %{task: task, context: context} do
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert task.state == :done
       assert outcome.merged_into == "main"
       assert outcome.note =~ "merged into main"
@@ -173,7 +198,7 @@ defmodule CodeLead.FinalizerTest do
     end
 
     test "prunes the worktree and its staging worktree", %{task: task, context: context} do
-      assert {:ok, task, %{cleanup: :prune_context}} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, %{cleanup: :prune_context}} = approve_sync(task)
 
       refute File.dir?(context.path)
       refute File.dir?(CodeLead.Workspace.merge_worktree_path(task.id))
@@ -182,7 +207,7 @@ defmodule CodeLead.FinalizerTest do
     end
 
     test "records no forge link for a remote with no forge convention", %{task: task} do
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
 
       refute Map.has_key?(outcome, :url)
       assert task.pr_url == nil
@@ -194,7 +219,7 @@ defmodule CodeLead.FinalizerTest do
       File.write!(Path.join(context.path, "README.md"), "# Branch\n")
       commit_on_origin!(repository.git_url, "README.md", "# Origin\n")
 
-      assert {:error, {:merge_failed, {:remote, remote}}} = Runtime.approve(admin_scope(), task)
+      assert {:error, {:merge_failed, {:remote, remote}}} = approve_sync(task)
       assert remote.base_branch == "main"
       assert Git.merge_refusal(remote.output) == :conflict
 
@@ -211,7 +236,7 @@ defmodule CodeLead.FinalizerTest do
       %{task: task, context: context, project: project} = reviewed_repo_task()
       {:ok, _project} = Projects.put_finalize_defaults(project, %{"repo" => "squash"})
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert task.state == :done
       assert outcome.note =~ "squash-merged into main"
 
@@ -234,7 +259,7 @@ defmodule CodeLead.FinalizerTest do
       {:ok, _repo} =
         Projects.update_repository(repository, %{git_url: "https://github.com/acme/site.git"})
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert outcome.url_kind == :commit
       assert outcome.url =~ "https://github.com/acme/site/commit/"
       assert task.pr_url_kind == :commit
@@ -255,7 +280,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert task.state == :done
       assert outcome.artifact_path == context.path
       assert File.dir?(outcome.artifact_path)
@@ -293,7 +318,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert task.state == :done
       assert outcome.note =~ "marketing/task-#{task.id}-hero-copy"
 
@@ -324,8 +349,12 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:error, :no_artifact} = Runtime.approve(admin_scope(), task)
-      assert Tasks.get_task!(task.id).state == :review
+      assert {:error, :no_artifact} = approve_sync(task)
+
+      task = Tasks.get_task!(task.id)
+      assert task.state == :review
+      assert task.run_state == :idle
+      assert task.attention.type == :finalize_failed
     end
 
     test "refuses commit-to-path with no repository, keeping the task in Review" do
@@ -340,7 +369,7 @@ defmodule CodeLead.FinalizerTest do
       task = executing_task(Tasks.get_task!(task.id))
       {:ok, task} = Tasks.complete_run(task)
 
-      assert {:error, :no_artifact_repository} = Runtime.approve(admin_scope(), task)
+      assert {:error, :no_artifact_repository} = approve_sync(task)
       assert Tasks.get_task!(task.id).state == :review
     end
   end
@@ -363,20 +392,39 @@ defmodule CodeLead.FinalizerTest do
       Application.put_env(:code_lead, :forge_req_options, plug: {Req.Test, CodeLead.ForgeStub})
       {:ok, _} = Projects.put_env(project.id, "GITHUB_TOKEN", "gh-token")
 
-      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+      stub_forge(fn conn ->
         conn
         |> Plug.Conn.put_status(201)
         |> Req.Test.json(%{"html_url" => "https://github.com/acme/site/pull/7"})
       end)
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert outcome.url_kind == :pull_request
+      assert outcome.note =~ "pull request opened"
       assert task.pr_url == "https://github.com/acme/site/pull/7"
       assert task.pr_url_kind == :pull_request
     end
 
+    test "reuses the open pull request a prior approve left behind", %{
+      task: task,
+      project: project
+    } do
+      Application.put_env(:code_lead, :forge_req_options, plug: {Req.Test, CodeLead.ForgeStub})
+      {:ok, _} = Projects.put_env(project.id, "GITHUB_TOKEN", "gh-token")
+
+      stub_forge(
+        fn _conn -> flunk("must not POST while an open PR exists for the branch") end,
+        [%{"html_url" => "https://github.com/acme/site/pull/3"}]
+      )
+
+      assert {:ok, task, outcome} = approve_sync(task)
+      assert outcome.url_kind == :pull_request
+      assert outcome.note =~ "already open — reused"
+      assert task.pr_url == "https://github.com/acme/site/pull/3"
+    end
+
     test "falls back to the compare link when no token is configured", %{task: task} do
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert outcome.url_kind == :compare
       assert task.pr_url =~ "https://github.com/acme/site/compare/main..."
       assert task.pr_url_kind == :compare
@@ -389,11 +437,13 @@ defmodule CodeLead.FinalizerTest do
       Application.put_env(:code_lead, :forge_req_options, plug: {Req.Test, CodeLead.ForgeStub})
       {:ok, _} = Projects.put_env(project.id, "GITHUB_TOKEN", "gh-token")
 
-      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+      # The dedupe GET missed (nothing open), and the POST still 422s —
+      # the race the compare fallback exists for.
+      stub_forge(fn conn ->
         conn |> Plug.Conn.put_status(422) |> Req.Test.json(%{"message" => "already exists"})
       end)
 
-      assert {:ok, task, outcome} = Runtime.approve(admin_scope(), task)
+      assert {:ok, task, outcome} = approve_sync(task)
       assert outcome.url_kind == :compare
       assert task.pr_url_kind == :compare
       assert task.pr_url =~ "/compare/"
@@ -406,7 +456,7 @@ defmodule CodeLead.FinalizerTest do
 
       test_pid = self()
 
-      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+      stub_forge(fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:forge_request, conn.host, conn.request_path, Jason.decode!(body)})
 
@@ -418,18 +468,22 @@ defmodule CodeLead.FinalizerTest do
       %{project: project_fixture()}
     end
 
-    test "opens a GitHub PR through the API, rendering the default body template", %{
-      project: project
-    } do
-      task = %CodeLead.Tasks.Task{
-        id: 1,
+    defp pr_task(project, id) do
+      %CodeLead.Tasks.Task{
+        id: id,
         project_id: project.id,
         title: "Add pricing page",
         description: "Three tiers",
-        branch_name: "codelead/task-1-add-pricing-page"
+        branch_name: "codelead/task-#{id}-add-pricing-page"
       }
+    end
 
-      assert {:ok, "https://github.com/acme/site/pull/7"} =
+    test "opens a GitHub PR through the API, rendering the default body template", %{
+      project: project
+    } do
+      task = pr_task(project, 1)
+
+      assert {:ok, "https://github.com/acme/site/pull/7", :opened} =
                Finalizer.create_pull_request({:github, "acme", "site"}, "gh-token", task, "main")
 
       assert_receive {:forge_request, "api.github.com", "/repos/acme/site/pulls", body}
@@ -442,20 +496,87 @@ defmodule CodeLead.FinalizerTest do
 
     test "renders the project's custom PR template", %{project: project} do
       {:ok, project} = Projects.put_pr_template(project, "## {{title}}\n\nBranch: {{branch}}")
+      task = pr_task(project, 42)
 
-      task = %CodeLead.Tasks.Task{
-        id: 42,
-        project_id: project.id,
-        title: "Add pricing page",
-        description: "Three tiers",
-        branch_name: "codelead/task-42-add-pricing-page"
-      }
-
-      assert {:ok, _url} =
+      assert {:ok, _url, :opened} =
                Finalizer.create_pull_request({:github, "acme", "site"}, "gh-token", task, "main")
 
       assert_receive {:forge_request, "api.github.com", "/repos/acme/site/pulls", body}
       assert body["body"] == "## Add pricing page\n\nBranch: codelead/task-42-add-pricing-page"
+    end
+
+    test "asks GitHub for an open PR on the branch first and reuses it", %{project: project} do
+      test_pid = self()
+
+      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+        case conn.method do
+          "GET" ->
+            query = Plug.Conn.fetch_query_params(conn).query_params
+            send(test_pid, {:dedupe_get, conn.request_path, query})
+            Req.Test.json(conn, [%{"html_url" => "https://github.com/acme/site/pull/3"}])
+
+          _post ->
+            flunk("must not POST while an open PR exists for the branch")
+        end
+      end)
+
+      task = pr_task(project, 1)
+
+      assert {:ok, "https://github.com/acme/site/pull/3", :reused} =
+               Finalizer.create_pull_request({:github, "acme", "site"}, "gh-token", task, "main")
+
+      assert_receive {:dedupe_get, "/repos/acme/site/pulls", query}
+      assert query["head"] == "acme:codelead/task-1-add-pricing-page"
+      assert query["state"] == "open"
+    end
+
+    test "asks GitLab for an open MR on the source branch first and reuses it", %{
+      project: project
+    } do
+      test_pid = self()
+
+      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+        case conn.method do
+          "GET" ->
+            query = Plug.Conn.fetch_query_params(conn).query_params
+            send(test_pid, {:dedupe_get, query})
+
+            Req.Test.json(conn, [
+              %{"web_url" => "https://gitlab.com/acme/site/-/merge_requests/5"}
+            ])
+
+          _post ->
+            flunk("must not POST while an open MR exists for the branch")
+        end
+      end)
+
+      task = pr_task(project, 1)
+
+      assert {:ok, "https://gitlab.com/acme/site/-/merge_requests/5", :reused} =
+               Finalizer.create_pull_request({:gitlab, "acme", "site"}, "gl-token", task, "main")
+
+      assert_receive {:dedupe_get, query}
+      assert query["source_branch"] == "codelead/task-1-add-pricing-page"
+      assert query["state"] == "opened"
+    end
+
+    test "a failed dedupe lookup degrades to opening the PR", %{project: project} do
+      Req.Test.stub(CodeLead.ForgeStub, fn conn ->
+        case conn.method do
+          "GET" ->
+            conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"message" => "boom"})
+
+          _post ->
+            conn
+            |> Plug.Conn.put_status(201)
+            |> Req.Test.json(%{"html_url" => "https://github.com/acme/site/pull/7"})
+        end
+      end)
+
+      task = pr_task(project, 1)
+
+      assert {:ok, "https://github.com/acme/site/pull/7", :opened} =
+               Finalizer.create_pull_request({:github, "acme", "site"}, "gh-token", task, "main")
     end
   end
 

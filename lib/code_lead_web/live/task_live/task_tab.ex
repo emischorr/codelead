@@ -698,9 +698,13 @@ defmodule CodeLeadWeb.TaskLive.TaskTab do
           On approve
         </span>
         <form id="finalize-form" phx-change="set_finalize_mode">
+          <%!-- Locked mid-finalization: changing the mode would make the
+                header's "Finalizing — …" hint lie about what runs. --%>
           <select
             name="finalize_mode"
-            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+            disabled={@task.run_state == :finalizing}
+            title={@task.run_state == :finalizing && "This task is being finalized."}
+            class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="" selected={is_nil(@task.finalize_mode)}>
               Project default · {FormOptions.finalize_mode_label(@project_finalize_mode)}

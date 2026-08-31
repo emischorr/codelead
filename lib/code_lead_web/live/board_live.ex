@@ -476,6 +476,8 @@ defmodule CodeLeadWeb.BoardLive do
   defp attention_badge(:permission_request), do: "Permission"
   defp attention_badge(:review_ready), do: "Needs approval"
   defp attention_badge(:run_failed), do: "Failed"
+  defp attention_badge(:finalize_failed), do: "Finalize failed"
+  defp attention_badge(:finalize_interrupted), do: "Interrupted"
   defp attention_badge(_), do: "Attention"
 
   attr :task, :map, required: true
@@ -593,7 +595,14 @@ defmodule CodeLeadWeb.BoardLive do
       )
 
     ~H"""
-    <div class="text-[11.5px] text-text2">
+    <div class="flex items-center gap-1.5 text-[11.5px] text-text2">
+      <span
+        :if={@task.run_state == :finalizing}
+        id={"#{@card_id}-finalizing-hint"}
+        class="inline-flex items-center gap-1.5 rounded-full bg-surface2 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-text2"
+      >
+        <span class="size-1.5 animate-pulse rounded-full bg-accent" /> finalizing
+      </span>
       <span :if={@pending?} class="inline-flex items-center gap-1.5">
         <span class="size-1.5 animate-pulse rounded-full bg-text3" /> Reviewer running…
       </span>

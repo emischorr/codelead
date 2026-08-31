@@ -249,33 +249,73 @@ defmodule CodeLead.Runtime do
   end
 
   @doc """
+  Approves the task: claims it for finalization (the atomic
+  `Tasks.begin_finalize/2` marker is the double-click and two-users
+  protection) and hands the actual work — push, PR/merge, artifact —
+  to a supervised worker running `finalize/1`. Returns within
+  milliseconds with `run_state: :finalizing`; the task stays in Review
+  until the worker succeeds. Completion and failure arrive on the task
+  topic as `{:finalize_completed, outcome}` / `{:finalize_failed,
+  reason}`.
+  """
+  @spec approve(Scope.t() | nil, Task.t()) ::
+          {:ok, Task.t()} | {:error, :unauthorized | :finalizing | :invalid_state}
+  def approve(scope, %Task{} = task) do
+    with {:ok, task} <- Tasks.begin_finalize(scope, task) do
+      {:ok, _pid} =
+        Elixir.Task.Supervisor.start_child(CodeLead.TaskSupervisor, fn -> finalize(task) end)
+
+      {:ok, task}
+    end
+  end
+
+  @doc """
   Review → Done: runs the system finalizer in the task's resolved
   finalize mode — open a PR, merge or squash-merge the branch, hand the
   folder artifact over, or commit it to a repository path — then
-  transitions. A finalizer failure keeps the task in Review. Returns the
-  outcome map alongside the task.
+  transitions. A finalizer failure returns the task to `review/idle`
+  with a `:finalize_failed` attention. Blocking; normally run in the
+  worker `approve/2` spawns, but callable synchronously (tests, the
+  IEx console) after `Tasks.begin_finalize/2` has claimed the task.
   """
-  @spec approve(Scope.t() | nil, Task.t()) ::
-          {:ok, Task.t(), CodeLead.Finalizer.outcome()}
-          | {:error, term()}
-          | Tasks.transition_error()
-  def approve(scope, %Task{} = task) do
+  @spec finalize(Task.t()) ::
+          {:ok, Task.t(), CodeLead.Finalizer.outcome()} | {:error, term()}
+  def finalize(%Task{} = task) do
+    # The claim in `begin_finalize/2` makes a key clash unreachable;
+    # if it happens anyway, crashing into the supervisor log is right.
+    :ok = LiveRuns.register(task.id, :finalize, %{})
+
     # Reviews are advisory, so approving over live reviewers is legal —
     # but the finalize stage may prune the worktree on entry, which
-    # must not happen under a reader, so they are cancelled first.
-    :ok = cancel_advisory_first(scope, task)
+    # must not happen under a reader, so they are cancelled (and waited
+    # out) first.
+    LiveRuns.cancel_advisory(task.id)
 
     # The Review → Done edge keeps the worktree (pruning is the finalize
     # outcome's call, applied in on_enter), so the cleanup element is
     # structurally :ok and carries nothing worth surfacing.
-    case advance(task, {:review, :done},
-           actor: :human,
-           scope: scope,
-           summary: "approved — Done"
-         ) do
-      {:ok, task, outcome, _cleanup} -> {:ok, task, outcome}
-      {:error, reason} -> {:error, reason}
+    case advance(task, {:review, :done}, actor: :system, summary: "finalized — Done") do
+      {:ok, updated, outcome, _cleanup} ->
+        broadcast_task_event(task.id, {:finalize_completed, outcome})
+        {:ok, updated, outcome}
+
+      {:error, reason} ->
+        finalize_failed(task, reason, CodeLead.Finalizer.error_message(reason))
     end
+  rescue
+    exception ->
+      finalize_failed(
+        task,
+        {:crashed, exception},
+        CodeLead.Git.redact(Exception.format_banner(:error, exception))
+      )
+  catch
+    :exit, reason ->
+      finalize_failed(
+        task,
+        {:exited, reason},
+        CodeLead.Git.redact("finalization exited: " <> inspect(reason))
+      )
   end
 
   @doc """
@@ -323,6 +363,28 @@ defmodule CodeLead.Runtime do
     end
   end
 
+  # A failed, crashed, or exited finalization all land the same way:
+  # back to review/idle with the human-readable detail as attention,
+  # and the failure announced on the task topic. Returns the error so
+  # synchronous callers of `finalize/1` still see it.
+  defp finalize_failed(%Task{} = task, reason, detail) do
+    _ = Tasks.fail_finalize(task, detail)
+    broadcast_task_event(task.id, {:finalize_failed, reason})
+    {:error, reason}
+  end
+
+  defp broadcast_task_event(task_id, event) do
+    Phoenix.PubSub.broadcast(
+      CodeLead.PubSub,
+      Tasks.task_topic(task_id),
+      {:task_event, task_id, event}
+    )
+  end
+
+  # A doomed click during finalization must not kill the reviewers the
+  # finalize worker owns — the edge below will refuse with :finalizing.
+  defp cancel_advisory_first(_scope, %Task{state: :review, run_state: :finalizing}), do: :ok
+
   # Terminating reviewers is a side effect, so it takes the same
   # authorization as the edge it precedes — an unauthorized click must
   # not kill anything (`advance/3` still re-authorizes before writing).
@@ -340,7 +402,7 @@ defmodule CodeLead.Runtime do
   defp apply_worktree_policy(%Task{} = task, :discard), do: StageEffects.discard_context(task)
   defp apply_worktree_policy(%Task{}, :keep), do: :ok
 
-  # Only `approve/1` surfaces what the stage prepared; the rest keep the
+  # Only `finalize/1` surfaces what the stage prepared; the rest keep the
   # two-tuple their callers pattern-match on — extended by a
   # `:cleanup_failed` element only when a discard actually left files
   # behind, so `:keep`-edge callers never see a shape change.

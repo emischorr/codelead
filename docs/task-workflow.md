@@ -1,4 +1,4 @@
-# Task workflow (last updated: 2026-08-31, live-run guards on planning surveys)
+# Task workflow (last updated: 2026-08-31, background finalization)
 
 Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
 (lib/code_lead/tasks.ex). `state` is the Kanban column
@@ -42,7 +42,9 @@ it transcribes spec §4 and fails if the definition drifts from it.
 | `cancel_run/1` | human | running, any | planning, idle | **keeps** worktree/branch/session; runtime kills the agent process and releases the task container (`release_context/1` — recreated on the next start) |
 | `request_changes/2` | human | review | running, queued | **keeps** worktree/branch/session — and the task container, which the rework reuses; feedback stored in `next_prompt` |
 | `send_back_to_planning/1` | human | review | planning, idle | **clears** worktree/branch/session/next_prompt; runtime discards worktree + branch, the task container, and the agent home. The transition commits even when file removal fails (root-owned leftovers of a container run) — the failure comes back as `{:ok, task, {:cleanup_failed, reason}}`, is flashed, and lands as a task step; the next dispatch refuses to build on the leftover with a host-side remedy |
-| `approve/1` | human | review | done, idle | stamps `completed_at`; the finalizer runs around this in the task's resolved **finalize mode**, its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned — the task container is removed either way (cattle) |
+| `begin_finalize/2` | human | review, idle | review, finalizing | **atomic** conditional update (`UPDATE … WHERE state = 'review' AND run_state = 'idle'`) — the double-click and two-users protection for the non-retryable finalizer; clears attention, records the human "approved — finalizing" step. Zero rows → `{:error, :finalizing}` (already claimed) or `{:error, :invalid_state}` |
+| `approve/1` (the edge) | system | review, finalizing → done, idle | done, idle | stamps `completed_at`; run by `Runtime.finalize/1` in a supervised worker — the finalizer executes in the task's resolved **finalize mode** before the write (prepare may veto), its link lands in `pr_url`/`pr_url_kind`, and its `cleanup:` decides whether the worktree is pruned — the task container is removed either way (cattle) |
+| `fail_finalize/2` | system | review, finalizing | review, idle | attention `:finalize_failed` with the human-readable reason; **no column change** — the `fail_run/2` of the Review stage |
 | `archive/1` | human | done | (state unchanged) | sets `archived_at`; the board excludes archived tasks. Reversal is only possible as a raw `archived_at: nil` update — deliberately not a context function or UI action; see [`web-ui.md`](web-ui.md) |
 | `delete_task/1` | human | planning or cancelled | (row deleted) | cascades steps/reviewers/messages |
 
@@ -63,10 +65,22 @@ before any side effect fires. Task creation stamps
 Invalid from-states return `{:error, :invalid_state}`.
 
 `begin_dispatch/1`, `mark_executing/2`, `fail_run/2` and `retry_run/1`
-move `run_state` inside the Running stage and are **not** workflow
-edges, so they keep their own from-state guards. `complete_run/1` is an
-edge but keeps a `run_state: :executing` guard on top of it: a queued
-or failed task is in the Running stage with nothing to hand to Review.
+move `run_state` inside the Running stage; `begin_finalize/2` and
+`fail_finalize/2` move it inside the Review stage. None are workflow
+edges, so they keep their own from-state guards — `run_state` tracks
+*system execution inside a stage*, not only Running. `complete_run/1`
+is an edge but keeps a `run_state: :executing` guard on top of it: a
+queued or failed task is in the Running stage with nothing to hand to
+Review. **A `:finalizing` task is frozen**: `apply_transition/3`
+refuses every edge with `{:error, :finalizing}` except the finalizer's
+own system-actor entry into a `:finalize` stage — a second approve,
+request changes, send back, and any board move all wait for the worker
+(and entering the `:finalize` stage resets `run_state` to `:idle`, so
+success clears the marker structurally). An interrupted finalization
+(restart mid-push) is reset at boot by
+`CodeLead.Runtime.FinalizeReconciler` to `review/idle` with a
+`:finalize_interrupted` attention — never retried, because PR creation
+and merge are not idempotent (ADR-0016).
 
 ## Deviations / notes vs the spec
 
@@ -162,7 +176,8 @@ console) calls for those actions:
 | approve/deny a permission escalation | `Runtime.answer_permission(task, request_id, true/false)` |
 | request changes from Review | `Runtime.request_changes(task, feedback)` |
 | send back to Planning (discard context) | `Runtime.send_back_to_planning(task)` |
-| approve → Done (finalize by mode: PR, merge, squash, artifact, commit-to-path) | `Runtime.approve(task)` |
+| approve (human, returns immediately: claims the task and spawns the finalize worker) | `Runtime.approve(scope, task)` |
+| finalize → Done (system, blocking: PR, merge, squash, artifact, commit-to-path; run by the worker, callable synchronously after `Tasks.begin_finalize/2`) | `Runtime.finalize(task)` |
 | run completed → Review (called by the runner) | `Runtime.complete_run(task)` |
 | delete a Planning task (guarded against a live survey) | `Runtime.delete_task(scope, task)` |
 | re-attempt queued tasks | `Runtime.kick_queue()` |
@@ -172,7 +187,10 @@ order inside `advance/3` is load-bearing: the edge resolves first (an
 illegal move costs nothing), then the target stage's `prepare/2`, which
 can still veto — that is why finalization is a pre-commit hook, so a
 failed push leaves the task in Review rather than landing it in Done
-with nothing pushed. Only then is the state written, the edge's
+with nothing pushed. (Since ADR-0016 the *caller* of the finalize edge
+moved off the LiveView into a supervised worker — the order inside
+`advance/3` stayed exactly as it was; only who runs it changed.) Only
+then is the state written, the edge's
 worktree policy applied (teardown for `:discard`), and the stage's
 `on_enter/3` fired: `:execute` asks the scheduler to dispatch,
 `:review` fans the reviewers out, `:finalize` records the commit step,
@@ -184,9 +202,10 @@ the execution context if the outcome asked it to, `:plan` and
 the Running stage, so it calls `Tasks.retry_run/1` and re-dispatches
 directly. `cancel_task/1` terminates the agent before advancing;
 stopping a process is an exit effect, and the seam has no exit hook.
-The Review-exit actions (`request_changes/3`, `send_back_to_planning/2`,
-`approve/2`) do the advisory analogue: they call
-`LiveRuns.cancel_advisory/1` before advancing, so no reviewer is still
+The Review-exit actions do the advisory analogue: `request_changes/3`
+and `send_back_to_planning/2` call `LiveRuns.cancel_advisory/1` before
+advancing, and `Runtime.finalize/1` does the same as its first act
+after registering `{task_id, :finalize}` — so no reviewer is still
 reading a worktree the edge is about to discard or prune (see
 [`reviews.md`](reviews.md)).
 
@@ -368,7 +387,12 @@ flush()                                      # watch the live event stream
 {:ok, task} = Runtime.request_changes(task, "please add tests")
 {:ok, _task} = Tasks.set_finalize_mode(task, "squash")  # or "" to inherit
 Tasks.finalize_mode(task)                     # what Approve will run
-{:ok, task, outcome} = Runtime.approve(task)  # finalize → done
+
+# Approve is asynchronous: it claims the task and spawns the worker.
+{:ok, task} = Runtime.approve(scope, task)    # run_state: :finalizing
+# Synchronous alternative for driving it from a shell:
+{:ok, task} = Tasks.begin_finalize(scope, task)
+{:ok, task, outcome} = Runtime.finalize(task) # finalize → done
 Tasks.board(project_id)
 Tasks.steps(task.id)
 ```

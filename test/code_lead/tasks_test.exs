@@ -505,6 +505,101 @@ defmodule CodeLead.TasksTest do
     end
   end
 
+  describe "finalization marker (begin_finalize / fail_finalize)" do
+    setup do
+      %{task: task} = runnable_task_fixture()
+      task = executing_task(task)
+      {:ok, task} = Tasks.complete_run(task)
+      %{task: task}
+    end
+
+    test "begin_finalize claims review/idle, clears attention, records the human step", %{
+      task: task
+    } do
+      {:ok, _task} = Tasks.set_attention(task, :review_ready, nil, :advisory)
+      task = Tasks.get_task!(task.id)
+
+      assert {:ok, claimed} = Tasks.begin_finalize(admin_scope(), task)
+      assert claimed.state == :review
+      assert claimed.run_state == :finalizing
+      assert claimed.attention == nil
+
+      step = Tasks.steps(task.id) |> List.last()
+      assert step.kind == :transition
+      assert step.executor_type == :human
+      assert step.summary == "approved — finalizing"
+      assert step.user_id
+
+      # A second claim is refused — even from the stale pre-claim struct,
+      # because the guard is the UPDATE's WHERE clause, not the struct.
+      assert {:error, :finalizing} = Tasks.begin_finalize(admin_scope(), task)
+      assert [_one] = Enum.filter(Tasks.steps(task.id), &(&1.summary == "approved — finalizing"))
+    end
+
+    test "begin_finalize off Review is invalid" do
+      %{task: planning_task} = runnable_task_fixture()
+      assert {:error, :invalid_state} = Tasks.begin_finalize(admin_scope(), planning_task)
+    end
+
+    test "a finalizing task is frozen for every edge but the finalizer's own", %{task: task} do
+      {:ok, task} = Tasks.begin_finalize(admin_scope(), task)
+
+      assert {:error, :finalizing} = Tasks.approve(admin_scope(), task)
+      assert {:error, :finalizing} = Tasks.request_changes(admin_scope(), task, "f")
+      assert {:error, :finalizing} = Tasks.send_back_to_planning(admin_scope(), task)
+      assert {:error, :finalizing} = Tasks.set_finalize_mode(admin_scope(), task, "merge")
+
+      # The finalizer's own system edge passes — and entering the
+      # :finalize stage clears the marker back to :idle.
+      assert {:ok, done} =
+               Tasks.apply_transition(task, {:review, :done},
+                 actor: :system,
+                 summary: "finalized — Done"
+               )
+
+      assert done.state == :done
+      assert done.run_state == :idle
+      assert done.completed_at
+    end
+
+    test "fail_finalize returns to idle with the failure as attention", %{task: task} do
+      {:ok, task} = Tasks.begin_finalize(admin_scope(), task)
+
+      assert {:ok, failed} = Tasks.fail_finalize(task, "push exploded")
+      assert failed.state == :review
+      assert failed.run_state == :idle
+      assert failed.attention.type == :finalize_failed
+      assert failed.attention.detail == "push exploded"
+
+      assert {:error, :invalid_state} = Tasks.fail_finalize(failed, "again")
+    end
+
+    test "interrupt_finalizing resets finalizing tasks and leaves idle ones alone", %{
+      task: task
+    } do
+      {:ok, finalizing} = Tasks.begin_finalize(admin_scope(), task)
+
+      %{task: idle_review} = runnable_task_fixture()
+      idle_review = executing_task(idle_review)
+      {:ok, idle_review} = Tasks.complete_run(idle_review)
+
+      assert Tasks.interrupt_finalizing() == 1
+
+      reset = Tasks.get_task!(finalizing.id)
+      assert reset.state == :review
+      assert reset.run_state == :idle
+      assert reset.attention.type == :finalize_interrupted
+      assert reset.attention.detail =~ "interrupted by a restart"
+
+      assert Tasks.steps(reset.id) |> List.last() |> Map.fetch!(:summary) ==
+               "finalization interrupted by restart"
+
+      untouched = Tasks.get_task!(idle_review.id)
+      assert untouched.run_state == :idle
+      refute untouched.attention
+    end
+  end
+
   describe "invalid transitions are rejected" do
     test "every transition validates its from-state" do
       %{task: planning_task} = runnable_task_fixture()

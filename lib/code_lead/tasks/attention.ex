@@ -11,7 +11,14 @@ defmodule CodeLead.Tasks.Attention do
 
   @type t :: %__MODULE__{}
 
-  @types [:run_failed, :review_ready, :agent_question, :permission_request]
+  @types [
+    :run_failed,
+    :review_ready,
+    :agent_question,
+    :permission_request,
+    :finalize_failed,
+    :finalize_interrupted
+  ]
 
   # A question or permission request can be raised by a live executor
   # run (the human's answer is routed back to it) or by an advisory run —

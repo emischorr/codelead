@@ -188,18 +188,74 @@ defmodule CodeLead.Finalizer do
   end
 
   @doc """
-  Opens a PR (GitHub) or MR (GitLab) for the pushed branch. The token
-  comes from the project env store (`GITHUB_TOKEN` / `GITLAB_TOKEN`);
-  the body is rendered from the project's PR template
-  (`CodeLead.Projects.pr_template/1`).
+  Opens a PR (GitHub) or MR (GitLab) for the pushed branch — or reuses
+  the open one whose head already is this branch, so approving twice
+  never opens two. The token comes from the project env store
+  (`GITHUB_TOKEN` / `GITLAB_TOKEN`); the body is rendered from the
+  project's PR template (`CodeLead.Projects.pr_template/1`).
   """
   @spec create_pull_request(
           {:github | :gitlab, String.t(), String.t()},
           String.t(),
           Task.t(),
           String.t()
-        ) :: {:ok, String.t()} | {:error, term()}
-  def create_pull_request({:github, owner, repo}, token, task, base_branch) do
+        ) :: {:ok, String.t(), :opened | :reused} | {:error, term()}
+  def create_pull_request(forge, token, task, base_branch) do
+    case existing_pull_request(forge, token, task.branch_name) do
+      {:ok, url} -> {:ok, url, :reused}
+      :none -> open_pull_request(forge, token, task, base_branch)
+    end
+  end
+
+  @doc """
+  The human-readable text for a finalization failure — what the
+  operator has to change. Lives here rather than in the web layer
+  because the same string is persisted as the task's attention detail
+  by the background finalize path; `CodeLeadWeb.FlashMessages` delegates
+  to it, so the banner and the flash cannot drift apart.
+  """
+  @spec error_message(term()) :: String.t()
+  def error_message(
+        {:push_failed, {:remote, %{output: output, forge: forge, token_present?: present?}}}
+      ) do
+    "Could not finalize — " <> Git.remote_failure("push the branch", output, forge, present?)
+  end
+
+  def error_message({:push_failed, :no_worktree}),
+    do: "This task has no worktree to push. Send it back to Planning and run it again."
+
+  def error_message({:push_failed, :no_branch}),
+    do: "This task has no feature branch to push. Send it back to Planning and run it again."
+
+  def error_message({:push_failed, :worktree_missing}),
+    do:
+      "The task's worktree is gone from disk, so there is nothing to push. " <>
+        "Send it back to Planning and run it again."
+
+  def error_message(
+        {:merge_failed,
+         {:remote, %{output: output, forge: forge, token_present?: present?, base_branch: base}}}
+      ) do
+    "Could not finalize — " <> Git.merge_failure(base, output, forge, present?)
+  end
+
+  # A merge pushes the feature branch before it merges, so every way the
+  # push itself can fail reaches here too — with the same remedies.
+  def error_message({:merge_failed, reason}), do: error_message({:push_failed, reason})
+
+  def error_message(:no_artifact),
+    do: "The task folder is empty — there is no artifact to hand over."
+
+  def error_message(:no_artifact_repository),
+    do:
+      "This task finalizes by committing its artifact to a repository, but none is linked. " <>
+        "Pick one in the Target card, or switch the finalize mode to Artifact."
+
+  def error_message(other), do: "Finalization failed: #{inspect(other)}"
+
+  ## Internals
+
+  defp open_pull_request({:github, owner, repo}, token, task, base_branch) do
     request(
       url: "https://api.github.com/repos/#{owner}/#{repo}/pulls",
       auth: {:bearer, token},
@@ -211,9 +267,10 @@ defmodule CodeLead.Finalizer do
       }
     )
     |> parse_url("html_url")
+    |> opened()
   end
 
-  def create_pull_request({:gitlab, owner, repo}, token, task, base_branch) do
+  defp open_pull_request({:gitlab, owner, repo}, token, task, base_branch) do
     project = URI.encode_www_form("#{owner}/#{repo}")
 
     request(
@@ -227,9 +284,50 @@ defmodule CodeLead.Finalizer do
       }
     )
     |> parse_url("web_url")
+    |> opened()
   end
 
-  ## Internals
+  defp opened({:ok, url}), do: {:ok, url, :opened}
+  defp opened({:error, reason}), do: {:error, reason}
+
+  # Any failure to *ask* — non-200, transport error — degrades to the
+  # POST rather than failing the finalization; the 422 fallback in
+  # `pull_request_outcome/4` still absorbs the race this GET can lose.
+  # `retry: false`: a failed lookup falls through to the POST anyway,
+  # so retrying it only delays the finalization.
+  defp existing_pull_request({:github, owner, repo}, token, branch) do
+    request(
+      method: :get,
+      retry: false,
+      url: "https://api.github.com/repos/#{owner}/#{repo}/pulls",
+      params: [head: "#{owner}:#{branch}", state: "open"],
+      auth: {:bearer, token}
+    )
+    |> first_url("html_url")
+  end
+
+  defp existing_pull_request({:gitlab, owner, repo}, token, branch) do
+    project = URI.encode_www_form("#{owner}/#{repo}")
+
+    request(
+      method: :get,
+      retry: false,
+      url: "https://gitlab.com/api/v4/projects/#{project}/merge_requests",
+      params: [source_branch: branch, state: "opened"],
+      headers: [{"PRIVATE-TOKEN", token}]
+    )
+    |> first_url("web_url")
+  end
+
+  defp first_url({:ok, %Req.Response{status: 200, body: [first | _rest]}}, key)
+       when is_map(first) do
+    case first[key] do
+      url when is_binary(url) -> {:ok, url}
+      _missing -> :none
+    end
+  end
+
+  defp first_url(_response, _key), do: :none
 
   defp commit_and_push(task, token) do
     with :ok <- ensure_context(task) do
@@ -365,13 +463,13 @@ defmodule CodeLead.Finalizer do
 
   defp pull_request_outcome({kind, _owner, _repo} = forge, token, task, repository) do
     case create_pull_request(forge, token, task, repository.default_branch) do
-      {:ok, url} ->
+      {:ok, url, how} ->
         %{
           url: url,
           url_kind: request_kind(kind),
           branch: task.branch_name,
           cleanup: :prune_context,
-          note: "#{kind} pull request opened"
+          note: pull_request_note(kind, how)
         }
 
       {:error, reason} ->
@@ -390,6 +488,9 @@ defmodule CodeLead.Finalizer do
 
   defp request_kind(:github), do: :pull_request
   defp request_kind(:gitlab), do: :merge_request
+
+  defp pull_request_note(kind, :opened), do: "#{kind} pull request opened"
+  defp pull_request_note(kind, :reused), do: "#{kind} pull request already open — reused"
 
   defp compare_url({:github, owner, repo}, base, branch),
     do: "https://github.com/#{owner}/#{repo}/compare/#{base}...#{branch}"
