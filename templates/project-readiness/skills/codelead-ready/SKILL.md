@@ -1,6 +1,6 @@
 ---
 name: codelead-ready
-description: Make this repository work with CodeLead — honor PREVIEW_BASE_PATH/PREVIEW_PORT, bind 0.0.0.0, remove root-absolute URLs that escape the preview mount, and scaffold or audit .devcontainer/ so container execution works. Use when asked to make a project CodeLead-ready, when a CodeLead preview 404s, flickers, reloads in a loop, or shows nothing, or when adding a devcontainer for CodeLead.
+description: Make this repository work with CodeLead — honor PREVIEW_BASE_PATH/PREVIEW_PORT, bind 0.0.0.0, remove root-absolute URLs that escape the preview mount, and scaffold or audit-and-repair .devcontainer/ so container execution works. Use when asked to make a project CodeLead-ready, when a CodeLead preview 404s, flickers, reloads in a loop, or shows nothing, when adding a devcontainer for CodeLead, or when tasks re-install dependencies on every run.
 ---
 
 # Make this project CodeLead-ready
@@ -79,7 +79,7 @@ reloads itself a few times a second, forever. `references/stacks.md` has the
 Phoenix fix; the same shape (render the path server-side, read it from a
 meta tag) applies to any framework.
 
-## 5. `.devcontainer/` — scaffold if missing, audit if present
+## 5. `.devcontainer/` — scaffold if missing, audit **and fix** if present
 
 CodeLead discovers `.devcontainer/devcontainer.json`, `.devcontainer.json`,
 or `.devcontainer/<folder>/devcontainer.json`.
@@ -88,23 +88,63 @@ or `.devcontainer/<folder>/devcontainer.json`.
 a plain `"image"` when the project needs no companion services, a
 `"dockerComposeFile"` when it needs a database or cache.
 
-**If present**, check it against this list and report the gaps:
+**If present**, four things are non-negotiable, and a devcontainer written for
+VS Code almost never has them — they are the reason this step exists. Take the
+row for the stack you detected in step 1:
 
-- `remoteUser` (or `containerUser`) is set. Without it agent execs run as the
-  image default — usually root — and root-owned files in the worktree block
+| Stack | Toolchain out of `$HOME` | Off the workspace mount | Lockfile to `COPY` |
+|---|---|---|---|
+| Phoenix | `MIX_HOME`, `HEX_HOME` | `MIX_BUILD_ROOT`, `MIX_DEPS_PATH` | `mix.lock` |
+| Rails | `GEM_HOME`, `BUNDLE_PATH`, `BUNDLE_APP_CONFIG` | — | `Gemfile.lock` |
+| Node (Vite/Next) | `NPM_CONFIG_PREFIX`, `PNPM_HOME` | — | `package-lock.json` / `pnpm-lock.yaml` |
+| Django | venv at `/opt/venv`, `PIP_CACHE_DIR` | — | `poetry.lock` / `requirements.txt` |
+| Rust | `CARGO_HOME`, `RUSTUP_HOME` | `CARGO_TARGET_DIR` | `Cargo.lock` |
+
+Why each, in a sentence:
+
+- **`remoteUser` (or `containerUser`) is set.** Without it agent execs run as
+  the image default — usually root — and root-owned files in the worktree block
   teardown later.
-- Toolchain and package-manager state lives **outside `$HOME`**
-  (`MIX_HOME`/`HEX_HOME`, `CARGO_HOME`/`RUSTUP_HOME`, npm prefix, pyenv root,
-  nvm dir → `/opt/…`). CodeLead overrides `HOME` per task, so anything under
-  `~` silently vanishes for agents. **This is the gap that bites most often.**
-- Build output is **off the shared workspace mount** (`MIX_BUILD_ROOT`,
-  cargo `target-dir`, …) — the worktree is bind-shared with the host, so
-  host-built and Linux-built artifacts poison each other.
-- Dependency installs are **in the image, keyed on the lockfile** — `COPY` the
+- **Toolchain and package-manager state outside `$HOME`.** CodeLead overrides
+  `HOME` per task, so anything a feature or image installed under `~` is simply
+  not there for an agent. Point it at `/opt/…`.
+- **Build output off the shared workspace mount.** The worktree is bind-shared
+  with the host, so host-built and Linux-built artifacts poison each other.
+- **Dependency install in the image, keyed on the lockfile.** `COPY` the
   manifest + lockfile alone, install in a `RUN` above the source. Every task is
-  a fresh container, and the host's layer cache is the only thing shared
-  between them; an install left to a hook is paid per task, in wall-clock and
-  in agent tokens. **This is the gap that costs most.**
+  a fresh container and the host's layer cache is the only thing shared between
+  them, so a hook-time install is paid *per task* — in wall-clock, in agent
+  tokens, and in a network round-trip that a git-sourced or privately-hosted
+  dependency can fail outright.
+
+Run the audit, substituting your row above:
+
+```bash
+# .devcontainer audit — from the repo root
+grep -rn  '"remoteUser"\|"containerUser"' .devcontainer/ || echo 'GAP: no remoteUser'
+grep -rn  '<HOME_VARS>'                   .devcontainer/ || echo 'GAP: toolchain state left in $HOME'
+grep -rn  '<MOUNT_VARS>'                  .devcontainer/ || echo 'GAP: build output on the workspace mount'
+grep -rEn '^[[:space:]]*COPY.*<LOCKFILE>' .devcontainer/ || echo 'GAP: no lockfile-keyed dep layer'
+```
+
+`<HOME_VARS>` and `<MOUNT_VARS>` are your row's names, each with a **trailing
+`=`** and joined by `\|` — Phoenix's second line is `'MIX_HOME=\|HEX_HOME='`,
+its third `'MIX_BUILD_ROOT=\|MIX_DEPS_PATH='`. The `=` is what separates a real
+assignment from a comment that merely mentions the variable, and the anchored
+`COPY` is what keeps a comment about copying the lockfile from counting. Where
+a row names a path instead of a variable (Django's `/opt/venv`), grep the path;
+where the mount column is `—`, skip that line.
+
+**Fix every `GAP:` the audit prints — do not merely report it.** Edit the
+existing files: `remoteUser` into `devcontainer.json`; into the `Dockerfile`,
+the `ENV` line, its matching `mkdir -p` + `chown`, and the
+`COPY <manifest> <lockfile>` + install `RUN` above the source. Take the shape
+from your stack's starter in `references/stacks.md`, then cut the lifecycle
+hooks back to reconciling the delta. Quote the audit output in your final
+report.
+
+Check the rest and **report** the gaps:
+
 - Lifecycle hooks reconcile the *delta*: `postCreateCommand` for the
   lockfile-drift install, seeds and an initial build; `postStartCommand` for
   migrations, because it re-runs on every start while `postCreateCommand` runs
@@ -112,7 +152,7 @@ a plain `"image"` when the project needs no companion services, a
   migration cannot lock you out of the Terminal. Neither belongs in the start
   command.
 - The project's `CLAUDE.md`/`AGENTS.md` says the environment arrives
-  provisioned, so agents don't re-run setup out of habit.
+  provisioned, so agents don't re-run setup out of habit — step 6 writes it.
 - Companion services come from `dockerComposeFile`. CodeLead has no services
   model of its own.
 - `PATH` additions are in `/etc/profile.d/*.sh` — the preview command runs
@@ -131,13 +171,15 @@ never "fix" paths to match it.
 ## 6. Write the agent instructions
 
 Append the block from `references/agents-snippet.md` to this repo's
-`CLAUDE.md` / `AGENTS.md`, creating the file if there is none, with the stack
-line already substituted. If a *CodeLead preview contract* section is already
-there, update it in place instead of adding a second one.
+`CLAUDE.md` / `AGENTS.md`, creating the file if there is none, with **both**
+marked lines substituted — the base-path recipe and the provisioned-environment
+line naming where step 5 put deps and build output. If a *CodeLead preview
+contract* section is already there, update it in place instead of adding a
+second one.
 
 ## 7. Verify
 
-Run the server the way CodeLead will, from the repo root:
+**The preview.** Run the server the way CodeLead will, from the repo root:
 
 ```bash
 PREVIEW_BASE_PATH=/preview/1 PREVIEW_PORT=<port> <preview command>
@@ -154,8 +196,18 @@ The second command should print nothing that is not prefixed with
 `/preview/1`. An open port is not enough — CodeLead treats a preview as
 running only once it gets an **HTTP answer**.
 
-Report what passed and what did not. Do not claim success on a step you
-could not run.
+**The devcontainer.** Re-run the audit block from step 5. It must print no
+`GAP:` line. A grep hit proves only that the Dockerfile *mentions* the
+variable; if the devcontainer CLI and docker are available, prove it reaches an
+exec:
+
+```bash
+devcontainer up --workspace-folder .
+docker exec <container-id> printenv | grep -E '<HOME_VARS>|<BUILD_VARS>'
+```
+
+Report what passed and what did not, the devcontainer audit included. Do not
+claim success on a step you could not run.
 
 ## 8. Tell the owner what to enter in CodeLead
 

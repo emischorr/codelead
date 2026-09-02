@@ -1,8 +1,9 @@
 # The block to write into the project's `CLAUDE.md` / `AGENTS.md`
 
 Step 6 of `SKILL.md`. Copy the block below verbatim, with `<!-- STACK LINE -->`
-replaced from the table underneath. If the project already has a *CodeLead
-preview contract* section, update that one instead of appending a second.
+and `<!-- PROVISION LINE -->` replaced from the tables underneath. If the
+project already has a *CodeLead preview contract* section, update that one
+instead of appending a second.
 
 > Kept identical to `templates/project-readiness/AGENTS-snippet.md` in the
 > CodeLead repo — change both or neither.
@@ -39,10 +40,16 @@ The rest holds whether or not those variables are set:
   urls relative to where the *bundle* lands. A hardcoded socket path is the
   worst case — it makes the preview reload itself in a loop.
 
-- **The dev server must be a single process.** Dependency installs, database
-  setup and seeds belong in `.devcontainer` lifecycle hooks
-  (`postCreateCommand` / `postStartCommand`), never chained onto the start
-  command with `&&`.
+- **The dev server must be a single process.** Database setup and seeds belong
+  in `.devcontainer` lifecycle hooks (`postCreateCommand` / `postStartCommand`),
+  never chained onto the start command with `&&`.
+
+- **Don't re-install what the image already has.** The devcontainer installs
+  dependencies at image-build time, keyed on the lockfile, and the hooks have
+  already run setup and migrations by the time you get a shell. Concretely:
+  <!-- PROVISION LINE --> Re-running the project's setup command at the start
+  of a task costs minutes and tokens for nothing — do it only after you change
+  the manifest or lockfile.
 
 - **Keep toolchain state out of `$HOME`.** CodeLead overrides `HOME` per task,
   so anything installed under `~` (nvm, rustup, pyenv, cargo, hex) is invisible
@@ -66,6 +73,18 @@ which stays authoritative.
 | Rails | set `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]`. |
 | Django | set `FORCE_SCRIPT_NAME = os.environ.get("PREVIEW_BASE_PATH") or None` and derive `STATIC_URL` from it. |
 | Static files | nothing to do — serve the directory and keep every asset path relative. |
+
+Replace `<!-- PROVISION LINE -->` with the row for your stack, adjusted to the
+paths the devcontainer image actually uses — the ones step 5 audited for. Say
+where things landed: a name an agent can check beats a rule it has to trust.
+
+| Stack | Line to paste |
+|---|---|
+| Phoenix | deps are at `$MIX_DEPS_PATH` (**not** `./deps`), `_build` is `$MIX_BUILD_ROOT`, and hex/rebar live in `$MIX_HOME`/`$HEX_HOME` — don't run `mix setup` or `mix deps.get`. |
+| Rails | gems are installed under `$GEM_HOME` with `$BUNDLE_PATH` pointing at it — don't run `bundle install`. |
+| Vite / Next.js | `node_modules` is installed in the image — don't run `npm install` / `pnpm install`. |
+| Django | the virtualenv is at `/opt/venv` and already on `PATH` — don't create one or re-run `pip install`. |
+| Static files | nothing is installed; there is nothing to skip. |
 
 And the flag that binds every interface, if your start command needs one
 spelled out:

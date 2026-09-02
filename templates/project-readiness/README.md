@@ -5,12 +5,12 @@ is needed to run CodeLead itself.
 
 - [`AGENTS-snippet.md`](AGENTS-snippet.md) — paste into the project's
   `CLAUDE.md` / `AGENTS.md` so agents stop breaking the live preview.
-  Substitute one line from the stack table at the bottom.
+  Substitute two lines from the stack tables at the bottom.
 - [`skills/codelead-ready/`](skills/codelead-ready) — a Claude Skill that does
   the whole job in one pass: preview port, host binding, `PREVIEW_BASE_PATH`,
   the root-absolute URLs that escape the preview mount, and `.devcontainer/`
-  (scaffolded when missing, audited when present). Copy the directory into the
-  project's `.claude/skills/` and run `/codelead-ready`.
+  (scaffolded when missing, audited and repaired when present). Copy the
+  directory into the project's `.claude/skills/` and run `/codelead-ready`.
 
   ```bash
   mkdir -p /path/to/your/project/.claude/skills

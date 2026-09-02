@@ -5,7 +5,7 @@ repository you develop with CodeLead — `CLAUDE.md`, `AGENTS.md`, or whatever
 your harness reads. It is what keeps an agent from breaking the Review tab's
 live preview while it works.
 
-Substitute the one marked line from the [stack table](#stack-lines) further
+Substitute the two marked lines from the [stack tables](#stack-lines) further
 down. Everything else is stack-independent.
 
 The reasoning behind each rule is in
@@ -51,9 +51,10 @@ The rest holds whether or not those variables are set:
 
 - **Don't re-install what the image already has.** The devcontainer installs
   dependencies at image-build time, keyed on the lockfile, and the hooks have
-  already run setup and migrations by the time you get a shell. Re-running the
-  project's setup command at the start of a task costs minutes and tokens for
-  nothing — do it only after you change the manifest or lockfile.
+  already run setup and migrations by the time you get a shell. Concretely:
+  <!-- PROVISION LINE --> Re-running the project's setup command at the start
+  of a task costs minutes and tokens for nothing — do it only after you change
+  the manifest or lockfile.
 
 - **Keep toolchain state out of `$HOME`.** CodeLead overrides `HOME` per task,
   so anything installed under `~` (nvm, rustup, pyenv, cargo, hex) is invisible
@@ -77,6 +78,18 @@ which stays authoritative.
 | Rails | set `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]`. |
 | Django | set `FORCE_SCRIPT_NAME = os.environ.get("PREVIEW_BASE_PATH") or None` and derive `STATIC_URL` from it. |
 | Static files | nothing to do — serve the directory and keep every asset path relative. |
+
+Replace `<!-- PROVISION LINE -->` with the row for your stack, adjusted to
+whatever paths the devcontainer image actually uses. Say where things landed —
+a name an agent can check beats a rule it has to trust:
+
+| Stack | Line to paste |
+|---|---|
+| Phoenix | deps are at `$MIX_DEPS_PATH` (**not** `./deps`), `_build` is `$MIX_BUILD_ROOT`, and hex/rebar live in `$MIX_HOME`/`$HEX_HOME` — don't run `mix setup` or `mix deps.get`. |
+| Rails | gems are installed under `$GEM_HOME` with `$BUNDLE_PATH` pointing at it — don't run `bundle install`. |
+| Vite / Next.js | `node_modules` is installed in the image — don't run `npm install` / `pnpm install`. |
+| Django | the virtualenv is at `/opt/venv` and already on `PATH` — don't create one or re-run `pip install`. |
+| Static files | nothing is installed; there is nothing to skip. |
 
 And the flag that binds every interface, if your start command needs one
 spelled out:

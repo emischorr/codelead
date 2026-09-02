@@ -146,6 +146,28 @@ config fails the run visibly.
 - Cap resources with `runArgs` / `hostRequirements` if you need to. There is
   no CodeLead-side knob.
 
+The first three are the ones that get skipped, and a devcontainer written for
+VS Code has no reason to have them — so check rather than assume. For a Phoenix
+project, from the repo root:
+
+```bash
+grep -rn  '"remoteUser"\|"containerUser"'    .devcontainer/ || echo 'GAP: no remoteUser'
+grep -rn  'MIX_HOME=\|HEX_HOME='             .devcontainer/ || echo 'GAP: toolchain state left in $HOME'
+grep -rn  'MIX_BUILD_ROOT=\|MIX_DEPS_PATH='  .devcontainer/ || echo 'GAP: build output on the workspace mount'
+grep -rEn '^[[:space:]]*COPY.*mix\.lock'     .devcontainer/ || echo 'GAP: no lockfile-keyed dep layer'
+```
+
+The trailing `=` and the anchored `COPY` are deliberate: without them a comment
+that merely names the variable passes the check. A grep hit still only proves
+the Dockerfile *mentions* it — `docker exec <id> printenv` against a built
+container is the check that proves it reaches an exec.
+
+Substitute the equivalents for other stacks — `GEM_HOME`/`BUNDLE_PATH` +
+`Gemfile.lock`, `CARGO_HOME`/`RUSTUP_HOME`/`CARGO_TARGET_DIR` + `Cargo.lock`,
+`NPM_CONFIG_PREFIX`/`PNPM_HOME` + the npm lockfile. The
+[`codelead-ready` skill](../templates/project-readiness/skills/codelead-ready)
+runs this audit for you and fixes what it finds.
+
 **Ignored — do not configure these for CodeLead's sake.** This is the list
 that saves the most time:
 
