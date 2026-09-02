@@ -47,58 +47,72 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
 
       <%!-- The transcript scrolls here, not in the page pane, so the composer
             below stays a sibling of the scrollport and docks for real. --%>
-      <div id="agent-pane" class="min-h-0 flex-1 overflow-y-auto">
-        <div :if={not @all_runs?} class="mx-auto w-full max-w-3xl px-4 pt-4 sm:px-6">
-          <button
-            type="button"
-            phx-click="show_earlier_runs"
-            id="show-earlier-runs"
-            class="text-[11px] text-text3 transition-colors hover:text-text2"
+      <div class="relative min-h-0 flex-1">
+        <div id="agent-pane" phx-hook=".AutoScroll" class="h-full overflow-y-auto">
+          <div :if={not @all_runs?} class="mx-auto w-full max-w-3xl px-4 pt-4 sm:px-6">
+            <button
+              type="button"
+              phx-click="show_earlier_runs"
+              id="show-earlier-runs"
+              class="text-[11px] text-text3 transition-colors hover:text-text2"
+            >
+              Show earlier runs
+            </button>
+          </div>
+
+          <div
+            id="agent-events"
+            phx-update="stream"
+            class="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4 sm:p-6"
           >
-            Show earlier runs
-          </button>
-        </div>
-
-        <div
-          id="agent-events"
-          phx-update="stream"
-          class="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4 sm:p-6"
-        >
-          <div class="hidden text-center text-[13px] text-text3 only:block" id="agent-events-empty">
-            <%= if @task.run_state == :dispatched do %>
-              <div class="flex flex-col items-center gap-2 py-2">
-                <.pulse_dot class="size-2 bg-run" />
-                <span>{provisioning_label(@task.execution_env)}</span>
-              </div>
-            <% else %>
-              No agent activity yet — events appear here live during a run.
-            <% end %>
-          </div>
-          <.feed_block
-            :for={{id, block} <- @blocks}
-            id={id}
-            block={block}
-            executing?={@executing?}
-            can_operate?={@can_operate?}
-            root={@root}
-          />
-        </div>
-
-        <div
-          :if={@live_message}
-          class="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6"
-          id="agent-live-message"
-        >
-          <div class="flex flex-col gap-1.5 rounded-[11px] border border-accent/40 bg-surface p-3.5">
-            <div class="flex items-center gap-2">
-              <span class="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-accent">
-                MSG
-              </span>
-              <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+            <div class="hidden text-center text-[13px] text-text3 only:block" id="agent-events-empty">
+              <%= if @task.run_state == :dispatched do %>
+                <div class="flex flex-col items-center gap-2 py-2">
+                  <.pulse_dot class="size-2 bg-run" />
+                  <span>{provisioning_label(@task.execution_env)}</span>
+                </div>
+              <% else %>
+                No agent activity yet — events appear here live during a run.
+              <% end %>
             </div>
-            <.markdown text={@live_message.text} class="text-[13px] leading-relaxed text-text" />
+            <.feed_block
+              :for={{id, block} <- @blocks}
+              id={id}
+              block={block}
+              executing?={@executing?}
+              can_operate?={@can_operate?}
+              root={@root}
+            />
+          </div>
+
+          <div
+            :if={@live_message}
+            class="mx-auto w-full max-w-3xl px-4 pb-4 sm:px-6"
+            id="agent-live-message"
+          >
+            <div class="flex flex-col gap-1.5 rounded-[11px] border border-accent/40 bg-surface p-3.5">
+              <div class="flex items-center gap-2">
+                <span class="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-accent">
+                  MSG
+                </span>
+                <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+              </div>
+              <.markdown text={@live_message.text} class="text-[13px] leading-relaxed text-text" />
+            </div>
           </div>
         </div>
+
+        <%!-- JS-owned: the hook toggles visibility on scroll/update, so
+              LiveView must never touch this node's attributes again. --%>
+        <button
+          type="button"
+          id="agent-jump-to-bottom"
+          phx-update="ignore"
+          class="pointer-events-none absolute right-4 bottom-4 z-10 flex size-9 items-center justify-center rounded-full border border-border bg-surface text-text2 opacity-0 shadow-md transition-opacity duration-150 hover:bg-surface2 hover:text-text sm:right-6"
+          aria-label="Jump to latest"
+        >
+          <.icon name="hero-arrow-down" class="size-4" />
+        </button>
       </div>
 
       <div class="shrink-0 border-t border-border bg-surface p-2.5 sm:p-3.5">
@@ -122,6 +136,78 @@ defmodule CodeLeadWeb.TaskLive.AgentTab do
         </div>
       </div>
     </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoScroll">
+      // Sticks to the bottom while the human hasn't scrolled away from it.
+      // Any manual scroll off the floor releases that and reveals the jump
+      // button until they either scroll back down themselves or click it.
+      const AT_BOTTOM_PX = 32
+
+      export default {
+        mounted() {
+          this.stuck = true
+          this.programmatic = false
+          this.button = this.el.parentElement.querySelector("#agent-jump-to-bottom")
+          this.onButtonClick = () => this.scrollToBottom(true)
+          this.button?.addEventListener("click", this.onButtonClick)
+
+          // Guarded so the scroll events a smooth scroll fires along the
+          // way — there's one per animation frame — never race this into
+          // releasing `stuck` before the animation reaches the bottom.
+          this.onScroll = () => {
+            if (this.programmatic) { return }
+            this.stuck = this.atBottom()
+            this.updateButton()
+          }
+          this.el.addEventListener("scroll", this.onScroll, {passive: true})
+
+          // Land at the bottom on every (re-)mount — including a tab
+          // re-entry, since the Agent tab is conditionally rendered and
+          // remounts this hook each time it comes back on screen.
+          this.scrollToBottom(false)
+        },
+
+        // A stream insert or a live-message chunk patches this element's
+        // subtree without touching its own attributes, which still fires
+        // this callback — that's what keeps a run's output pinned in view
+        // as it streams in, as long as the human hasn't scrolled away.
+        updated() {
+          if (this.stuck) { this.scrollToBottom(false) }
+        },
+
+        atBottom() {
+          return this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < AT_BOTTOM_PX
+        },
+
+        // Streaming re-triggers the instant jump on almost every update, so
+        // only the smooth (button-click) path holds the guard — an instant
+        // jump resolves within the same tick, before onScroll even runs,
+        // and holding on every one of those would leave `programmatic` on
+        // near-continuously during a burst and swallow real user scrolls.
+        scrollToBottom(smooth) {
+          if (smooth) { this.hold() }
+          this.el.scrollTo({top: this.el.scrollHeight, behavior: smooth ? "smooth" : "auto"})
+          this.stuck = true
+          this.updateButton()
+        },
+
+        hold() {
+          this.programmatic = true
+          clearTimeout(this.holdTimer)
+          this.holdTimer = setTimeout(() => { this.programmatic = false }, 1000)
+        },
+
+        updateButton() {
+          this.button?.classList.toggle("opacity-0", this.stuck)
+          this.button?.classList.toggle("pointer-events-none", this.stuck)
+        },
+
+        destroyed() {
+          clearTimeout(this.holdTimer)
+          this.el.removeEventListener("scroll", this.onScroll)
+          this.button?.removeEventListener("click", this.onButtonClick)
+        }
+      }
+    </script>
     """
   end
 
