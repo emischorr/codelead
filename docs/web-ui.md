@@ -607,13 +607,40 @@ above the bar instead of underneath it.
   `send_message` is a stub.
 
   Like the Diff tab, this tab owns its scrolling: the root is `h-full
-  min-h-0 flex-col`, `#agent-pane` is the `min-h-0 flex-1
-  overflow-y-auto` scrollport, and the composer is a `shrink-0` sibling
-  *outside* it. The composer must not go back to `sticky bottom-0` — a
+  min-h-0 flex-col`, a `relative min-h-0 flex-1` div wraps the
+  scrollport, and the composer is a `shrink-0` sibling *outside* that
+  wrapper. The composer must not go back to `sticky bottom-0` — a
   sticky element cannot leave its containing block, and with the feed
   scrolling in the page pane that block is one screenful tall, so the
   composer detaches and paints over the transcript's tail (which on a
   short viewport buries an unanswered question's buttons for good).
+
+  `#agent-pane` (the actual `h-full overflow-y-auto` scrollport, now
+  nested inside that wrapper) carries the `.AutoScroll` colocated hook,
+  which owns autoscroll entirely client-side — no server round trip, no
+  assign. It tracks a `stuck` flag: `mounted()` always lands at the
+  bottom (the Agent tab is conditionally rendered, so re-entering it
+  remounts the hook), `updated()` re-pins to the bottom if still `stuck`
+  when a stream insert or a live-message chunk patches the pane's
+  subtree, and a `scroll` listener flips `stuck` false the moment the
+  human scrolls away from the floor. The `#agent-jump-to-bottom` button
+  is a `phx-update="ignore"` sibling the hook shows/hides by toggling
+  its own opacity classes — `ignore` is load-bearing, since without it a
+  later LiveView patch would stomp the hook's classList edits back to
+  the button's static server-rendered markup.
+
+  The button's own click triggers a smooth scroll, which — unlike the
+  instant jump every stream update does — spans several animation
+  frames and fires a `scroll` event per frame; without a guard the
+  `scroll` listener would read those mid-flight positions as "not at
+  the bottom" and flicker the button back on before the animation
+  lands. `scrollToBottom/1` only arms a short `programmatic` hold (the
+  same pattern as `.ScrollToFile`'s `hold()`, `review_tab.ex:296-334`)
+  for that smooth path, not for the instant one — an instant jump
+  resolves within the same tick, before `onScroll` runs, and arming the
+  hold on every one of those (streaming re-triggers it on nearly every
+  update) would leave `programmatic` on almost continuously during a
+  burst and swallow real user scrolls along with it.
 
   Tool rows read `label: detail`, and the detail is shortened against the
   run's working directory (`context_root/1` — the worktree for a `:repo`
