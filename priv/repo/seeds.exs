@@ -399,7 +399,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       :agent,
       auditor.name,
       "review cycle 1: pass",
-      Integer.to_string(auditor.id)
+      executor_ref: Integer.to_string(auditor.id)
     )
 
   Repo.insert!(%Review{
@@ -425,7 +425,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       :agent,
       judy.name,
       "review cycle 1: concerns",
-      Integer.to_string(judy.id)
+      executor_ref: Integer.to_string(judy.id)
     )
 
   Repo.insert!(%Review{
@@ -749,7 +749,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Marketing Site")) do
       :agent,
       style.name,
       "review cycle 1: concerns",
-      Integer.to_string(style.id)
+      executor_ref: Integer.to_string(style.id)
     )
 
   Repo.insert!(%Review{
@@ -768,7 +768,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Marketing Site")) do
       :agent,
       copywriter.name,
       "review cycle 1: no verdict",
-      Integer.to_string(copywriter.id)
+      executor_ref: Integer.to_string(copywriter.id)
     )
 
   Repo.insert!(%Review{
