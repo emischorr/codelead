@@ -12,7 +12,8 @@ defmodule CodeLeadWeb.ForgeLinks do
 
   @doc """
   URL to a cited file on the default branch, with a line anchor when
-  the path carries a `:line` suffix (`"lib/foo.ex:42"`).
+  the path carries a `:line` suffix (`"lib/foo.ex:42"` or a range
+  `"lib/foo.ex:42-56"`, anchored at the start line).
   """
   @spec file_url(Git.forge(), String.t(), String.t()) :: String.t() | nil
   def file_url(forge, default_branch, cited_path) do
@@ -31,7 +32,7 @@ defmodule CodeLeadWeb.ForgeLinks do
   defp blob_url(:other, _branch, _path, _line), do: nil
 
   defp split_line(cited_path) do
-    case Regex.run(~r/^(.+):(\d+)$/, cited_path) do
+    case Regex.run(~r/^(.+):(\d+)(?:-\d+)?$/, cited_path) do
       [_match, path, line] -> {path, line}
       nil -> {cited_path, nil}
     end

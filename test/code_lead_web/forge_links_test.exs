@@ -12,6 +12,9 @@ defmodule CodeLeadWeb.ForgeLinksTest do
 
     assert ForgeLinks.file_url(forge, "main", "lib/pay.ex:42") ==
              "https://github.com/acme/shop/blob/main/lib/pay.ex#L42"
+
+    assert ForgeLinks.file_url(forge, "main", "lib/pay.ex:36-56") ==
+             "https://github.com/acme/shop/blob/main/lib/pay.ex#L36"
   end
 
   test "GitLab blob URLs use the /-/blob/ convention" do
