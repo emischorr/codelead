@@ -43,6 +43,81 @@ defmodule CodeLead.AccountsTest do
     end
   end
 
+  describe "org env store" do
+    setup do
+      organization_fixture()
+      %{admin_scope: user_scope_fixture(admin_fixture())}
+    end
+
+    test "put_org_env/4 upserts and org_env_vars/0 decrypts", %{admin_scope: scope} do
+      assert {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+      assert {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "changed")
+      assert {:ok, _} = Accounts.put_org_env(scope, "OTHER", "value")
+
+      assert Accounts.org_env_vars() == [{"API_KEY", "changed"}, {"OTHER", "value"}]
+    end
+
+    test "keys are matched case-insensitively on upsert", %{admin_scope: scope} do
+      assert {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "first")
+      assert {:ok, _} = Accounts.put_org_env(scope, "api_key", "second")
+
+      assert Accounts.org_env_vars() == [{"api_key", "second"}]
+    end
+
+    test "values are stored encrypted at rest", %{admin_scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+
+      %{rows: [[raw_value]]} = Repo.query!("SELECT value FROM org_envs")
+
+      refute raw_value == "s3cret"
+      refute String.contains?(raw_value, "s3cret")
+      assert Accounts.org_env_vars() == [{"API_KEY", "s3cret"}]
+    end
+
+    test "invalid env var names are rejected", %{admin_scope: scope} do
+      assert {:error, changeset} = Accounts.put_org_env(scope, "1BAD-NAME", "x")
+      assert %{key: _} = errors_on(changeset)
+    end
+
+    test "delete_org_env/2 removes the entry, matched case-insensitively", %{admin_scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+      assert :ok = Accounts.delete_org_env(scope, "api_key")
+      assert Accounts.org_env_vars() == []
+    end
+
+    test "list_org_env_keys/0 hides the value of secret entries", %{admin_scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+
+      assert [entry] = Accounts.list_org_env_keys()
+      assert entry.key == "API_KEY"
+      assert entry.secret == true
+      assert entry.value == nil
+
+      # the value is still reachable where it is actually needed
+      assert Accounts.org_env_var("API_KEY") == "s3cret"
+    end
+
+    test "org_env_var/1 matches case-insensitively", %{admin_scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "GITHUB_TOKEN", "ghp-123")
+      assert Accounts.org_env_var("github_token") == "ghp-123"
+    end
+
+    test "put_org_env/4 with secret: false stores the value in plain text", %{admin_scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "ERL_FLAGS", "+K true", false)
+
+      assert [entry] = Accounts.list_org_env_keys()
+      assert entry.secret == false
+      assert entry.value == "+K true"
+    end
+
+    test "put_org_env/4 and delete_org_env/2 refuse a non-admin scope" do
+      member_scope = user_scope_fixture(user_fixture())
+
+      assert {:error, :unauthorized} = Accounts.put_org_env(member_scope, "API_KEY", "x")
+      assert {:error, :unauthorized} = Accounts.delete_org_env(member_scope, "API_KEY")
+    end
+  end
+
   describe "setup flag" do
     test "setup_done?/0 is false without an organization" do
       refute Accounts.setup_done?()

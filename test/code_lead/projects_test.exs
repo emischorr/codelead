@@ -311,6 +311,70 @@ defmodule CodeLead.ProjectsTest do
       assert entry.secret == false
       assert entry.value == "+K true"
     end
+
+    test "env_vars/1 merges in the org env store" do
+      project = project_fixture()
+      admin_scope = user_scope_fixture(admin_fixture())
+      {:ok, _} = Accounts.put_org_env(admin_scope, "GITHUB_TOKEN", "org-token")
+      {:ok, _} = Projects.put_env(project.id, "API_KEY", "s3cret")
+
+      assert Projects.env_vars(project.id) ==
+               [{"GITHUB_TOKEN", "org-token"}, {"API_KEY", "s3cret"}]
+    end
+
+    test "a project entry wins over an org entry on a case-insensitive key match" do
+      project = project_fixture()
+      admin_scope = user_scope_fixture(admin_fixture())
+      {:ok, _} = Accounts.put_org_env(admin_scope, "GITHUB_TOKEN", "org-token")
+      {:ok, _} = Projects.put_env(project.id, "github_token", "project-token")
+
+      assert Projects.env_vars(project.id) == [{"github_token", "project-token"}]
+      assert Projects.env_var(project.id, "GITHUB_TOKEN") == "project-token"
+    end
+
+    test "env_var/2 falls back to the org store, matched case-insensitively" do
+      project = project_fixture()
+      admin_scope = user_scope_fixture(admin_fixture())
+      {:ok, _} = Accounts.put_org_env(admin_scope, "GITHUB_TOKEN", "org-token")
+
+      assert Projects.env_var(project.id, "github_token") == "org-token"
+      assert Projects.forge_token(project.id, :github) == "org-token"
+    end
+
+    # project_envs has no case-insensitive uniqueness guard (unlike
+    # org_envs), so two entries differing only by case can coexist on the
+    # same project. env_var/2's case-insensitive lookup must tolerate that
+    # instead of raising Ecto.MultipleResultsError.
+    test "env_var/2 does not raise when the project holds two case-variant keys" do
+      project = project_fixture()
+      {:ok, _} = Projects.put_env(project.id, "GITHUB_TOKEN", "first")
+      {:ok, _} = Projects.put_env(project.id, "github_token", "second")
+
+      assert Projects.env_var(project.id, "GITHUB_TOKEN") == "second"
+      assert Projects.forge_token(project.id, :github) == "second"
+    end
+
+    test "list_env_keys/1 tags entries by source and flags the conflicting key on both sides" do
+      project = project_fixture()
+      admin_scope = user_scope_fixture(admin_fixture())
+      {:ok, _} = Accounts.put_org_env(admin_scope, "GITHUB_TOKEN", "org-token")
+      {:ok, _} = Accounts.put_org_env(admin_scope, "SHARED_TOOL", "org-value")
+      {:ok, _} = Projects.put_env(project.id, "github_token", "project-token")
+
+      entries = Projects.list_env_keys(project.id)
+
+      org_token = Enum.find(entries, &(&1.key == "GITHUB_TOKEN"))
+      assert org_token.source == :org
+      assert org_token.conflicts? == true
+
+      shared_tool = Enum.find(entries, &(&1.key == "SHARED_TOOL"))
+      assert shared_tool.source == :org
+      assert shared_tool.conflicts? == false
+
+      project_token = Enum.find(entries, &(&1.key == "github_token"))
+      assert project_token.source == :project
+      assert project_token.conflicts? == true
+    end
   end
 
   describe "guarded deletes" do

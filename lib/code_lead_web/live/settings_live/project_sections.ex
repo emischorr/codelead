@@ -227,14 +227,22 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
   end
 
   @doc """
-  The project env store. Secret entries (the default) are write-only — the
-  list carries no value for them so nothing is ever decrypted to render it.
-  Plain entries are stored unencrypted and shown/edited inline.
+  The project env store, plus the organization's entries merged in for
+  visibility. Secret entries (the default) are write-only — the list
+  carries no value for them so nothing is ever decrypted to render it.
+  Plain entries are stored unencrypted and shown/edited inline. Org
+  entries are read-only here — they can only be changed from Organization
+  settings — and a key defined on both sides shows which value actually
+  applies (the project's).
   """
   attr :env_keys, :list, required: true
   attr :project_id, :integer, required: true
 
   def environment(assigns) do
+    org_entries = Enum.filter(assigns.env_keys, &(&1.source == :org))
+    project_entries = Enum.filter(assigns.env_keys, &(&1.source == :project))
+    assigns = assign(assigns, org_entries: org_entries, project_entries: project_entries)
+
     ~H"""
     <.section_card label="Environment">
       <:actions>
@@ -244,10 +252,32 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
       <p class="text-[12px] leading-relaxed text-text3">
         Injected into every agent process for this project. Secret entries are encrypted at rest
         and write-only — never shown again, only replaced; plain entries are stored as-is and can
-        be viewed and edited here.
+        be viewed and edited here. Entries inherited from the organization are listed too, but
+        can only be changed from Organization settings.
       </p>
 
-      <div :if={@env_keys == []}>
+      <div :if={@org_entries != []} id="org-env-list" class="flex flex-col gap-0">
+        <.list_row
+          :for={entry <- @org_entries}
+          id={"org-env-row-#{entry.key}"}
+          title={entry.key}
+          subtitle={"Updated #{Format.relative(entry.updated_at)}"}
+        >
+          <:badges>
+            <.badge :if={entry.forge_token?} variant={:accent}>git access</.badge>
+            <.badge :if={entry.conflicts?} variant={:neutral}>overridden by project</.badge>
+            <.badge :if={!entry.conflicts?} variant={:accent}>from organization</.badge>
+          </:badges>
+          <:meta>
+            <.secret_value :if={entry.secret} set?={true} />
+            <span :if={!entry.secret} class="font-mono text-[12px] text-text2">
+              {entry.value}
+            </span>
+          </:meta>
+        </.list_row>
+      </div>
+
+      <div :if={@project_entries == []}>
         <.empty_state icon="hero-key" title="No variables set">
           Forge tokens, API keys and build settings the agent's tooling needs.
         </.empty_state>
@@ -255,13 +285,14 @@ defmodule CodeLeadWeb.SettingsLive.ProjectSections do
 
       <div id="env-list">
         <.list_row
-          :for={entry <- @env_keys}
+          :for={entry <- @project_entries}
           id={"env-row-#{entry.key}"}
           title={entry.key}
           subtitle={"Updated #{Format.relative(entry.updated_at)}"}
         >
           <:badges>
             <.badge :if={entry.forge_token?} variant={:accent}>git access</.badge>
+            <.badge :if={entry.conflicts?} variant={:warn}>overrides organization value</.badge>
           </:badges>
           <:meta>
             <.secret_value :if={entry.secret} set?={true} />

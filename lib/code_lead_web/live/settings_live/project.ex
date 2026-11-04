@@ -428,40 +428,7 @@ defmodule CodeLeadWeb.SettingsLive.Project do
         return_to={~p"/settings/projects/#{@project.id}"}
       >
         <.form for={@env_form} id="env-form" phx-change="validate_env" phx-submit="save_env">
-          <.input
-            field={@env_form[:key]}
-            label="Name"
-            placeholder="GITHUB_TOKEN"
-            spellcheck="false"
-            autocomplete="off"
-            readonly
-            phx-focus={if @live_action == :new_env, do: JS.remove_attribute("readonly")}
-            required
-          />
-          <.input
-            field={@env_form[:value]}
-            type={if env_secret?(@env_form), do: "password", else: "text"}
-            label="Value"
-            autocomplete="new-password"
-            data-1p-ignore="true"
-            data-lpignore="true"
-            data-bwignore="true"
-            spellcheck="false"
-            readonly
-            required
-            phx-mounted={JS.focus()}
-            phx-focus={JS.remove_attribute("readonly")}
-          />
-          <.input type="checkbox" field={@env_form[:secret]} label="Encrypt this value" />
-          <p class="mb-4 text-[12px] leading-relaxed text-text3">
-            <%= if env_secret?(@env_form) do %>
-              Letters, digits and underscores; must not start with a digit. Encrypted at rest and
-              never displayed again.
-            <% else %>
-              Letters, digits and underscores; must not start with a digit. Stored as plain text —
-              visible in this UI and editable later.
-            <% end %>
-          </p>
+          <.env_form_fields form={@env_form} new?={@live_action == :new_env} />
 
           <div class="mt-4 flex justify-end gap-2">
             <.button patch={~p"/settings/projects/#{@project.id}"}>Cancel</.button>
@@ -593,8 +560,6 @@ defmodule CodeLeadWeb.SettingsLive.Project do
     |> assign(env_key: key)
     |> assign(env_form: to_form(params, as: "env", errors: errors))
   end
-
-  defp env_secret?(form), do: Phoenix.HTML.Form.normalize_value("checkbox", form[:secret].value)
 
   defp repository_saved({:ok, repository}, socket) do
     {:noreply,
