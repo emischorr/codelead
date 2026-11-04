@@ -77,10 +77,14 @@ defmodule CodeLeadWeb.TaskLive.FindingsComponents do
           id={"finding-toggle-#{@finding.id}"}
           phx-click="toggle_finding"
           phx-value-id={@finding.id}
-          class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+          class={[
+            "flex min-w-0 flex-1 cursor-pointer gap-2 text-left",
+            (@expanded? && "items-start") || "items-center"
+          ]}
         >
           <span class={[
-            "truncate text-[13px]",
+            "text-[13px]",
+            (@expanded? && "break-words whitespace-normal") || "truncate",
             (@state == :dismissed && "text-text3") || "text-text"
           ]}>
             {@finding.title}
