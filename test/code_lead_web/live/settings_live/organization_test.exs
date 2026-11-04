@@ -54,4 +54,41 @@ defmodule CodeLeadWeb.SettingsLive.OrganizationTest do
     assert html =~ "must be greater than or equal to"
     assert Accounts.get_organization!().budget_limit_cents == nil
   end
+
+  describe "environment" do
+    test "adds a variable without ever showing its value", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/settings/organization/env/new")
+
+      view
+      |> form("#env-form", env: %{key: "GITHUB_TOKEN", value: "ghp-super-secret"})
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/organization")
+      assert has_element?(view, "#env-row-GITHUB_TOKEN")
+      refute render(view) =~ "ghp-super-secret"
+      assert Accounts.org_env_var("GITHUB_TOKEN") == "ghp-super-secret"
+    end
+
+    test "edits a variable", %{conn: conn, scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+      {:ok, view, _html} = live(conn, ~p"/settings/organization/env/API_KEY/edit")
+
+      view
+      |> form("#env-form", env: %{key: "API_KEY", value: "changed"})
+      |> render_submit()
+
+      assert_patch(view, ~p"/settings/organization")
+      assert Accounts.org_env_var("API_KEY") == "changed"
+    end
+
+    test "removes a variable", %{conn: conn, scope: scope} do
+      {:ok, _} = Accounts.put_org_env(scope, "API_KEY", "s3cret")
+      {:ok, view, _html} = live(conn, ~p"/settings/organization")
+
+      view |> element("#delete-env-API_KEY") |> render_click()
+
+      refute has_element?(view, "#env-row-API_KEY")
+      assert Accounts.org_env_vars() == []
+    end
+  end
 end

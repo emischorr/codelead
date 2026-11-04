@@ -1,4 +1,4 @@
-# Configuration (last updated: 2026-08-19)
+# Configuration (last updated: 2026-11-04, org env store)
 
 All environment variables are read in `config/runtime.exs` and accessed in
 application code via `Application.get_env(:code_lead, ...)` — never
@@ -8,7 +8,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and project env store entries marked secret (the default — an entry can opt out per-value). Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
+| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and project/organization env store entries marked secret (the default — an entry can opt out per-value). Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
 | `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Container execution requires it to be host-coincident** — when the app itself runs in a container, the host directory must be bind-mounted at the identical path (the deployed stack's `DATA_ROOT` bind), because the devcontainer CLI's bind sources are resolved by the host daemon (ADR-0009, [deployment.md](deployment.md#the-data-directory)). **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
 | `TEST_WORKSPACE_ROOT` | `<repo>/tmp/test_workspace` | Test-env-only workspace root override (for CI). Must resolve to a path inside the checkout — `test_helper.exs` refuses to wipe anything outside it. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
@@ -443,6 +443,14 @@ step, or on an existing project from the console:
 CodeLead.Projects.put_env(project_id, "GITHUB_TOKEN", "github_pat_…")
 ```
 
+If every project uses the same forge account, set the token once in the
+**organization** env store instead (`/settings/organization`) — every
+project inherits it (`CodeLead.Projects.forge_token/2` falls through to
+`CodeLead.Accounts.org_env_var/1` when a project has no entry of its own),
+and rotating it is a single edit rather than one per project. A project
+can still define its own `GITHUB_TOKEN`/`GITLAB_TOKEN` to override the
+org-wide one — see *Org env store* below.
+
 The wizard verifies the token against the remote (`git ls-remote`) the
 moment you save it, so a bad one is reported there rather than at the
 first dispatch.
@@ -467,6 +475,23 @@ Three limits worth knowing:
   in a container. This is the one that surprises people: a private repo
   can clone fine for weeks and then start failing the day a token is
   added, because installing the helper also *resets* the inherited ones.
+
+## Org env store
+
+`/settings/organization` carries its own env store, same shape as a
+project's (encrypted-by-default key/value entries, same UI). Every
+project's `CodeLead.Projects.env_vars/1`, `env_var/2` and `forge_token/2`
+merge the org store in live — there is no copy-on-create step, so editing
+or removing an org entry takes effect on every project immediately, in
+contrast to the default project budget limits (`docs/web-ui.md`), which
+are copied once at project creation and never again.
+
+A project-level entry with the same key **wins** over the org-level one,
+matched **case-insensitively** (`GITHUB_TOKEN` and `github_token` are the
+same key for this purpose) — set an org-wide default and override it on
+the one project that needs a different value. The project settings page
+lists inherited org entries alongside its own, read-only, and flags which
+side is actually in effect when both define the same key.
   A local-only success is not evidence the deployment will work.
 
 ### When git refuses
@@ -622,9 +647,10 @@ the rest of the names read in `config/runtime.exs` — before spawning.
 An inherited `WORKSPACE_ROOT` once let an agent's `mix test` (run inside a
 task worktree on CodeLead's own repo) resolve the instance's workspace root
 and wipe it. Operator-exported vars outside that denylist still pass
-through, and a project env store entry always wins over the scrub, even
-under an internal name — a `DATABASE_URL` meant for the *target* app
-reaches the agent untouched.
+through, and an env store entry — project or organization, project
+winning on a shared key — always wins over the scrub, even under an
+internal name — a `DATABASE_URL` meant for the *target* app reaches the
+agent untouched.
 
 **No language toolchain ships in the image**, and that is the limit worth
 knowing before an agent tries to verify its own work. The release bundles ERTS
@@ -659,11 +685,11 @@ commands. Drop a profile snippet next to the image's own:
 RUN printf 'export PATH="/opt/mytool/bin:$PATH"\n' > /etc/profile.d/mytool.sh
 ```
 
-> A `PATH` entry in the **project env store** replaces the inherited one for
-> the harness (`Port.open`'s `env:` merges into the parent environment, so a
-> key that is present wins), which hides every tool above. The same caveat as
-> *Harness prerequisites*, one layer down: it does not help the agent find its
-> tools, it stops it.
+> A `PATH` entry in the **project or organization env store** replaces the
+> inherited one for the harness (`Port.open`'s `env:` merges into the parent
+> environment, so a key that is present wins), which hides every tool above.
+> The same caveat as *Harness prerequisites*, one layer down: it does not
+> help the agent find its tools, it stops it.
 
 Extending the image is the workaround for **local** execution's single
 shared environment. The per-repository fix is devcontainer execution:

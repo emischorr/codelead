@@ -158,6 +158,60 @@ defmodule CodeLeadWeb.SettingsLive.Components do
   end
 
   @doc """
+  The env variable form fields (name, value, encrypt toggle) shared by the
+  project and organization settings pages — only the fields are common;
+  each caller wraps this in its own `<.modal>` and `<.form>` with its own
+  submit/cancel targets. `new?` controls whether the name field is
+  editable (a fresh entry) or fixed (replacing an existing one) — passed
+  as a plain flag so this component never needs to know about a caller's
+  `live_action`.
+  """
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :new?, :boolean, required: true
+
+  def env_form_fields(assigns) do
+    ~H"""
+    <.input
+      field={@form[:key]}
+      label="Name"
+      placeholder="GITHUB_TOKEN"
+      spellcheck="false"
+      autocomplete="off"
+      readonly
+      phx-focus={if @new?, do: JS.remove_attribute("readonly")}
+      required
+    />
+    <.input
+      field={@form[:value]}
+      type={if env_secret?(@form), do: "password", else: "text"}
+      label="Value"
+      autocomplete="new-password"
+      data-1p-ignore="true"
+      data-lpignore="true"
+      data-bwignore="true"
+      spellcheck="false"
+      readonly
+      required
+      phx-mounted={JS.focus()}
+      phx-focus={JS.remove_attribute("readonly")}
+    />
+    <.input type="checkbox" field={@form[:secret]} label="Encrypt this value" />
+    <p class="mb-4 text-[12px] leading-relaxed text-text3">
+      <%= if env_secret?(@form) do %>
+        Letters, digits and underscores; must not start with a digit. Encrypted at rest and
+        never displayed again.
+      <% else %>
+        Letters, digits and underscores; must not start with a digit. Stored as plain text —
+        visible in this UI and editable later.
+      <% end %>
+    </p>
+    """
+  end
+
+  @doc false
+  def env_secret?(form), do: Phoenix.HTML.Form.normalize_value("checkbox", form[:secret].value)
+
+  @doc """
   Delete, or an inert button explaining why it is blocked. A `reason` makes
   it unclickable — the guard itself lives in the context.
   """

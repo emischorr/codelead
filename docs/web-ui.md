@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-08-31, background finalization)
+# Web UI (last updated: 2026-11-04, org env store)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -29,6 +29,8 @@ The project detail page also carries four patch-based sub-routes:
 `/repositories/new`, `/repositories/:repository_id/edit`, `/env/new`
 and `/env/:key/edit`. `/settings/projects/new` is declared **before**
 `/settings/projects/:id` so the literal is not swallowed by the param.
+`/settings/organization` carries the same `/env/new` and `/env/:key/edit`
+pair for its own env store.
 
 The app routes are split across three authenticated `live_session`s —
 general, admin-only, and project-keyed — each behind the setup gate, the
@@ -95,6 +97,16 @@ for entries an operator chose to leave unencrypted, so those can be shown
 and edited inline. Providers stay entirely write-only; a secret env entry
 can only be replaced, never read back.
 
+`Projects.list_env_keys/1` also merges in the organization's env store
+(`Accounts.list_org_env_keys/0`, same secret-safe projection), tagged with
+`source: :org | :project` and `conflicts?` on whichever keys exist on
+both sides (matched case-insensitively) — the project detail page's
+**Environment** section renders the org entries read-only above the
+project's own, badging which one is actually in effect. Unlike the
+default project budgets below, this is a live merge, not a copy: editing
+or removing an org entry from `/settings/organization` changes what every
+project sees immediately.
+
 The agent form's **Project** select drives `scope`: left on "All
 projects" the agent stays org-wide, picking a project sets `scope:
 :project` and casts `project_id` — `Agent.changeset/2` casts it directly,
@@ -111,10 +123,12 @@ detail page's **Agents** tile (`Agents.list_project_agents/1`) surfaces
 only that project's own agents and links back to `/settings/agents`.
 
 **Organization** (`/settings/organization`, admin-only) edits the org
-name, the org-wide budget limits, and the default project budget limits
-that are copied onto each new project at creation.
-`Organization.details_changeset/2` never casts `settings`, so
-`setup_done` cannot be clobbered from there.
+name, the org-wide budget limits, the default project budget limits
+that are copied onto each new project at creation, and the org env
+store — same UI as a project's (`Accounts.put_org_env/4`,
+`delete_org_env/2`, admin-only), merged live into every project rather
+than copied. `Organization.details_changeset/2` never casts `settings`,
+so `setup_done` cannot be clobbered from there.
 
 **Members** live on the project detail page (maintainer/admin only —
 members and reporters bounce to the board): a `list_row` per membership

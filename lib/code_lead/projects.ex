@@ -320,45 +320,106 @@ defmodule CodeLead.Projects do
   end
 
   @doc """
-  Env store entries for the settings UI. Secret entries come back with
-  `value: nil` — a stored secret is never decrypted just to render a list;
-  plain entries carry their real value since they were never encrypted.
+  Merged env store entries for the settings UI: the project's own entries
+  plus the organization's, tagged with where each came from. A key that
+  exists on both sides (matched case-insensitively) is tagged
+  `conflicts?: true` on both entries — the org one to show it is shadowed,
+  the project one to show it overrides the org value. Secret entries come
+  back with `value: nil` — a stored secret is never decrypted just to
+  render a list; plain entries carry their real value since they were
+  never encrypted.
   """
   @spec list_env_keys(pos_integer()) :: [
-          %{key: String.t(), updated_at: DateTime.t(), secret: boolean(), value: String.t() | nil}
+          %{
+            key: String.t(),
+            updated_at: DateTime.t(),
+            secret: boolean(),
+            value: String.t() | nil,
+            source: :org | :project,
+            conflicts?: boolean()
+          }
         ]
   def list_env_keys(project_id) do
+    project_entries = raw_env_keys(project_id)
+    org_entries = Accounts.list_org_env_keys()
+    project_keys = MapSet.new(project_entries, &String.downcase(&1.key))
+    org_keys = MapSet.new(org_entries, &String.downcase(&1.key))
+
+    tagged_org =
+      Enum.map(org_entries, fn entry ->
+        Map.merge(entry, %{
+          source: :org,
+          conflicts?: MapSet.member?(project_keys, String.downcase(entry.key))
+        })
+      end)
+
+    tagged_project =
+      Enum.map(project_entries, fn entry ->
+        Map.merge(entry, %{
+          source: :project,
+          conflicts?: MapSet.member?(org_keys, String.downcase(entry.key))
+        })
+      end)
+
+    tagged_org ++ tagged_project
+  end
+
+  @doc """
+  Decrypted env entries for executor injection, with the organization's
+  env vars merged in — a project entry wins over an org entry on a
+  case-insensitive key match. Never log the result.
+  """
+  @spec env_vars(pos_integer()) :: [{String.t(), String.t()}]
+  def env_vars(project_id) do
+    project_vars = raw_env_vars(project_id)
+    org_vars = Accounts.org_env_vars()
+    project_keys = MapSet.new(project_vars, fn {key, _value} -> String.downcase(key) end)
+
+    Enum.reject(org_vars, fn {key, _value} ->
+      MapSet.member?(project_keys, String.downcase(key))
+    end) ++
+      project_vars
+  end
+
+  @doc """
+  One decrypted env value, or nil — the project's own entry if it has one
+  (matched case-insensitively), otherwise the organization's. Never log
+  the result.
+
+  Unlike `org_envs`, `project_envs` has no case-insensitive uniqueness
+  guard (its `unique_constraint` is case-sensitive, pre-dating this
+  lookup), so two entries differing only by case can coexist on the same
+  project — the most recently updated one wins (ties broken by the
+  higher id, since `updated_at` only has second precision), rather than
+  raising on more than one match.
+  """
+  @spec env_var(pos_integer(), String.t()) :: String.t() | nil
+  def env_var(project_id, key) do
+    case Repo.all(
+           from e in ProjectEnv,
+             where: e.project_id == ^project_id and fragment("lower(?) = lower(?)", e.key, ^key),
+             select: {e.value, e.secret},
+             order_by: [desc: e.updated_at, desc: e.id],
+             limit: 1
+         ) do
+      [] -> Accounts.org_env_var(key)
+      [{value, true}] -> Vault.decrypt!(value)
+      [{value, false}] -> value
+    end
+  end
+
+  defp raw_env_keys(project_id) do
     Repo.all(from e in ProjectEnv, where: e.project_id == ^project_id, order_by: e.key)
     |> Enum.map(fn %ProjectEnv{key: key, updated_at: updated_at, secret: secret, value: value} ->
       %{key: key, updated_at: updated_at, secret: secret, value: if(secret, do: nil, else: value)}
     end)
   end
 
-  @doc """
-  Decrypted env entries for executor injection. Never log the result.
-  """
-  @spec env_vars(pos_integer()) :: [{String.t(), String.t()}]
-  def env_vars(project_id) do
+  defp raw_env_vars(project_id) do
     Repo.all(from e in ProjectEnv, where: e.project_id == ^project_id, order_by: e.key)
     |> Enum.map(fn %ProjectEnv{key: key, value: value, secret: secret} ->
       {key, if(secret, do: Vault.decrypt!(value), else: value)}
     end)
-  end
-
-  @doc """
-  One decrypted env value, or nil. Never log the result.
-  """
-  @spec env_var(pos_integer(), String.t()) :: String.t() | nil
-  def env_var(project_id, key) do
-    case Repo.one(
-           from e in ProjectEnv,
-             where: e.project_id == ^project_id and e.key == ^key,
-             select: {e.value, e.secret}
-         ) do
-      nil -> nil
-      {value, true} -> Vault.decrypt!(value)
-      {value, false} -> value
-    end
   end
 
   @doc """

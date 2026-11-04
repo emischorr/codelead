@@ -34,9 +34,9 @@ Kandev validates the shape (self-hosted, worktree isolation, review-first Kanban
 
 | Concept | Definition |
 |---|---|
-| **Organization** | One deployed instance = one organization. Contains users, projects, agents, providers, budgets. |
+| **Organization** | One deployed instance = one organization. Contains users, projects, agents, providers, budgets, and an org-wide env/secrets store shared by every project. |
 | **User** | A person with a login. The first user self-signs-up and becomes admin. |
-| **Project** | A product workspace. Links one or more repositories. Owns tasks, project-level agents, project env/secrets, and budgets. |
+| **Project** | A product workspace. Links one or more repositories. Owns tasks, project-level agents, project env/secrets (which can override an org-level entry of the same name), and budgets. |
 | **Repository** | A git repo linked by URL to a project. |
 | **Agent** | A reusable worker persona: work type + driver + provider/model + system prompt (+ future memory). Defined at org or project level. |
 | **Provider** | An instance-level connection to a model backend (Anthropic, OpenAI, Ollama, …), configured in the UI. |
@@ -151,7 +151,7 @@ A Done task can be **archived** to clear it from the board without deleting it (
 - **Multi-run:** a `repo`-target task keeps one persistent worktree + feature branch that accumulates commits across review iterations — except the send-back-to-Planning reset. Each run is recorded as an audit step.
 - **Attention** is a state on the task (type, detail, timestamp) set by event handlers (agent question, review ready, run failed) and cleared on human resolution. It surfaces as a card treatment plus a project sidebar counter — no per-user notification fan-out. In-app only for MVP (no email).
 - Optional **assignee/owner** for small-team coordination. Optional human **comments** on a task.
-- **Secrets:** an agent scaffolds config that *references* secrets but does not author secret **values**; real values live in the project env store and are injected at execution — never committed by the agent.
+- **Secrets:** an agent scaffolds config that *references* secrets but does not author secret **values**; real values live in the project env store (merged live with the organization's own env store, project winning on a name conflict) and are injected at execution — never committed by the agent.
 - **Archive:** a Done task can be archived, which hides it from the board and list views but retains it (description, spec, audit trail, reviews, pushed branch) so it can be searched and consulted later. Archiving does not delete and is reversible.
 
 ---
@@ -190,7 +190,7 @@ Agents live at **org level** (shared) or **project level**. Not every agent is a
 ## 11. MVP scope vs. later
 
 **In MVP**
-- Org/users with self-signup admin; projects with linked repos; org/project agents; UI-configured providers with encrypted credentials; project env store.
+- Org/users with self-signup admin; projects with linked repos; org/project agents; UI-configured providers with encrypted credentials; project env store, with an org-wide env store merged live into every project.
 - Planning → Running → Review → Done workflow with selectable AI planning agents (text refinement and repo-aware survey), **multiple parallel advisory reviewers** (work-type matched, per-task, pre-filled from project defaults), human gates, cancel, and failure handling.
 - Agent **roles** (`execute` / `review` / `plan`); separate executor, reviewer and planner slots on a task.
 - Work types `code` / `design` / `content` / `file` driving agent selection, review surface, and Done.
@@ -254,8 +254,8 @@ In Planning only the Task tab is populated; the Agent / Review / Developer tabs 
 
 ### Secondary pages
 
-- **Settings** (instance / admin): users, providers + credentials, organization budget limits, instance config (e.g. max concurrent runs).
+- **Settings** (instance / admin): users, providers + credentials, organization budget limits, an org-wide env store, instance config (e.g. max concurrent runs).
 - **Profile** (per user): language, theme (light/dark), UI preferences.
-- **Projects**: create/edit projects, link repositories (mark one the project's **default repository** for `:repo`-target tasks), project env store, project budget limits, project **default reviewers** per work type, and an editable **PR template** for the description used when Approve opens a pull request (defaults to a built-in template).
+- **Projects**: create/edit projects, link repositories (mark one the project's **default repository** for `:repo`-target tasks), project env store (showing the org-wide entries it inherits, and which side wins on a name conflict), project budget limits, project **default reviewers** per work type, and an editable **PR template** for the description used when Approve opens a pull request (defaults to a built-in template).
 - **Agents**: create/edit agents — roles, work type, driver, harness, provider + model, system prompt, memory (seam) — with a scope selector for org vs project.
 

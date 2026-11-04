@@ -1,8 +1,10 @@
 defmodule CodeLeadWeb.SettingsLive.Organization do
   @moduledoc """
   Instance-wide organization settings, admin-only: the name, the org
-  budget limits, and the default project budget limits that are copied
-  onto each new project at creation.
+  budget limits, the default project budget limits that are copied onto
+  each new project at creation, and the org env store — merged live into
+  every project's own env vars (see `CodeLead.Projects.env_vars/1`), in
+  contrast to the budgets above which are copied once and never again.
 
   Writes go through `Accounts.update_organization/2`, whose changeset
   never casts `settings` — the `"setup_done"` flag cannot be clobbered
@@ -25,7 +27,29 @@ defmodule CodeLeadWeb.SettingsLive.Organization do
     {:ok,
      socket
      |> assign(page_title: "Organization", organization: organization)
-     |> assign_form(%{})}
+     |> assign_form(%{})
+     |> load_env_keys()}
+  end
+
+  @impl true
+  def handle_params(_params, _uri, %{assigns: %{live_action: :new_env}} = socket) do
+    {:noreply, assign_env_form(socket, nil, %{"key" => "", "value" => "", "secret" => "true"})}
+  end
+
+  def handle_params(%{"key" => key}, _uri, %{assigns: %{live_action: :edit_env}} = socket) do
+    entry = Enum.find(socket.assigns.env_keys, &(&1.key == key))
+
+    params = %{
+      "key" => key,
+      "value" => entry.value || "",
+      "secret" => to_string(entry.secret)
+    }
+
+    {:noreply, assign_env_form(socket, key, params)}
+  end
+
+  def handle_params(_params, _uri, socket) do
+    {:noreply, assign(socket, env_form: nil, env_key: nil)}
   end
 
   @impl true
@@ -47,6 +71,43 @@ defmodule CodeLeadWeb.SettingsLive.Organization do
 
       {:error, changeset} ->
         {:noreply, assign(socket, form: to_form(changeset))}
+    end
+  end
+
+  ## Env store
+
+  def handle_event("validate_env", %{"env" => params}, socket) do
+    {:noreply, assign_env_form(socket, socket.assigns.env_key, params)}
+  end
+
+  def handle_event("save_env", %{"env" => params}, socket) do
+    key = params |> Map.get("key", "") |> String.trim()
+    value = Map.get(params, "value", "")
+    secret = Map.get(params, "secret", "true") == "true"
+
+    case Accounts.put_org_env(socket.assigns.current_scope, key, value, secret) do
+      {:ok, _env} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "#{key} saved.")
+         |> push_patch(to: ~p"/settings/organization")
+         |> load_env_keys()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Administrator access required.")}
+
+      {:error, changeset} ->
+        {:noreply, assign_env_form(socket, socket.assigns.env_key, params, changeset.errors)}
+    end
+  end
+
+  def handle_event("delete_env", %{"key" => key}, socket) do
+    case Accounts.delete_org_env(socket.assigns.current_scope, key) do
+      :ok ->
+        {:noreply, socket |> put_flash(:info, "#{key} removed.") |> load_env_keys()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "Administrator access required.")}
     end
   end
 
@@ -122,8 +183,72 @@ defmodule CodeLeadWeb.SettingsLive.Organization do
               </div>
             </.form>
           </.section_card>
+
+          <.section_card label="Environment">
+            <:actions>
+              <.button patch={~p"/settings/organization/env/new"}>Add variable</.button>
+            </:actions>
+
+            <p class="text-[12px] leading-relaxed text-text3">
+              Injected into every agent process on every project. A project can define its own
+              entry with the same name to override this value — see that project's settings.
+            </p>
+
+            <div :if={@env_keys == []}>
+              <.empty_state icon="hero-key" title="No variables set">
+                Forge tokens, API keys and build settings shared by every project.
+              </.empty_state>
+            </div>
+
+            <div id="env-list">
+              <.list_row
+                :for={entry <- @env_keys}
+                id={"env-row-#{entry.key}"}
+                title={entry.key}
+                subtitle={"Updated #{Format.relative(entry.updated_at)}"}
+              >
+                <:meta>
+                  <.secret_value :if={entry.secret} set?={true} />
+                  <span :if={!entry.secret} class="font-mono text-[12px] text-text2">
+                    {entry.value}
+                  </span>
+                </:meta>
+                <:actions>
+                  <.button patch={~p"/settings/organization/env/#{entry.key}/edit"}>
+                    {if entry.secret, do: "Replace", else: "Edit"}
+                  </.button>
+                  <.button
+                    id={"delete-env-#{entry.key}"}
+                    variant="danger"
+                    type="button"
+                    phx-click="delete_env"
+                    phx-value-key={entry.key}
+                    data-confirm={"Remove #{entry.key}? Projects relying on it will fail."}
+                  >
+                    Remove
+                  </.button>
+                </:actions>
+              </.list_row>
+            </div>
+          </.section_card>
         </div>
       </div>
+
+      <.modal
+        :if={@live_action in [:new_env, :edit_env]}
+        id="env-modal"
+        title={if @live_action == :new_env, do: "Add variable", else: "Edit variable"}
+        return_to={~p"/settings/organization"}
+      >
+        <.form for={@env_form} id="env-form" phx-change="validate_env" phx-submit="save_env">
+          <.env_form_fields form={@env_form} new?={@live_action == :new_env} />
+
+          <div class="mt-4 flex justify-end gap-2">
+            <.button patch={~p"/settings/organization"}>Cancel</.button>
+            <.button variant="primary" type="submit" phx-disable-with="Saving…">Save</.button>
+          </div>
+        </.form>
+      </.modal>
     </Layouts.app>
     """
   end
@@ -137,6 +262,16 @@ defmodule CodeLeadWeb.SettingsLive.Organization do
       |> Map.put(:action, if(params == %{}, do: nil, else: :validate))
 
     assign(socket, form: to_form(changeset))
+  end
+
+  defp load_env_keys(socket) do
+    assign(socket, env_keys: Accounts.list_org_env_keys())
+  end
+
+  defp assign_env_form(socket, key, params, errors \\ []) do
+    socket
+    |> assign(env_key: key)
+    |> assign(env_form: to_form(params, as: "env", errors: errors))
   end
 
   # An empty number input arrives as "", which would fail the integer

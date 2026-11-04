@@ -30,6 +30,7 @@
 Key fields only. `enc` = encrypted at rest. `seam` = present for a future feature, unused in MVP logic.
 
 - **organization** — singleton for the instance: `name`, `settings` *(jsonb; includes `setup_done`, `max_concurrent_runs`)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable), `default_project_budget_limit_cents` / `default_project_budget_limit_tokens` (nullable — copied onto each new project at creation, never inherited live).
+- **org_envs** — `key`, `value` *(enc)*, no owning FK (the organization is a singleton). Merged live into every project's env vars by `Projects.env_vars/1` and friends — unlike the default budgets above, there is no copy-on-create step, so an edit here applies to every project immediately. A `project_envs` entry with the same key, matched case-insensitively, wins.
 - **users** — `username` (required, unique login identifier), `email` (optional — only used for the magic-link/invite flow), `hashed_password`, `role` (`:admin` | `:member`), `locale`, `settings` *(jsonb: theme, UI preferences)*.
 - **project_memberships** — `project_id`, `user_id`, `role` (`:reporter` | `:member` | `:maintainer`, ordered), unique on `(project_id, user_id)`; cascades on delete of either side. Admins bypass membership and have no rows.
 - **projects** — `org_id`, `name`, `settings` *(jsonb; `finalize` holds the project's Done defaults: `{repo, folder, commit_path}` — see §6; `pr_template` holds the PR/MR description template used when Approve opens a pull request — see §7)*, `budget_limit_cents` (nullable), `budget_limit_tokens` (nullable).
@@ -250,8 +251,8 @@ Auth stays on the host/volume; credentials are not baked into the agent image be
 ## 8. Secrets
 
 - **Single** encrypted-at-rest mechanism (Cloak.Ecto), instance `ENCRYPTION_KEY` from env.
-- Two consumers: **provider credentials** and the **project env store**.
-- Project env injected as environment variables into the executor at spawn (tests, build tooling). Never logged; never written to `task_steps`.
+- Three consumers: **provider credentials**, the **project env store**, and the **org env store**.
+- Project and org env injected as environment variables into the executor at spawn (tests, build tooling), merged at read time (`Projects.env_vars/1`) with the project winning on a case-insensitive key conflict. Never logged; never written to `task_steps`.
 
 ---
 
@@ -284,9 +285,9 @@ Confirms every UI surface maps to model data. Board/list queries filter `archive
 | Review / Artifact tab | live worktree diff or task-folder artifact (PubSub) + `reviews` (current `cycle`) |
 | Agent tab | executor normalized event stream (PubSub) + `attention` (questions/permissions) + `task_steps` |
 | Developer tab | executor terminal session into the task's execution context |
-| Settings | `users`, `providers`, `organization` |
+| Settings | `users`, `providers`, `organization`, `org_envs` |
 | Profile | `users.locale`, `users.settings` |
-| Projects | `projects`, `repositories`, `project_envs`, `project_default_reviewers`, budgets |
+| Projects | `projects`, `repositories`, `project_envs` (+ `org_envs` merged in, read-only), `project_default_reviewers`, budgets |
 | Agents | `agents`, `providers` |
 
 The task view auto-selects the tab matching `tasks.state`; Agent/Review/Developer tabs are inert until an execution context exists.

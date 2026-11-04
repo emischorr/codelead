@@ -150,6 +150,8 @@ defmodule CodeLeadWeb.Router do
       live "/settings/providers/:id/edit", SettingsLive.Providers, :edit
 
       live "/settings/organization", SettingsLive.Organization, :edit
+      live "/settings/organization/env/new", SettingsLive.Organization, :new_env
+      live "/settings/organization/env/:key/edit", SettingsLive.Organization, :edit_env
     end
   end
 

@@ -10,6 +10,7 @@ defmodule CodeLead.Accounts do
   import Ecto.Query
 
   alias CodeLead.Accounts.Organization
+  alias CodeLead.Accounts.OrgEnv
   alias CodeLead.Accounts.Policy
   alias CodeLead.Accounts.ProjectMembership
   alias CodeLead.Accounts.Scope
@@ -18,6 +19,7 @@ defmodule CodeLead.Accounts do
   alias CodeLead.Accounts.UserToken
   alias CodeLead.Mailer
   alias CodeLead.Repo
+  alias CodeLead.Vault
 
   ## Organization
 
@@ -66,6 +68,88 @@ defmodule CodeLead.Accounts do
       |> Organization.details_changeset(attrs)
       |> Repo.update()
     end
+  end
+
+  ## Org env store
+  #
+  # Merged into every project's env vars by `CodeLead.Projects.env_vars/1`
+  # (and friends) — a project-level entry with the same key, matched
+  # case-insensitively, wins. See `CodeLead.Projects` for the merge.
+
+  @doc """
+  Upserts one org env store entry. `secret` (default `true`) controls
+  whether `value` is encrypted at rest; plain entries are stored and
+  readable as-is. Keys are matched case-insensitively, so saving `"Foo"`
+  when `"FOO"` already exists replaces that row rather than creating a
+  second one.
+  """
+  @spec put_org_env(Scope.t() | nil, String.t(), String.t(), boolean()) ::
+          {:ok, OrgEnv.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def put_org_env(scope, key, value, secret \\ true) do
+    with :ok <- Policy.authorize(scope, :manage_organization) do
+      stored_value = if secret, do: Vault.encrypt!(value), else: value
+      attrs = %{key: key, value: stored_value, secret: secret}
+
+      case get_org_env_by_key(key) do
+        nil -> %OrgEnv{} |> OrgEnv.changeset(attrs) |> Repo.insert()
+        org_env -> org_env |> OrgEnv.changeset(attrs) |> Repo.update()
+      end
+    end
+  end
+
+  @spec delete_org_env(Scope.t() | nil, String.t()) :: :ok | {:error, :unauthorized}
+  def delete_org_env(scope, key) do
+    with :ok <- Policy.authorize(scope, :manage_organization) do
+      Repo.delete_all(from e in OrgEnv, where: fragment("lower(?) = lower(?)", e.key, ^key))
+      :ok
+    end
+  end
+
+  @doc """
+  Org env store entries for the settings UI. Secret entries come back with
+  `value: nil` — a stored secret is never decrypted just to render a list;
+  plain entries carry their real value since they were never encrypted.
+  """
+  @spec list_org_env_keys() :: [
+          %{key: String.t(), updated_at: DateTime.t(), secret: boolean(), value: String.t() | nil}
+        ]
+  def list_org_env_keys do
+    Repo.all(from e in OrgEnv, order_by: e.key)
+    |> Enum.map(fn %OrgEnv{key: key, updated_at: updated_at, secret: secret, value: value} ->
+      %{key: key, updated_at: updated_at, secret: secret, value: if(secret, do: nil, else: value)}
+    end)
+  end
+
+  @doc """
+  Decrypted org env entries for executor injection. Never log the result.
+  """
+  @spec org_env_vars() :: [{String.t(), String.t()}]
+  def org_env_vars do
+    Repo.all(from e in OrgEnv, order_by: e.key)
+    |> Enum.map(fn %OrgEnv{key: key, value: value, secret: secret} ->
+      {key, if(secret, do: Vault.decrypt!(value), else: value)}
+    end)
+  end
+
+  @doc """
+  One decrypted org env value, or nil. Matched case-insensitively. Never
+  log the result.
+  """
+  @spec org_env_var(String.t()) :: String.t() | nil
+  def org_env_var(key) do
+    case Repo.one(
+           from e in OrgEnv,
+             where: fragment("lower(?) = lower(?)", e.key, ^key),
+             select: {e.value, e.secret}
+         ) do
+      nil -> nil
+      {value, true} -> Vault.decrypt!(value)
+      {value, false} -> value
+    end
+  end
+
+  defp get_org_env_by_key(key) do
+    Repo.one(from e in OrgEnv, where: fragment("lower(?) = lower(?)", e.key, ^key))
   end
 
   ## Setup

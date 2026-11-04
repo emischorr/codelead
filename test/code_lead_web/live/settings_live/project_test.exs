@@ -6,6 +6,7 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
   import CodeLead.ProjectsFixtures
   import CodeLead.TasksFixtures
 
+  alias CodeLead.Accounts
   alias CodeLead.Agents
   alias CodeLead.Projects
 
@@ -344,6 +345,36 @@ defmodule CodeLeadWeb.SettingsLive.ProjectTest do
       assert view
              |> element("#env-form")
              |> render() =~ "+K true"
+    end
+
+    test "an org variable shows as inherited and cannot be edited or removed here", %{
+      conn: conn,
+      project: project,
+      scope: scope
+    } do
+      {:ok, _} = Accounts.put_org_env(scope, "GITHUB_TOKEN", "org-token")
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      assert has_element?(view, "#org-env-row-GITHUB_TOKEN")
+      refute has_element?(view, "#delete-env-GITHUB_TOKEN")
+      assert render(view) =~ "from organization"
+    end
+
+    test "a project variable with the same key (any case) overrides the org one", %{
+      conn: conn,
+      project: project,
+      scope: scope
+    } do
+      {:ok, _} = Accounts.put_org_env(scope, "GITHUB_TOKEN", "org-token")
+      {:ok, _} = Projects.put_env(project.id, "github_token", "project-token")
+
+      {:ok, view, _html} = live(conn, ~p"/settings/projects/#{project.id}")
+
+      html = render(view)
+      assert html =~ "overridden by project"
+      assert html =~ "overrides organization value"
+      assert Projects.env_var(project.id, "GITHUB_TOKEN") == "project-token"
     end
   end
 
