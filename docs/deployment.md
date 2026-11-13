@@ -1,7 +1,7 @@
-# Deployment (last updated: 2026-08-19)
+# Deployment (last updated: 2026-11-13)
 
 How to run CodeLead on a server. For the five-minute version see the
-README's *Getting started*; for the full environment variable reference see
+README's *Quickstart*; for the full environment variable reference see
 [`configuration.md`](configuration.md). This document covers the parts that
 only matter once the instance is not on your laptop.
 
@@ -552,10 +552,15 @@ Keep the key somewhere other than the machine you are backing up.
 
 Known gaps that change how you'd deploy this:
 
-- **There is no authorization.** A user's role is stored and displayed but
-  never checked; every signed-in user reaches every settings page, including
-  provider credentials and project secrets. Treat every account as an admin
-  account.
+- **Roles decide who sees credentials.** Every account has an instance
+  role, `admin` or `member`. Only admins reach the instance-administration
+  pages: users, providers (model credentials) and organization settings.
+  Project routes are gated by per-project roles,
+  `reporter < member < maintainer`. Maintainers also manage the project's
+  settings and env store, which includes forge tokens. Keep admin accounts
+  few: an admin can read every provider credential. Anyone allowed to start
+  a task runs agents with that project's secrets. See
+  [`setup-and-auth.md`](setup-and-auth.md).
 - **Outbound email is off unless you configure it.** Without `SMTP_HOST` the
   instance has no transport, and the surfaces that need one are hidden rather
   than left to fail silently: no magic-link form on the login page, no
