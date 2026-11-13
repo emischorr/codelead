@@ -172,6 +172,17 @@ plugin is not used, because `--color-*: initial` removes the palette its
 defaults are built on. Agent output is untrusted, so the wrapper renders
 with `unsafe: false` **and** sanitizes; no call site may opt out.
 
+**Brand assets.** The logo is `logo_glyph/1` in `layouts.ex` (the
+accent square with two bars) next to "CodeLead" in DM Sans Bold. Its
+standalone masters (mark, glyph, lockups in light/dark/mono, with the
+wordmark as outlines) live in `media/logos/svg/`. `media/logos/generate.sh`
+renders the PNG sizes, OG card and `favicon.ico` from them and refreshes
+the copies the app serves (`priv/static/favicon.ico`,
+`priv/static/images/icon*.{svg,png}`, `apple-touch-icon.png`), which
+`root.html.heex` links together with `images/site.webmanifest`. If the
+logo changes, edit `logo_glyph/1` and the SVG masters together, then
+re-run the script.
+
 The theme script in `root.html.heex` resolves "system" to a concrete
 `data-theme=light|dark` (tracking `prefers-color-scheme`) and stamps
 `data-theme-mode` for the toggle indicator.
