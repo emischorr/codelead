@@ -1,6 +1,14 @@
 # CodeLead
 
-**Self-hosted orchestration for AI coding agents — built for engineers who stay accountable for what ships.**
+<p align="center">
+  <a href="LICENSE.txt"><img alt="License: ELv2" src="https://img.shields.io/badge/license-ELv2-blue"></a>
+  <a href="https://github.com/emischorr/codelead/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/emischorr/codelead?sort=semver&label=version"></a>
+  <a href="https://github.com/emischorr/codelead/pkgs/container/codelead"><img alt="Docker image" src="https://img.shields.io/badge/ghcr.io-emischorr%2Fcodelead-2496ED?logo=docker&logoColor=white"></a>
+  <a href="https://github.com/emischorr/codelead/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/emischorr/codelead/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/emischorr/codelead/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/emischorr/codelead"></a>
+</p>
+
+**Self-hosted orchestration for AI coding agents. Built for engineers and product builders who stay accountable for what they ship.**
 
 ![CodeLead in 30 seconds: a task moves from Planning to Done, with a human decision at each gate](docs/images/codelead-demo.gif)
 
@@ -8,15 +16,15 @@
 
 Most agent tools trade control for speed: the agent runs, you skim, you merge. That's fine for experiments. It doesn't hold up when your name is on the release.
 
-CodeLead takes the other side of that trade. Agents (Claude Code, Codex) do the work; **every handoff is a human decision** — spec approved before work starts, isolated branch per task, independent AI review before you look, your explicit approval before anything lands. Nothing happens that you can't see, trace, or stop.
+CodeLead takes the other side of that trade. Agents (Claude Code, Codex) do the work. **Every handoff is a human decision**: spec approved before work starts, isolated branch per task, independent AI review before you look, your explicit approval before anything lands. Nothing happens that you can't see, trace, or stop.
 
-This is not a vibe-coding tool. It's the software engineering practices you already trust — specs, branches, code review, budgets, an audit trail — applied at the boundary between you and your agents.
+This is not a vibe-coding tool. It's the software engineering practices the industry built over the last decades: specs, branches, code review, budgets, an audit trail. Applied at the boundary between you and your agents.
 
 ---
 
 ## What it looks like
 
-A four-column board: **Planning → Running → Review → Done**. You write and approve the spec, you start the run, reviewer agents critique the result, you approve it — or send it back with feedback to the same branch and session, or back to Planning for a fresh start.
+A four-column board: **Planning → Running → Review → Done**. You write (with the help of an agent if you want) and approve the spec, you start the run, reviewer agents critique the result, you approve it. Or send it back with feedback to the same branch and session, or back to Planning for a fresh start.
 
 No "Ready" column, no auto-start, no auto-merge. In agent-driven work you are the bottleneck, so the board models your decisions, not worker capacity.
 
@@ -26,15 +34,15 @@ No "Ready" column, no auto-start, no auto-merge. In agent-driven work you are th
 |---|---|
 | ![Planning tab](docs/images/planning.png) | ![Review tab](docs/images/review.png) |
 
-## Why an engineer would choose this
+## Why engineers and product builders would choose this
 
 - **Spec before code.** The planning assistant is a critic, not a code generator. Its findings persist, your resolutions persist, and decisions show on the task card.
 - **Isolation by default.** One worktree and branch per task. Optionally a container per task, built from the repository's own devcontainer config, so the agent gets the project's toolchain and can't touch your host.
-- **Independent review.** Reviewers are separate agents with separate prompts; they never move a card. Use a cheap local model for a first pass and a frontier model for the security lens.
+- **Independent review.** Reviewers are separate agents with separate prompts. They never move a card. Use a cheap local model for a first pass and a frontier model for the security lens.
 - **Cost is a first-class number.** Every run's tokens and cost are persisted per task and rolled up per project. Budgets are enforced: a task that would blow the limit is held, not started.
 - **Nothing is silent.** Failed runs stay visible with an attention badge. Cancel keeps the worktree for inspection. Every run is an audit step.
-- **Agent-agnostic.** Claude Code and OpenAI Codex over the [Agent Client Protocol](https://agentclientprotocol.com); any OpenAI-compatible or Ollama endpoint for review and lightweight work. Not Claude-shaped, not vendor-shaped.
-- **Yours.** Self-hosted, single binary-ish Docker image, Postgres, no telemetry, no phone-home. Credentials encrypted at rest.
+- **Agent-agnostic.** Claude Code and OpenAI Codex over the [Agent Client Protocol](https://agentclientprotocol.com). Any OpenAI-compatible or Ollama endpoint for review and lightweight work. Not Claude-shaped, not vendor-shaped.
+- **Yours.** Self-hosted, single Docker image, Postgres, no telemetry, no phone-home. Credentials encrypted at rest.
 
 ## Quickstart
 
@@ -74,7 +82,7 @@ Prebuilt images: `ghcr.io/emischorr/codelead` (`linux/amd64`, `linux/arm64`).
 
 <sub>As of November 2026, from each project's own README or spec.</sub>
 
-Kandev is the closest in shape and a good tool: worktrees, ACP agents, a web board, no telemetry. The difference is emphasis. Kandev is a flexible workbench where review gates are something you configure. In CodeLead the gates *are* the model, and planning findings, parallel reviewers and enforced budgets come built in.
+Kandev is the closest in shape and a good tool: worktrees, ACP agents, a web board, no telemetry. The difference is emphasis. Kandev is a flexible workbench where review gates are something you configure. In CodeLead the gates *are* the model and planning findings, parallel reviewers and enforced budgets come built in.
 
 ## Stack
 
@@ -82,7 +90,7 @@ Elixir · Phoenix LiveView · PostgreSQL · Oban · Docker. Chosen for the same 
 
 ## Status
 
-Used daily by its author for several months; the biggest rough edges are fixed, features still land regularly. Expect a solid core and a few unfinished corners. Issues and design discussions are welcome — especially "I'd need X before I could use this at work."
+Used daily by its author for several months. The biggest rough edges are fixed, features still land regularly. Expect a solid core and a few unfinished corners. Issues and design discussions are welcome. Especially "I'd need X before I could use this at work."
 
 ## Roadmap (short)
 

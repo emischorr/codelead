@@ -46,6 +46,8 @@ mix ecto.reset                # wipe per-task workspace state + drop + create + 
 
 Note that `docker-compose.yml` only declares `code_lead_dev`; the test database (`code_lead_test`) is created by the `mix test` alias against the same server.
 
+CI (`.github/workflows/ci.yml`) runs on every push to `main` and every PR: `mix format --check-formatted`, `mix deps.unlock --check-unused`, then `mix precommit` against a Postgres 16 service. The explicit checks exist because precommit's `format`/`deps.unlock --unused` fix files rather than fail.
+
 ### Inside a CodeLead container task
 
 The devcontainer has already provisioned itself before you get a shell: deps
@@ -55,7 +57,7 @@ are prewarmed into the image at `$MIX_DEPS_PATH` (`/opt/deps`, **not**
 `mix ecto.migrate`. Do **not** open a task by running `mix setup` or
 `mix deps.get` — only after you change `mix.exs` / `mix.lock`.
 
-Toolchain is pinned in `.tool-versions` (Erlang 27.3.4.14, Elixir 1.18.4-otp-27). Secrets for local dev live in `.envrc` (gitignored, direnv).
+Toolchain is pinned in `.tool-versions` (Erlang 28.5.0.5, Elixir 1.20.3-otp-28). Secrets for local dev live in `.envrc` (gitignored, direnv).
 
 ## Design principles
 
