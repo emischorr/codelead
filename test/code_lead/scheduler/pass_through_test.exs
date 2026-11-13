@@ -4,7 +4,6 @@ defmodule CodeLead.Scheduler.PassThroughTest do
   import CodeLead.TasksFixtures
 
   alias CodeLead.Costs
-  alias CodeLead.Projects
   alias CodeLead.Scheduler.PassThrough
 
   describe "admit?/1 gate composition" do

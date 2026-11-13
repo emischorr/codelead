@@ -5,7 +5,6 @@ defmodule CodeLeadWeb.RoleVisibilityTest do
   import CodeLead.AccountsFixtures
   import CodeLead.AgentsFixtures
   import CodeLead.ProjectsFixtures
-  import CodeLead.TasksFixtures
 
   alias CodeLead.Accounts
   alias CodeLead.Accounts.Scope
