@@ -18,6 +18,7 @@ defmodule CodeLead.Agents.Agent do
 
   import Ecto.Changeset
 
+  alias CodeLead.AgentDriver.LlmApi
   alias CodeLead.Agents.Provider
 
   @type t :: %__MODULE__{}
@@ -47,9 +48,12 @@ defmodule CodeLead.Agents.Agent do
   Changeset for creating or updating an agent. `project_id` binds it to
   one project; leaving it blank (with `scope: :org`) keeps it selectable
   everywhere — see `validate_scope/1`.
+
+  Pass the selected provider's kind as `provider_kind:` to check the
+  driver can actually call it; without it that check is skipped.
   """
-  @spec changeset(t(), map()) :: Ecto.Changeset.t()
-  def changeset(agent, attrs) do
+  @spec changeset(t(), map(), keyword()) :: Ecto.Changeset.t()
+  def changeset(agent, attrs, opts \\ []) do
     agent
     |> cast(attrs, [
       :name,
@@ -68,6 +72,7 @@ defmodule CodeLead.Agents.Agent do
     |> validate_required([:name, :scope, :roles, :work_type, :driver, :provider_id])
     |> validate_length(:roles, min: 1)
     |> validate_harness()
+    |> validate_provider_kind(opts[:provider_kind])
     |> validate_scope()
     |> foreign_key_constraint(:provider_id)
     |> foreign_key_constraint(:project_id)
@@ -83,6 +88,21 @@ defmodule CodeLead.Agents.Agent do
 
       _valid ->
         changeset
+    end
+  end
+
+  defp validate_provider_kind(changeset, nil), do: changeset
+
+  defp validate_provider_kind(changeset, kind) do
+    if get_field(changeset, :driver) == :llm_api and
+         kind not in LlmApi.supported_provider_kinds() do
+      add_error(
+        changeset,
+        :provider_id,
+        "a subscription provider can only drive ACP agents — pick an API-key or Ollama provider"
+      )
+    else
+      changeset
     end
   end
 

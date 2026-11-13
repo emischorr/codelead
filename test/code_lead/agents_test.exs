@@ -275,6 +275,60 @@ defmodule CodeLead.AgentsTest do
     end
   end
 
+  describe "driver × provider kind" do
+    setup do
+      subscription =
+        provider_fixture(%{kind: :anthropic_subscription, config: %{"oauth_token" => "tok"}})
+
+      %{subscription: subscription}
+    end
+
+    test "llm_api rejects a subscription provider", %{subscription: subscription} do
+      assert {:error, changeset} =
+               Agents.create_agent(agent_attrs(driver: :llm_api, provider_id: subscription.id))
+
+      assert %{provider_id: [_]} = errors_on(changeset)
+    end
+
+    test "acp accepts a subscription provider", %{subscription: subscription} do
+      assert {:ok, _agent} =
+               Agents.create_agent(
+                 agent_attrs(driver: :acp, harness: :claude_code, provider_id: subscription.id)
+               )
+    end
+
+    test "llm_api accepts an API-key provider" do
+      assert {:ok, _agent} =
+               Agents.create_agent(
+                 agent_attrs(driver: :llm_api, provider_id: provider_fixture().id)
+               )
+    end
+
+    test "update can't move an llm_api agent onto a subscription provider",
+         %{subscription: subscription} do
+      agent = agent_fixture(%{driver: :llm_api})
+
+      assert {:error, changeset} =
+               Agents.update_agent(agent, %{"provider_id" => to_string(subscription.id)})
+
+      assert %{provider_id: [_]} = errors_on(changeset)
+    end
+
+    test "switching an agent on a subscription provider to llm_api is rejected",
+         %{subscription: subscription} do
+      agent = agent_fixture(%{driver: :acp, harness: :claude_code, provider_id: subscription.id})
+
+      assert %{provider_id: [_]} =
+               agent
+               |> Agents.change_agent(%{driver: :llm_api, harness: nil})
+               |> errors_on()
+    end
+  end
+
+  defp agent_attrs(overrides) do
+    Enum.into(overrides, %{name: "Agent", scope: :org, roles: [:review], work_type: :code})
+  end
+
   describe "eligibility" do
     test "filters by work type, role, and scope" do
       project = project_fixture()

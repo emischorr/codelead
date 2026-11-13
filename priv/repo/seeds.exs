@@ -3,6 +3,8 @@
 #
 #     mix run priv/repo/seeds.exs
 
+import Ecto.Query
+
 alias CodeLead.Accounts
 alias CodeLead.Agents
 
@@ -16,9 +18,23 @@ alias CodeLead.Agents
 # which means the admin needs a real password to log in with.
 admin_password = System.get_env("ADMIN_PASSWORD", "codelead-dev-password")
 
+# On a database that already has an admin (seeding demo data into a
+# populated instance), the demo projects belong to that admin rather than
+# to a second seeded account.
+existing_admin =
+  CodeLead.Repo.one(
+    from u in CodeLead.Accounts.User, where: u.role == :admin, order_by: u.id, limit: 1
+  )
+
 admin =
-  case Accounts.get_user_by_email("admin@example.com") do
-    nil ->
+  cond do
+    existing_admin ->
+      existing_admin
+
+    user = Accounts.get_user_by_email("admin@example.com") ->
+      user
+
+    true ->
       {:ok, user} =
         Accounts.register_admin(%{
           username: "admin",
@@ -26,9 +42,7 @@ admin =
           password: admin_password
         })
 
-      user
-
-    user ->
+      IO.puts("Log in with #{user.username} / #{admin_password} (override with ADMIN_PASSWORD)")
       user
   end
 
@@ -36,16 +50,16 @@ IO.puts(
   "Seeded organization ##{organization.id} (#{organization.name}), admin ##{admin.id} (#{admin.username})"
 )
 
-IO.puts("Log in with #{admin.username} / #{admin_password} (override with ADMIN_PASSWORD)")
-
-# Providers. The Anthropic key comes from the local environment when
-# present; a placeholder otherwise (update via Agents.update_provider/2).
+# Providers, matched by name *and* kind: an existing instance may already
+# have an "Anthropic" subscription provider, which the llm_api agents
+# below cannot call. The Anthropic key comes from the local environment
+# when present; a placeholder otherwise (update via Agents.update_provider/2).
 anthropic =
-  Agents.get_provider_by_name("Anthropic") ||
+  CodeLead.Repo.get_by(CodeLead.Agents.Provider, name: "Anthropic API", kind: :anthropic_api) ||
     (
       {:ok, provider} =
         Agents.create_provider(%{
-          name: "Anthropic",
+          name: "Anthropic API",
           kind: :anthropic_api,
           config: %{"api_key" => System.get_env("ANTHROPIC_API_KEY", "replace-me")}
         })
@@ -54,7 +68,7 @@ anthropic =
     )
 
 ollama =
-  Agents.get_provider_by_name("Ollama") ||
+  CodeLead.Repo.get_by(CodeLead.Agents.Provider, name: "Ollama", kind: :ollama) ||
     (
       {:ok, provider} =
         Agents.create_provider(%{
@@ -589,6 +603,10 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       },
       state: :done,
       run_state: :idle,
+      branch_name: "codelead/rate-limit",
+      pr_url: "https://github.com/example/demo-site/pull/42",
+      pr_url_kind: :pull_request,
+      finalize_mode: :pull_request,
       completed_at: DateTime.add(now, -9 * 3600, :second),
       inserted_at: DateTime.add(now, -34 * 3600, :second)
     )
@@ -644,9 +662,168 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     Tasks.record_step(task.id, :transition, :human, "human", "approved — Done")
   end)
 
+  # --- Remaining states and features -------------------------------------
+  # Only states a row can truthfully hold without a live process: no
+  # :dispatched/:executing/:finalizing and no agent question/permission
+  # prompt, since those need a run in the registry to answer or cancel.
+
+  {:ok, _project} =
+    Projects.update_project(admin_scope, project, %{
+      color: :violet,
+      budget_limit_cents: 5_000,
+      budget_limit_tokens: 10_000_000
+    })
+
+  # Planning: the other work types and targets, a container-run task, and
+  # the priority range. Design/file tasks stay unassigned — no seeded agent
+  # does that work type, which is itself a state the board shows.
+  fabricate.(
+    %{
+      title: "Pricing page visual mockups",
+      description: "Desktop and mobile frames for the three tiers.",
+      work_type: :design,
+      priority: :low
+    },
+    assignee_id: admin.id
+  )
+
+  fabricate.(
+    %{
+      title: "Quarterly cost report (PDF)",
+      description: "One-page summary of spend per provider for the board meeting.",
+      work_type: :file,
+      priority: :normal
+    },
+    target: :folder,
+    finalize_mode: :artifact
+  )
+
+  fabricate.(
+    %{
+      title: "Upgrade to Phoenix 1.9",
+      description: "Bump deps and fix deprecations; run inside the repo's devcontainer.",
+      work_type: :code,
+      priority: :urgent,
+      agent_id: judy.id
+    },
+    execution_env: :container,
+    assignee_id: admin.id
+  )
+
+  # Running: queued with a start time in the future (scheduled badge).
+  scheduled =
+    fabricate.(
+      %{
+        title: "Refresh dependency lockfile",
+        description: "Run off-hours so it does not compete with daytime runs.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :running,
+      run_state: :queued,
+      scheduled_at: DateTime.add(now, 24 * 3600, :second)
+    )
+
+  Tasks.record_step(scheduled.id, :transition, :human, "human", "scheduled for tomorrow")
+
+  # Review: finalization failed (push rejected) and finalization
+  # interrupted by a restart — the state FinalizeReconciler leaves behind.
+  finalize_failed =
+    fabricate.(
+      %{
+        title: "Dark mode for the settings pages",
+        description: "Follow the theme tokens; no hard-coded colors.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :review,
+      run_state: :idle,
+      branch_name: "codelead/dark-mode-settings"
+    )
+
+  fake_run.(finalize_failed, judy, 233_000, 198, 300, 812_000)
+
+  Tasks.record_step(
+    finalize_failed.id,
+    :run,
+    :agent,
+    judy.name,
+    "run completed · 7 files changed"
+  )
+
+  Tasks.record_step(
+    finalize_failed.id,
+    :transition,
+    :system,
+    "finalizer",
+    "finalize failed: push rejected (non-fast-forward)"
+  )
+
+  {:ok, _} =
+    Tasks.set_attention(
+      finalize_failed,
+      :finalize_failed,
+      "push rejected: non-fast-forward — rebase the branch and approve again",
+      :executor
+    )
+
+  interrupted =
+    fabricate.(
+      %{
+        title: "Audit log for settings changes",
+        description: "Record who changed which setting and when.",
+        work_type: :code,
+        agent_id: judy.id
+      },
+      state: :review,
+      run_state: :idle,
+      branch_name: "codelead/settings-audit-log"
+    )
+
+  fake_run.(interrupted, judy, 176_400, 152, 200, 655_000)
+  Tasks.record_step(interrupted.id, :run, :agent, judy.name, "run completed · 4 files changed")
+
+  {:ok, _} =
+    Tasks.set_attention(
+      interrupted,
+      :finalize_interrupted,
+      "the instance restarted while finalizing — check whether the branch was pushed",
+      :executor
+    )
+
+  # Cancelled: work stopped deliberately.
+  cancelled =
+    fabricate.(
+      %{
+        title: "Migrate board to a canvas renderer",
+        description: "Superseded by column virtualization.",
+        work_type: :code,
+        priority: :low,
+        agent_id: judy.id
+      },
+      state: :cancelled,
+      run_state: :idle
+    )
+
+  Tasks.record_step(cancelled.id, :transition, :human, "human", "cancelled — superseded")
+
+  # Archived: done and filed away (shows up in the archive, not the board).
+  archived =
+    fabricate.(
+      %{title: "Initial project scaffolding", work_type: :code, agent_id: judy.id},
+      state: :done,
+      run_state: :idle,
+      completed_at: DateTime.add(now, -20 * 24 * 3600, :second),
+      inserted_at: DateTime.add(now, -21 * 24 * 3600, :second),
+      archived_at: DateTime.add(now, -15 * 24 * 3600, :second)
+    )
+
+  Tasks.record_step(archived.id, :transition, :human, "human", "approved — Done")
+
   IO.puts(
-    "Seeded demo project ##{project.id}: 3 planning (1 with survey findings), " <>
-      "1 failed run, 1 queued, 1 review (structured findings), #{length(history) + 1} done"
+    "Seeded demo project ##{project.id}: 6 planning (1 with survey findings, design/file/container), " <>
+      "1 failed run, 2 queued (1 scheduled), 3 review (structured findings, finalize failed/interrupted), " <>
+      "#{length(history) + 1} done, 1 cancelled, 1 archived"
   )
 end
 

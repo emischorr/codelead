@@ -1,5 +1,6 @@
 # Once:
-# - docker buildx create --name multiarch --driver docker-container --use
+# - docker buildx create --name multiarch --driver docker-container
+# - docker buildx use multiarch
 # - docker login ghcr.io
 # build & push it:
 # docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/codelead:0.1.0 -t ghcr.io/emischorr/codelead:latest --push .
@@ -66,7 +67,7 @@ RUN apk add --no-cache nodejs npm \
 FROM ${BUILDER_IMAGE} AS builder
 
 # install build dependencies
-RUN apk add --no-cache build-base git python3 curl
+RUN apk add --no-cache build-base git python3 curl ca-certificates
 
 # sets work dir
 WORKDIR /app

@@ -14,6 +14,15 @@ defmodule CodeLead.AgentDriver.LlmApi do
 
   @receive_timeout 120_000
   @max_tokens 8192
+  @supported_provider_kinds [:anthropic_api, :openai, :ollama]
+
+  @doc """
+  The provider kinds this driver can call. A subscription credential is
+  an OAuth token for a coding harness, not an API key, so it only
+  drives ACP agents.
+  """
+  @spec supported_provider_kinds() :: [atom()]
+  def supported_provider_kinds, do: @supported_provider_kinds
 
   # Nothing to launch — the provider is reached over HTTP, and a bad
   # credential only shows up in the response.

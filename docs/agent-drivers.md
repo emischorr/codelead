@@ -60,7 +60,12 @@ output — needs its own payload budget) and `agent_thought_chunk`
   completion arrives as one chunk + result. `send_message/2` is
   unsupported. `complete/4` is exposed for synchronous multi-turn use
   (planning chat). Tests stub the network with `Req.Test` via the
-  `:llm_api_req_options` config.
+  `:llm_api_req_options` config. Only API-key and Ollama providers
+  work (`LlmApi.supported_provider_kinds/0`). An `anthropic_subscription`
+  credential is an OAuth token for the Claude Code harness and only
+  drives ACP agents. The agent changeset enforces this: `Agents`
+  resolves the selected provider's kind and passes it as
+  `provider_kind:` to `Agent.changeset/3`.
 - **`Acp`** — a coding harness (Claude Code / Codex) as an ACP
   subprocess (see ADR-0001). One GenServer per run owns an
   `Acp.Connection` (Erlang Port, ndjson JSON-RPC, id correlation),

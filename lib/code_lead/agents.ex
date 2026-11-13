@@ -190,7 +190,7 @@ defmodule CodeLead.Agents do
   @spec create_agent(map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def create_agent(attrs) do
     %Agent{}
-    |> Agent.changeset(attrs)
+    |> agent_changeset(attrs)
     |> Repo.insert()
   end
 
@@ -212,8 +212,26 @@ defmodule CodeLead.Agents do
   @spec update_agent(Agent.t(), map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def update_agent(agent, attrs) do
     agent
-    |> Agent.changeset(attrs)
+    |> agent_changeset(attrs)
     |> Repo.update()
+  end
+
+  # The changeset can't look the provider up itself, so the kind it
+  # validates the driver against is resolved here from the effective
+  # provider: the submitted one, else the agent's current one.
+  defp agent_changeset(%Agent{provider_id: current_id} = agent, attrs) do
+    Agent.changeset(agent, attrs, provider_kind: provider_kind(attrs, current_id))
+  end
+
+  defp provider_kind(attrs, current_id) do
+    submitted = Map.get(attrs, :provider_id, Map.get(attrs, "provider_id"))
+
+    with {:ok, id} when not is_nil(id) <- Ecto.Type.cast(:id, submitted || current_id),
+         %Provider{kind: kind} <- Repo.get(Provider, id) do
+      kind
+    else
+      _unknown -> nil
+    end
   end
 
   defp authorize_agent_scope(scope, nil), do: Policy.authorize(scope, :manage_org_agents)
@@ -234,7 +252,7 @@ defmodule CodeLead.Agents do
   def get_agent!(id), do: Repo.get!(Agent, id)
 
   @spec change_agent(Agent.t(), map()) :: Ecto.Changeset.t()
-  def change_agent(%Agent{} = agent, attrs \\ %{}), do: Agent.changeset(agent, attrs)
+  def change_agent(%Agent{} = agent, attrs \\ %{}), do: agent_changeset(agent, attrs)
 
   @doc """
   Every agent, org- and project-scoped alike — the pool managed from
