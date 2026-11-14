@@ -9,6 +9,10 @@ defmodule CodeLead.OsProcess do
   shell starts inherits its group and a single signal to the group
   reaches the whole tree.
 
+  Signals go through the POSIX shell's `kill` builtin, never `kill(1)`:
+  procps-ng 4 (Ubuntu 24.04 hosts) can exit 0 on a negative pid without
+  signalling the group, which leaked whole preview/terminal trees.
+
   Pure and stateless, like `CodeLead.Terminal.Command`: one function
   signals from the host, the others build the equivalent shell snippets
   for processes reachable only through `docker exec` — the two ends of
@@ -23,12 +27,14 @@ defmodule CodeLead.OsProcess do
   """
   @spec terminate_group(pos_integer()) :: :ok
   def terminate_group(os_pid) do
-    case System.cmd("kill", ["-TERM", "-#{os_pid}"], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      _no_such_group -> terminate_pid(os_pid)
-    end
+    # Group first, bare pid second — the same contract as
+    # `terminate_group_script/1`. The pid travels as `$1`, never spliced
+    # into the script.
+    script = ~s(kill -TERM -"$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null; exit 0)
+    _ = System.cmd("sh", ["-c", script, "sh", to_string(os_pid)], stderr_to_stdout: true)
+    :ok
   rescue
-    # `kill(1)` missing is not a reason to fail a teardown — but a
+    # No `sh` to signal with is not a reason to fail a teardown — but a
     # teardown that silently signals nothing leaks processes, so say so.
     e ->
       Logger.warning("could not signal os process #{os_pid}: #{Exception.message(e)}")
@@ -63,23 +69,5 @@ defmodule CodeLead.OsProcess do
     ~s(p=""; read -r p < "#{pid_file}" 2>/dev/null; ) <>
       ~s([ -n "$p" ] && { kill -TERM -"$p" 2>/dev/null || ) <>
       ~s(kill -TERM "$p" 2>/dev/null; }; exit 0)
-  end
-
-  defp terminate_pid(os_pid) do
-    case System.cmd("kill", ["-TERM", to_string(os_pid)], stderr_to_stdout: true) do
-      {_output, 0} ->
-        :ok
-
-      {output, status} ->
-        # "No such process" is the expected outcome after a successful
-        # group kill (procps `kill` exits 1 even when the signal landed).
-        unless output =~ "No such process" do
-          Logger.warning(
-            "could not signal os process #{os_pid} (kill exited #{status}): #{String.trim(output)}"
-          )
-        end
-
-        :ok
-    end
   end
 end

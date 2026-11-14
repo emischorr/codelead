@@ -63,17 +63,4 @@ jobs:
       - run: mix format --check-formatted
       - run: mix deps.unlock --check-unused
 
-      # TEMP — diagnoses the process-group kill failing only on this runner.
-      # Remove together with .github/scripts/kill_probe.exs.
-      - name: kill probe
-        continue-on-error: true
-        timeout-minutes: 2
-        run: |
-          echo "PATH=$PATH"
-          command -v kill; type kill; ls -l "$(command -v kill)" || true
-          /usr/bin/kill --version || true
-          ps -o pid,pgid,sid,comm -p $$
-          cat /proc/1/comm
-          elixir .github/scripts/kill_probe.exs
-
       - run: mix precommit

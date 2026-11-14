@@ -6,11 +6,11 @@ defmodule CodeLead.OsProcessHelpers do
   mechanism rather than a synchronization shortcut.
 
   A zombie counts as gone: it has already died and only waits for its
-  parent (or whoever inherited it) to reap it. `kill -0` still succeeds
-  on a zombie, and on Linux hosts where orphans are reparented to a slow
-  reaper (GitHub's runner VMs) that made teardown look like a leak.
-  Where `/proc` exists the state is read from there; elsewhere (macOS)
-  `kill -0` is the fallback.
+  parent (or whoever inherited it) to reap it, yet `kill -0` still
+  succeeds on it. Where `/proc` exists the state is read from there and a
+  timeout reports the survivor's state and signal masks, so a teardown
+  failure on a Linux CI host explains itself; elsewhere (macOS) `kill -0`
+  is the fallback.
   """
 
   @doc """
