@@ -1,4 +1,4 @@
-# Licensing (last updated: 2026-08-15)
+# Licensing (last updated: 2026-11-14)
 
 FrontSeat is [Elastic License 2.0](../LICENSE.txt). ELv2 grants broad use with
 two limitations that matter here: you may not offer FrontSeat to third parties
@@ -13,6 +13,12 @@ short:
 | Feature | What it gates |
 |---|---|
 | `:container_execution_env` | Running a task in a sibling container — `tasks.execution_env == :container`. See [ADR-0004](adr/0004-container-executor-iteration-two.md) and the section below. |
+| `:api_access` | The `/api` endpoints and minting personal access tokens. See [ADR-0017](adr/0017-api-personal-access-tokens.md), [api.md](api.md) and the section below. |
+
+**Which tiers include what.** Only `:owner` grants gated features through
+its baseline (all of them, automatically). There is no paid tier baseline
+yet, so a customer key grants a feature explicitly, e.g.
+`--features api_access`. `community` grants none.
 
 The value of the seam is that this table is the *only* place the decision
 lives: making a feature paid is a data change plus two call sites, not a hunt
@@ -143,7 +149,7 @@ end
 
 ## The worked example: container execution
 
-`:container_execution_env` is the first — and so far only — gated feature, and
+`:container_execution_env` is the first gated feature, and
 it is worth reading as the pattern for the next one. It is checked in three
 places, in descending order of authority:
 
@@ -174,6 +180,27 @@ buying a key.
 
 A community instance therefore keeps every container-targeted task it already
 has — visible, editable, refusing to start with a message that says why.
+
+## The second gate: API access
+
+`:api_access` covers the whole `/api` surface and token creation, checked
+in descending order of authority:
+
+1. **The pipeline.** `FrontSeatWeb.ApiAuth.require_api_license/2` runs
+   on every `/api` request *before* token authentication, so an
+   unlicensed instance answers every request — valid token or none —
+   with `403 license_required` and a message a CLI can print as is.
+2. **The context.** `Accounts.create_api_token/2` returns
+   `{:error, :license_required}`, closing the console path as well as
+   the form.
+3. **The pages.** `/users/settings/tokens` stays reachable, shows a
+   license notice and renders *New token* disabled with the reason;
+   `/users/settings/tokens/new` shows the notice instead of the form.
+
+What is deliberately **not** gated: listing and revoking tokens. Nobody
+may be blocked from removing a credential. A lapse deletes nothing —
+tokens stay listed, are refused at the gate, and work again as soon as
+the feature returns, with no user action.
 
 ## Limits
 
@@ -239,12 +266,14 @@ ordinary container tests exercise the real path rather than being refused
 everywhere. A test that asserts the *gate* calls `grant_community!/0` in its own
 `setup` and restores the owner grant on exit; because `:persistent_term` is
 VM-global, such a module must be `async: false`. `license_test.exs`,
-`tasks_license_test.exs` and `task_live_license_test.exs` are the three that do.
+`tasks_license_test.exs`, `task_live_license_test.exs` and
+`api_license_test.exs` are the ones that do.
 
 ## Running a licensed instance locally
 
-Container execution is licensed, so a dev instance with no `LICENSE_KEY` will
-refuse to start container tasks — exactly as a community deployment does. This
+Container execution and API access are licensed, so a dev instance with no
+`LICENSE_KEY` will refuse to start container tasks and answer every `/api`
+request with `license_required` — exactly as a community deployment does. This
 is deliberate; there is no dev-only override, because a config switch that
 weakened the policy would be a bypass rather than a feature. Mint yourself an
 `owner` key and put it in `.envrc`:

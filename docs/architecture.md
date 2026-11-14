@@ -1,4 +1,4 @@
-# Architecture overview (last updated: 2026-08-31, background finalization)
+# Architecture overview (last updated: 2026-11-14, API tokens)
 
 How the implemented modules map to the architecture spec. The specs
 (`../frontseat-*.md`) remain the target-state source of truth; this
@@ -8,7 +8,7 @@ note is the "how it works today" map.
 
 | Module | Owns |
 |---|---|
-| `FrontSeat.Accounts` | organization singleton, users (no auth flows yet) |
+| `FrontSeat.Accounts` | organization singleton, users and auth flows, project memberships, the `Scope`/`Policy` authorization seam (ADR-0014), personal access tokens for `/api` (ADR-0017, [api.md](api.md)) |
 | `FrontSeat.Projects` | projects, repositories, encrypted env store |
 | `FrontSeat.Agents` | providers (encrypted config), agent personas, eligibility rules, default reviewers, provider env for harnesses |
 | `FrontSeat.Workflow` | the declarative workflow definition (spec §4.1) — stages with a `stage_type`, transitions with trigger/context/worktree policies. Pure data; one built-in, named by `tasks.workflow_key` |

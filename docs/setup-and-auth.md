@@ -1,4 +1,4 @@
-# Setup & authentication (last updated: 2026-08-29)
+# Setup & authentication (last updated: 2026-11-14)
 
 How a fresh instance bootstraps itself and how requests are gated
 afterwards. Product spec §11/§12 (first-run `/setup` wizard) and §4
@@ -51,6 +51,7 @@ pipelines.
 | App | `:browser, :setup_done, :require_authenticated_user` | `:require_authenticated_user` | `GET /`, account settings, `/settings` overview, agents, project list/create |
 | Admin | app pipelines + `:admin` | `:admin` | `/settings/users*`, `/settings/providers*`, `/settings/organization` |
 | Project | app pipelines + `:project_access` | `:project` | board, archive, task page, `/settings/projects/:id*`, artifact download |
+| API | `:api` (bearer-only, see below) | — | `/api/v1/*` |
 
 The `:project` live_session must hold **only** project-keyed routes —
 `require_project_access` reads `params["project_id"] || params["id"]`,
@@ -225,10 +226,46 @@ Budget limits are admin-only: `Projects.update_project/3` strips the
 budget attrs for everyone else, and new projects copy the organization's
 `default_project_budget_limit_*` at creation (never inherited live).
 
+## Personal access tokens
+
+The `/api` surface ([`api.md`](api.md), ADR-0017) authenticates with
+**personal access tokens** instead of sessions. Its `:api` pipeline never
+fetches the session, so a cookie cannot authenticate an API call, and the
+browser pipeline never reads `Authorization`, so a token cannot
+authenticate a page. `FrontSeatWeb.ApiAuth` runs three plugs in order:
+
+1. `require_api_setup` — the JSON face of `SetupGate`: `503
+   setup_required` instead of a redirect.
+2. `require_api_license` — `403 license_required` unless `:api_access` is
+   licensed, whether or not a token is sent.
+3. `authenticate_api_token` — `Authorization: Bearer fs_pat_…` resolves
+   through `Accounts.fetch_api_token/1` to the user and builds
+   **`Scope.for_user/1`**, the same scope a browser session gets, plus
+   `Scope.api_token` (`%{id, name}`) for provenance. Every failure is the
+   same `401 unauthorized`.
+
+Tokens live in their own `api_tokens` table (`FrontSeat.Accounts.ApiToken`),
+not in `users_tokens`: that table is wiped per user on every password
+change and magic-link login (`update_user_and_delete_all_tokens`), which
+must not revoke API credentials. Only a SHA-256 hash is stored; the
+plaintext is returned once by `Accounts.create_api_token/2`. Revoking
+(`delete_api_token/2`) is a hard delete scoped to the caller's own
+tokens; deleting a user cascades. `touch_api_token/1` writes
+`last_used_at` at most every five minutes.
+
+The pages are `/users/settings/tokens` (`UserLive.Settings.Tokens` —
+list and revoke, **not** sudo-gated) and `/users/settings/tokens/new`
+(`UserLive.Settings.NewToken` — `on_mount :require_sudo_mode`, and the
+submit handler re-asserts `sudo_mode?/1`, the same split as email and
+password). Both sit in the `:require_authenticated_user` live_session
+with the rest of the account pages. Licensing: creation is refused in
+the context without `:api_access`; listing and revoking never are.
+
 ### Known gaps
 
-- Sudo mode guards the email- and password-change pages only
-  (`/users/settings/email`, `/users/settings/password`); neither the
+- Sudo mode guards the email- and password-change pages and token
+  creation only (`/users/settings/email`, `/users/settings/password`,
+  `/users/settings/tokens/new`); neither the
   account overview (`/users/settings`) nor `/settings/*` is sudo-gated.
 - The repository and env-store context functions still take a bare
   `project_id` — they are protected by the maintainer gate on the

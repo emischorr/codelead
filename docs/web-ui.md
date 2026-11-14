@@ -1,4 +1,4 @@
-# Web UI (last updated: 2026-11-04, org env store)
+# Web UI (last updated: 2026-11-14, API token pages)
 
 The web layer: the Kanban board, the task page, and the settings
 area — all LiveViews. Product spec §13 is the target; this note maps
@@ -24,6 +24,9 @@ what exists today.
 | `/projects/:project_id/tasks/:id/artifact` | `FrontSeatWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
 | `/setup` | `FrontSeatWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
 | `/users/*` | `FrontSeatWeb.UserLive.*` | log in (username/password by default, email magic-link opt-in), magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
+| `/users/settings/tokens` | `FrontSeatWeb.UserLive.Settings.Tokens` | the user's own API tokens: name, created, last used, expiry; revoke. Not sudo-gated. Unlicensed (`:api_access`): a license notice and a disabled *New token* button — tokens stay listed and revocable |
+| `/users/settings/tokens/new` | `FrontSeatWeb.UserLive.Settings.NewToken` | mint a token (name + expiry, default 90 days); sudo-gated; shows the plaintext exactly once with a copy button. See [`api.md`](api.md) |
+| `/api/v1/*` | `FrontSeatWeb.Api.*` controllers | the JSON API — not a UI route; own bearer-only `:api` pipeline. See [`api.md`](api.md) |
 
 The project detail page also carries four patch-based sub-routes:
 `/repositories/new`, `/repositories/:repository_id/edit`, `/env/new`

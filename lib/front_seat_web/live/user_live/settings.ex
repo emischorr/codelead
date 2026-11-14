@@ -54,6 +54,17 @@ defmodule FrontSeatWeb.UserLive.Settings do
             </p>
           </.section_card>
 
+          <.section_card label="API tokens">
+            <:actions>
+              <.button id="manage-tokens" navigate={~p"/users/settings/tokens"}>
+                Manage tokens
+              </.button>
+            </:actions>
+            <p class="text-[13px] text-text2">
+              Personal access tokens for tools that use the FrontSeat API.
+            </p>
+          </.section_card>
+
           <.section_card label="Preferences">
             <.form for={@preferences_form} id="preferences-form" phx-submit="save_preferences">
               <.input

@@ -149,9 +149,28 @@ defmodule FrontSeat.Tasks do
           {:ok, Task.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
   def create_task(scope, project_id, attrs) do
     with :ok <- Policy.authorize(scope, :create_task, project_id) do
-      do_create_task(project_id, attrs, scope.user.id)
+      do_create_task(project_id, attrs, scope)
     end
   end
+
+  # A task filed through the API names the token that filed it, so
+  # nothing is created that cannot be traced to a credential.
+  defp record_api_provenance(%Task{id: task_id}, %Scope{
+         api_token: %{id: token_id, name: token_name},
+         user: %{id: user_id, username: username}
+       }) do
+    record_step(
+      task_id,
+      :created,
+      :human,
+      username,
+      "created via API token '#{token_name}'",
+      user_id: user_id,
+      executor_ref: "api_token:#{token_id}"
+    )
+  end
+
+  defp record_api_provenance(_task, _scope), do: :ok
 
   @doc """
   `create_task/3` without authorization or a creator — the system seam
@@ -160,13 +179,23 @@ defmodule FrontSeat.Tasks do
   @spec create_task(pos_integer(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def create_task(project_id, attrs), do: do_create_task(project_id, attrs, nil)
 
-  defp do_create_task(project_id, attrs, created_by_id) do
+  # The insert and its provenance step commit together; the board hears
+  # about the task only after that.
+  defp do_create_task(project_id, attrs, scope) do
     changeset =
-      %Task{project_id: project_id, created_by_id: created_by_id}
+      %Task{project_id: project_id, created_by_id: scope && scope.user.id}
       |> Task.create_changeset(attrs)
       |> validate_licensed_execution_env()
 
-    with {:ok, task} <- Repo.insert(changeset) do
+    inserted =
+      Repo.transact(fn ->
+        with {:ok, task} <- Repo.insert(changeset) do
+          record_api_provenance(task, scope)
+          {:ok, task}
+        end
+      end)
+
+    with {:ok, task} <- inserted do
       task
       |> maybe_default_repository()
       |> derive_execution_env(nil)
@@ -919,6 +948,33 @@ defmodule FrontSeat.Tasks do
       Map.update!(acc, task.state, &(&1 ++ [task]))
     end)
   end
+
+  @doc """
+  The caller's view of a project's active tasks — archived and cancelled
+  excluded, newest first — for API clients checking for duplicates.
+
+  `opts`: `:state` (one column, `nil` for all) and `:limit` (default 100).
+  """
+  @spec list_tasks(Scope.t() | nil, pos_integer(), keyword()) ::
+          {:ok, [Task.t()]} | {:error, :unauthorized}
+  def list_tasks(scope, project_id, opts \\ []) do
+    with :ok <- Policy.authorize(scope, :view_project, project_id) do
+      tasks =
+        from(t in Task,
+          where: t.project_id == ^project_id and is_nil(t.archived_at),
+          where: t.state != :cancelled,
+          order_by: [desc: t.inserted_at, desc: t.id],
+          limit: ^Keyword.get(opts, :limit, 100)
+        )
+        |> filter_state(opts[:state])
+        |> Repo.all()
+
+      {:ok, tasks}
+    end
+  end
+
+  defp filter_state(query, nil), do: query
+  defp filter_state(query, state), do: where(query, [t], t.state == ^state)
 
   @doc """
   Every task in a project — archived and cancelled included — for the

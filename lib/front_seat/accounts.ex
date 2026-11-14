@@ -9,6 +9,7 @@ defmodule FrontSeat.Accounts do
 
   import Ecto.Query
 
+  alias FrontSeat.Accounts.ApiToken
   alias FrontSeat.Accounts.Organization
   alias FrontSeat.Accounts.OrgEnv
   alias FrontSeat.Accounts.Policy
@@ -17,6 +18,7 @@ defmodule FrontSeat.Accounts do
   alias FrontSeat.Accounts.User
   alias FrontSeat.Accounts.UserNotifier
   alias FrontSeat.Accounts.UserToken
+  alias FrontSeat.License
   alias FrontSeat.Mailer
   alias FrontSeat.Repo
   alias FrontSeat.Vault
@@ -219,6 +221,18 @@ defmodule FrontSeat.Accounts do
 
   @spec get_user(pos_integer()) :: User.t() | nil
   def get_user(id), do: Repo.get(User, id)
+
+  @doc """
+  Usernames for a set of user ids in one query — for rendering creators of
+  a list of records. Unknown ids are simply absent.
+  """
+  @spec usernames([pos_integer()]) :: %{pos_integer() => String.t()}
+  def usernames([]), do: %{}
+
+  def usernames(ids) do
+    Repo.all(from u in User, where: u.id in ^Enum.uniq(ids), select: {u.id, u.username})
+    |> Map.new()
+  end
 
   @doc """
   Whether the instance has any user at all. Used by the setup wizard.
@@ -667,6 +681,112 @@ defmodule FrontSeat.Accounts do
   """
   def delete_user_session_token(token) do
     Repo.delete_all(from(UserToken, where: [token: ^token, context: "session"]))
+    :ok
+  end
+
+  ## Personal access tokens
+
+  # How stale `last_used_at` may get before a request writes it again —
+  # one write per token per window instead of one per request.
+  @api_token_touch_interval_minutes 5
+
+  @doc """
+  Mints a personal access token for the caller. Licensed (`:api_access`)
+  here, not only in the UI. The plaintext is returned exactly once and
+  never stored — only its hash is.
+  """
+  @spec create_api_token(Scope.t(), map()) ::
+          {:ok, String.t(), ApiToken.t()}
+          | {:error, :license_required | :unauthorized | Ecto.Changeset.t()}
+  def create_api_token(%Scope{user: %User{id: user_id}}, attrs) do
+    if License.feature_enabled?(:api_access) do
+      {plaintext, token_hash} = ApiToken.build()
+
+      %ApiToken{user_id: user_id, token_hash: token_hash}
+      |> ApiToken.create_changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, token} -> {:ok, plaintext, token}
+        {:error, changeset} -> {:error, changeset}
+      end
+    else
+      {:error, :license_required}
+    end
+  end
+
+  def create_api_token(_scope, _attrs), do: {:error, :unauthorized}
+
+  @doc "A blank changeset for the token creation form."
+  @spec change_api_token(map()) :: Ecto.Changeset.t()
+  def change_api_token(attrs \\ %{}), do: ApiToken.create_changeset(%ApiToken{}, attrs)
+
+  @doc """
+  The caller's own tokens, newest first — expired ones included, so they
+  can be seen and removed. Unlicensed instances still list them.
+  """
+  @spec list_api_tokens(Scope.t()) :: [ApiToken.t()]
+  def list_api_tokens(%Scope{user: %User{id: user_id}}) do
+    Repo.all(
+      from t in ApiToken,
+        where: t.user_id == ^user_id,
+        order_by: [desc: t.inserted_at, desc: t.id]
+    )
+  end
+
+  @doc """
+  Revokes one of the caller's own tokens by deleting it; effective on the
+  next request. Never license-gated: removing a credential must always
+  work. Another user's token is indistinguishable from a missing one.
+  """
+  @spec delete_api_token(Scope.t(), pos_integer()) :: :ok | {:error, :not_found}
+  def delete_api_token(%Scope{user: %User{id: user_id}}, token_id) do
+    case Repo.delete_all(from t in ApiToken, where: t.id == ^token_id and t.user_id == ^user_id) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Resolves a presented plaintext token to its user and token row, or
+  `:error` when it is malformed, unknown (revoked included) or expired.
+  """
+  @spec fetch_api_token(String.t()) :: {:ok, User.t(), ApiToken.t()} | :error
+  def fetch_api_token(plaintext) when is_binary(plaintext) do
+    now = DateTime.utc_now(:second)
+
+    with {:ok, token_hash} <- ApiToken.hash_plaintext(plaintext),
+         {%User{} = user, %ApiToken{} = token} <-
+           Repo.one(
+             from t in ApiToken,
+               join: u in assoc(t, :user),
+               where: t.token_hash == ^token_hash,
+               where: is_nil(t.expires_at) or t.expires_at > ^now,
+               select: {u, t}
+           ) do
+      {:ok, user, token}
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
+  Records that a token was just used, at most once per
+  #{@api_token_touch_interval_minutes} minutes — the guard is in the
+  `UPDATE`'s `WHERE`, so a recent touch costs no write at all.
+  """
+  @spec touch_api_token(ApiToken.t()) :: :ok
+  def touch_api_token(%ApiToken{id: id}) do
+    now = DateTime.utc_now(:second)
+    stale_before = DateTime.add(now, -@api_token_touch_interval_minutes, :minute)
+
+    Repo.update_all(
+      from(t in ApiToken,
+        where: t.id == ^id,
+        where: is_nil(t.last_used_at) or t.last_used_at < ^stale_before
+      ),
+      set: [last_used_at: now]
+    )
+
     :ok
   end
 

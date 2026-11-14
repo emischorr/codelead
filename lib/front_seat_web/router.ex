@@ -1,6 +1,7 @@
 defmodule FrontSeatWeb.Router do
   use FrontSeatWeb, :router
 
+  import FrontSeatWeb.ApiAuth
   import FrontSeatWeb.Authorization
   import FrontSeatWeb.SetupGate
   import FrontSeatWeb.UserAuth
@@ -15,8 +16,14 @@ defmodule FrontSeatWeb.Router do
     plug :fetch_current_scope_for_user
   end
 
+  # Bearer-token only: no session, no cookies, no CSRF. Setup, then the
+  # license, then the token — so an unlicensed instance refuses every
+  # request the same way, valid token or not. See `FrontSeatWeb.ApiAuth`.
   pipeline :api do
     plug :accepts, ["json"]
+    plug :require_api_setup
+    plug :require_api_license
+    plug :authenticate_api_token
   end
 
   # The instance is unusable until the first-run wizard has been completed.
@@ -111,6 +118,8 @@ defmodule FrontSeatWeb.Router do
       live "/users/settings/email", UserLive.Settings.Email, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings.Email, :confirm_email
       live "/users/settings/password", UserLive.Settings.Password, :edit
+      live "/users/settings/tokens", UserLive.Settings.Tokens, :index
+      live "/users/settings/tokens/new", UserLive.Settings.NewToken, :new
 
       live "/settings", SettingsLive, :index
 
@@ -212,10 +221,19 @@ defmodule FrontSeatWeb.Router do
     match :*, "/:task_id/*path", PreviewProxyController, :proxy
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", FrontSeatWeb do
-  #   pipe_through :api
-  # end
+  ## JSON API (ADR-0017, `docs/api.md`)
+  #
+  # Controllers stay thin: they call the same context functions as the
+  # LiveViews with the token's `Scope`, and authorization stays in `Policy`.
+
+  scope "/api/v1", FrontSeatWeb.Api do
+    pipe_through :api
+
+    get "/me", MeController, :show
+    get "/projects", ProjectController, :index
+    get "/projects/:project_id/tasks", TaskController, :index
+    post "/projects/:project_id/tasks", TaskController, :create
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:front_seat, :dev_routes) do

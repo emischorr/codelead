@@ -1,21 +1,20 @@
 defmodule FrontSeatWeb.ErrorJSON do
   @moduledoc """
-  This module is invoked by your endpoint in case of errors on JSON requests.
-
-  See config/config.exs.
+  Renders JSON errors raised outside a controller's own handling — an
+  unknown `/api` route, a crash — in the same shape `/api` controllers use
+  (`FrontSeatWeb.Api.Error`), so a client parses every error one way.
   """
 
-  # If you want to customize a particular status code,
-  # you may add your own clauses, such as:
-  #
-  # def render("500.json", _assigns) do
-  #   %{errors: %{detail: "Internal Server Error"}}
-  # end
+  alias FrontSeatWeb.Api.Error
 
-  # By default, Phoenix returns the status message from
-  # the template name. For example, "404.json" becomes
-  # "Not Found".
+  @spec render(String.t(), map()) :: map()
   def render(template, _assigns) do
-    %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
+    message = Phoenix.Controller.status_message_from_template(template)
+    Error.body(code(template), message <> ".", nil)
   end
+
+  defp code("404.json"), do: :not_found
+  defp code("406.json"), do: :not_acceptable
+  defp code("500.json"), do: :internal_error
+  defp code(_template), do: :error
 end

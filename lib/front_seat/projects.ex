@@ -87,6 +87,20 @@ defmodule FrontSeat.Projects do
   def get_project!(id), do: Repo.get!(Project, id)
 
   @doc """
+  The project, if the caller may view it. An unknown project and one the
+  caller cannot see are the same `:not_found`, so existence never leaks.
+  """
+  @spec fetch_project(Scope.t() | nil, pos_integer()) :: {:ok, Project.t()} | {:error, :not_found}
+  def fetch_project(scope, id) do
+    with %Project{} = project <- Repo.get(Project, id),
+         :ok <- Policy.authorize(scope, :view_project, project) do
+      {:ok, project}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Updates a project's settings. Budget limits are admin-only and silently
   kept out of reach here — the UI renders them read-only for everyone else,
   this strip is the authoritative guard.

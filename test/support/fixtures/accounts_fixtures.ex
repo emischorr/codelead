@@ -60,6 +60,23 @@ defmodule FrontSeat.AccountsFixtures do
 
   def admin_fixture(attrs \\ %{}), do: user_fixture(Map.put(Map.new(attrs), :role, :admin))
 
+  @doc """
+  Mints a personal access token for the user, licensed or not — written
+  directly so license-gate tests can hold a token minted "before the
+  lapse". Returns `{plaintext, token}`.
+  """
+  def api_token_fixture(user, attrs \\ %{}) do
+    {plaintext, token_hash} = FrontSeat.Accounts.ApiToken.build()
+
+    token =
+      %FrontSeat.Accounts.ApiToken{user_id: user.id, token_hash: token_hash}
+      |> FrontSeat.Accounts.ApiToken.create_changeset(%{name: "test token"})
+      |> Ecto.Changeset.change(Map.new(attrs))
+      |> FrontSeat.Repo.insert!()
+
+    {plaintext, token}
+  end
+
   def user_scope_fixture do
     user = user_fixture()
     user_scope_fixture(user)

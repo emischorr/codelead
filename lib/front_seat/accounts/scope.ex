@@ -11,17 +11,23 @@ defmodule FrontSeat.Accounts.Scope do
   `FrontSeat.Accounts.Policy` can answer authorization questions without
   further queries. Admins never consult the map — `project_role/2`
   short-circuits to `:maintainer` for them — so it stays empty for admins.
+
+  `api_token` is set only for API requests (`FrontSeatWeb.ApiAuth`): the
+  `%{id, name}` of the personal access token that authenticated the call,
+  so contexts can record provenance. It never changes what the caller may
+  do — a token acts with its user's full rights (ADR-0017).
   """
 
   alias FrontSeat.Accounts
   alias FrontSeat.Accounts.User
 
-  defstruct user: nil, role: nil, memberships: %{}
+  defstruct user: nil, role: nil, memberships: %{}, api_token: nil
 
   @type t :: %__MODULE__{
           user: User.t() | nil,
           role: :admin | :member | nil,
-          memberships: %{optional(pos_integer()) => Accounts.ProjectMembership.role()}
+          memberships: %{optional(pos_integer()) => Accounts.ProjectMembership.role()},
+          api_token: %{id: pos_integer(), name: String.t()} | nil
         }
 
   @doc """
@@ -39,6 +45,14 @@ defmodule FrontSeat.Accounts.Scope do
   end
 
   def for_user(nil), do: nil
+
+  @doc """
+  Marks the scope as authenticated by a personal access token.
+  """
+  @spec put_api_token(t(), pos_integer(), String.t()) :: t()
+  def put_api_token(%__MODULE__{} = scope, token_id, token_name) do
+    %{scope | api_token: %{id: token_id, name: token_name}}
+  end
 
   @doc """
   Rebuilds the scope from the database, or nil when the user is gone.

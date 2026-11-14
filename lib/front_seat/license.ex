@@ -12,6 +12,8 @@ defmodule FrontSeat.License do
 
     * `:container_execution_env` — running a task in a sibling container
       (`tasks.execution_env == :container`); see ADR-0004.
+    * `:api_access` — the `/api` endpoints and minting personal access
+      tokens; see ADR-0017.
 
   Monetizing a feature is a *data* change rather than a hunt through the
   app for places to add a check:
@@ -71,7 +73,8 @@ defmodule FrontSeat.License do
   # into a paid one — and what brings its name into the atom table, so a
   # key can name it at all.
   @gated_features MapSet.new([
-                    :container_execution_env
+                    :container_execution_env,
+                    :api_access
                   ])
 
   # The whole gated set, resolved at compile time for `tier_baseline(:owner)`.
