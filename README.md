@@ -12,7 +12,7 @@
 
 ![FrontSeat in 30 seconds: a task moves from Planning to Done, with a human decision at each gate](docs/images/frontseat-demo.gif)
 
-<sub>Simplified animation of the real workflow · [Watch in full quality](https://github.com/user-attachments/assets/be9687dd-f0a8-4111-92ed-5990548c8aa2)</sub>
+<sub>Simplified animation of the real workflow · [Watch in full quality](https://github.com/user-attachments/assets/ba35f38d-b92c-487d-b149-08c612e2e9e6)</sub>
 
 Most agent tools trade control for speed: the agent runs, you skim, you merge. That's fine for experiments. It doesn't hold up when your name is on the release.
 
