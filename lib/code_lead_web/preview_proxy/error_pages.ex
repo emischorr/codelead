@@ -289,7 +289,7 @@ defmodule CodeLeadWeb.PreviewProxy.ErrorPages do
     </head>
     <body>
       <main class="#{main_class}">
-        <div class="mark">CodeLead Preview</div>
+        <div class="mark">FrontSeat Preview</div>
         <h1>#{title}</h1>
         #{body_html}
       </main>

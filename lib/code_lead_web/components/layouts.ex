@@ -164,7 +164,7 @@ defmodule CodeLeadWeb.Layouts do
     <div class="flex min-h-screen flex-col bg-desk">
       <header class="flex h-[58px] shrink-0 items-center gap-2.5 px-4 sm:px-5">
         <.logo_glyph />
-        <span class="text-[15px] font-bold tracking-tight text-text">CodeLead</span>
+        <span class="text-[15px] font-bold tracking-tight text-text">FrontSeat</span>
         <div class="flex-1" />
         <.theme_toggle />
       </header>
@@ -209,10 +209,15 @@ defmodule CodeLeadWeb.Layouts do
   defp sidebar_content(assigns) do
     ~H"""
     <div class="flex shrink-0 items-center gap-2.5 overflow-hidden px-1.5 pb-3 collapsed:flex-col collapsed:gap-1.5 collapsed:px-0 collapsed:pb-2">
-      <.link navigate={~p"/"} class="flex items-center gap-2.5" title="CodeLead" aria-label="CodeLead">
+      <.link
+        navigate={~p"/"}
+        class="flex items-center gap-2.5"
+        title="FrontSeat"
+        aria-label="FrontSeat"
+      >
         <.logo_glyph />
         <span class="whitespace-nowrap text-[15px] font-bold tracking-tight text-text collapsed:hidden">
-          CodeLead
+          FrontSeat
         </span>
       </.link>
       <%!-- The drawer closes, the desktop sidebar collapses. Never both, which

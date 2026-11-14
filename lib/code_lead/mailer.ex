@@ -42,6 +42,6 @@ defmodule CodeLead.Mailer do
   """
   @spec from() :: {String.t(), String.t()}
   def from do
-    Application.get_env(:code_lead, :mail_from, {"CodeLead", "codelead@localhost"})
+    Application.get_env(:code_lead, :mail_from, {"FrontSeat", "codelead@localhost"})
   end
 end

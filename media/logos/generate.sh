@@ -19,27 +19,27 @@ render() { # src out width [height]
 }
 
 for s in 16 32 48 64 128 180 192 256 512 1024; do
-  render "$SVG/codelead-mark.svg" "$PNG/codelead-mark-$s.png" "$s"
+  render "$SVG/frontseat-mark.svg" "$PNG/frontseat-mark-$s.png" "$s"
 done
 
 for s in 180 192 512 1024; do
-  render "$SVG/codelead-mark-square.svg" "$PNG/codelead-mark-square-$s.png" "$s"
+  render "$SVG/frontseat-mark-square.svg" "$PNG/frontseat-mark-square-$s.png" "$s"
 done
 
 for theme in light dark; do
   for h in 64 128 256; do
-    render "$SVG/codelead-lockup-$theme.svg" "$PNG/codelead-lockup-$theme-h$h.png" "" "$h"
+    render "$SVG/frontseat-lockup-$theme.svg" "$PNG/frontseat-lockup-$theme-h$h.png" "" "$h"
   done
 done
 
 # Social / Open Graph card: light lockup centered on the app's light background.
 og_tmp="$(mktemp -d)/og.png"
-render "$SVG/codelead-lockup-light.svg" "$og_tmp" 640
+render "$SVG/frontseat-lockup-light.svg" "$og_tmp" 640
 magick -size 1200x630 xc:'#f7f6f3' "$og_tmp" -gravity center -composite \
-  "$PNG/codelead-og-1200x630.png"
+  "$PNG/frontseat-og-1200x630.png"
 rm -f "$og_tmp"
 
-magick "$PNG/codelead-mark-16.png" "$PNG/codelead-mark-32.png" "$PNG/codelead-mark-48.png" \
+magick "$PNG/frontseat-mark-16.png" "$PNG/frontseat-mark-32.png" "$PNG/frontseat-mark-48.png" \
   favicon.ico
 
 if command -v optipng >/dev/null; then
@@ -48,10 +48,10 @@ fi
 
 # Copies served by the app (see root.html.heex).
 cp favicon.ico "$STATIC/favicon.ico"
-cp "$SVG/codelead-mark.svg" "$STATIC/images/icon.svg"
-cp "$PNG/codelead-mark-square-180.png" "$STATIC/images/apple-touch-icon.png"
-cp "$PNG/codelead-mark-192.png" "$STATIC/images/icon-192.png"
-cp "$PNG/codelead-mark-512.png" "$STATIC/images/icon-512.png"
-cp "$PNG/codelead-mark-square-512.png" "$STATIC/images/icon-maskable-512.png"
+cp "$SVG/frontseat-mark.svg" "$STATIC/images/icon.svg"
+cp "$PNG/frontseat-mark-square-180.png" "$STATIC/images/apple-touch-icon.png"
+cp "$PNG/frontseat-mark-192.png" "$STATIC/images/icon-192.png"
+cp "$PNG/frontseat-mark-512.png" "$STATIC/images/icon-512.png"
+cp "$PNG/frontseat-mark-square-512.png" "$STATIC/images/icon-maskable-512.png"
 
 echo "done: $(ls "$PNG" | wc -l | tr -d ' ') PNGs, favicon.ico, static copies refreshed"

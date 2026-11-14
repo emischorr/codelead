@@ -157,7 +157,7 @@ defmodule CodeLead.Runtime.TaskRunner do
 
   def dispatch_error({:docker_unreachable, _output}) do
     "the Docker daemon is unreachable — is `/var/run/docker.sock` mounted into the " <>
-      "CodeLead container? A stack whose app container predates the mount picks it " <>
+      "FrontSeat container? A stack whose app container predates the mount picks it " <>
       "up with `docker compose up -d`; see docs/deployment.md"
   end
 
@@ -166,7 +166,7 @@ defmodule CodeLead.Runtime.TaskRunner do
   end
 
   def dispatch_error({:docker_permission_denied, _output}) do
-    "CodeLead cannot use the mounted docker socket — the entrypoint normally grants " <>
+    "FrontSeat cannot use the mounted docker socket — the entrypoint normally grants " <>
       "socket access at start, so either the socket appeared after boot (restart the " <>
       "stack) or the container runs with a `user:` override, which takes that back: " <>
       "add the host docker group's id via `group_add` (see docs/deployment.md)"

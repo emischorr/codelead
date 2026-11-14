@@ -173,7 +173,7 @@ defaults are built on. Agent output is untrusted, so the wrapper renders
 with `unsafe: false` **and** sanitizes; no call site may opt out.
 
 **Brand assets.** The logo is `logo_glyph/1` in `layouts.ex` (the
-accent square with two bars) next to "CodeLead" in DM Sans Bold. Its
+accent square with two bars) next to "FrontSeat" in DM Sans Bold. Its
 standalone masters (mark, glyph, lockups in light/dark/mono, with the
 wordmark as outlines) live in `media/logos/svg/`. `media/logos/generate.sh`
 renders the PNG sizes, OG card and `favicon.ico` from them and refreshes

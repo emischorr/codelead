@@ -73,7 +73,7 @@ defmodule CodeLeadWeb.SetupLiveTest do
         "user" => %{"username" => "admin", "password" => @password}
       })
 
-      assert %{name: "CodeLead"} = Accounts.get_organization!()
+      assert %{name: "FrontSeat"} = Accounts.get_organization!()
     end
 
     test "a second admin registration is refused", %{conn: conn} do

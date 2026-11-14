@@ -10,7 +10,7 @@ alias CodeLead.Agents
 
 {:ok, organization} =
   Accounts.ensure_organization(%{
-    name: "CodeLead",
+    name: "FrontSeat",
     settings: %{"setup_done" => true}
   })
 

@@ -10,7 +10,7 @@ defmodule CodeLeadWeb.SetupController do
   alias CodeLead.Accounts
   alias CodeLeadWeb.UserAuth
 
-  @default_organization_name "CodeLead"
+  @default_organization_name "FrontSeat"
 
   def create_admin(conn, %{"user" => user_params} = params) do
     organization_name = organization_name(params)

@@ -34,7 +34,7 @@ defmodule CodeLeadWeb.SetupLive do
     socket =
       socket
       |> assign(page_title: "Setup", skipped: MapSet.new(), trigger_submit: false)
-      |> assign(organization_name: "CodeLead")
+      |> assign(organization_name: "FrontSeat")
       |> assign_admin_form(%{})
       |> assign_provider_form(%{"name" => "Anthropic", "kind" => "anthropic_api"})
       |> assign_project_form(%{"default_branch" => "main"})
@@ -216,7 +216,7 @@ defmodule CodeLeadWeb.SetupLive do
 
     {:noreply,
      socket
-     |> put_flash(:info, "CodeLead is ready.")
+     |> put_flash(:info, "FrontSeat is ready.")
      |> push_navigate(to: ~p"/")}
   end
 

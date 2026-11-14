@@ -320,7 +320,7 @@ if config_env() == :prod do
 
     config :code_lead,
            :mail_from,
-           {System.get_env("MAIL_FROM_NAME") || "CodeLead",
+           {System.get_env("MAIL_FROM_NAME") || "FrontSeat",
             System.get_env("MAIL_FROM") || "codelead@#{host}"}
   end
 end

@@ -10,7 +10,7 @@
 
 **Self-hosted orchestration for AI coding agents. Built for engineers and product builders who stay accountable for what they ship.**
 
-![CodeLead in 30 seconds: a task moves from Planning to Done, with a human decision at each gate](docs/images/codelead-demo.gif)
+![FrontSeat in 30 seconds: a task moves from Planning to Done, with a human decision at each gate](docs/images/frontseat-demo.gif)
 
 <sub>Simplified animation of the real workflow · [Watch in full quality](https://github.com/user-attachments/assets/be9687dd-f0a8-4111-92ed-5990548c8aa2)</sub>
 

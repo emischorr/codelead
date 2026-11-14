@@ -82,7 +82,7 @@ config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Local
 # is hidden rather than silently failing — see `CodeLead.Mailer`. dev and test
 # turn it on; prod only does so when SMTP_HOST is set.
 config :code_lead, mail_enabled: false
-config :code_lead, mail_from: {"CodeLead", "codelead@localhost"}
+config :code_lead, mail_from: {"FrontSeat", "codelead@localhost"}
 
 # Configure esbuild (the version is required)
 config :esbuild,

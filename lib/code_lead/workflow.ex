@@ -52,7 +52,7 @@ defmodule CodeLead.Workflow do
   def built_in do
     %__MODULE__{
       key: @builtin_key,
-      name: "CodeLead default",
+      name: "FrontSeat default",
       stages: [
         %Stage{key: :planning, name: "Planning", position: 1, stage_type: :plan},
         %Stage{key: :running, name: "Running", position: 2, stage_type: :execute},

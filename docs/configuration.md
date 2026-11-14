@@ -29,7 +29,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `SMTP_TLS` | `if_available` | STARTTLS policy: `always`, `never`, or `if_available`. The peer certificate is verified against the system CA store whenever TLS is used. |
 | `SMTP_SSL` | `false` | `true`/`1` for implicit TLS (the connection is TLS from the start, rather than upgrading via STARTTLS). |
 | `MAIL_FROM` | `codelead@$PHX_HOST` | Sender address. Most relays reject a sender they don't recognise, so set this to an address the relay accepts. |
-| `MAIL_FROM_NAME` | `CodeLead` | Display name on the sender. |
+| `MAIL_FROM_NAME` | `FrontSeat` | Display name on the sender. |
 | `WORKSPACE_VOLUME` | — | **Legacy** (pre-ADR-0009 stacks): name of the docker volume holding `/data`. A volume's data has no stable host path, so devcontainer execution cannot work under it — when set, container-selecting tasks refuse to start with guidance. Migrate to the `DATA_ROOT` bind. |
 | `WORKSPACE_VOLUME_MOUNT` | `/data` | Legacy companion to `WORKSPACE_VOLUME`/`HOST_DATA_ROOT`: where that source was mounted inside sibling containers. |
 | `HOST_DATA_ROOT` | — | **Legacy** escape hatch (ADR-0003): host path of a `/data` bind. Non-coincident, so container tasks refuse under it too — mount the same host path at the identical container path instead and it becomes unnecessary. |
