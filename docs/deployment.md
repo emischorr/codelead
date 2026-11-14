@@ -556,9 +556,21 @@ do it for you.
   SQL
   ```
 
-  Keep the stack in the same directory (or set `COMPOSE_PROJECT_NAME` to the
-  old one): the `pg` volume is named after the compose project, and a renamed
-  directory starts on an empty volume with a fresh, empty database.
+- **Stack name:** the compose file now pins `name: frontseat`, so containers,
+  network and the `pg` volume no longer take the folder's name. A stack that
+  predates the pin keeps its database in `<old-folder>_pg` (e.g. `codelead_pg`),
+  and the new file starts on an empty `frontseat_pg`. Copy it once — first
+  `docker compose -p <old-folder> down` (the old project is found by name,
+  even after the folder is renamed), then:
+
+  ```bash
+  docker volume rm frontseat_pg 2>/dev/null   # only the empty one a failed start may have created
+  docker run --rm -v codelead_pg:/from -v frontseat_pg:/to alpine cp -a /from/. /to/
+  ```
+
+  If `DATA_ROOT` lived inside the renamed folder, update it in `.env`; the app
+  rewrites its stored workspace paths on the next start. `docker volume rm
+  codelead_pg` once everything checks out.
 - **Image:** `ghcr.io/emischorr/codelead` → `ghcr.io/emischorr/frontseat`.
   Take the current compose file and `init-app-db.sh` over yours.
 - **Queued jobs:** Oban stores worker module names in `oban_jobs.worker`.

@@ -1,4 +1,4 @@
-name: front_seat
+name: frontseat
 services:
 
   postgresql:
