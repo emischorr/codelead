@@ -15,6 +15,8 @@ defmodule CodeLead.OsProcess do
   the pid-file contract, writing it and reading it back.
   """
 
+  require Logger
+
   @doc """
   Sends SIGTERM to the process group led by `os_pid`, falling back to the
   bare pid when the group is gone or the platform refuses it.
@@ -26,8 +28,11 @@ defmodule CodeLead.OsProcess do
       _no_such_group -> terminate_pid(os_pid)
     end
   rescue
-    # `kill(1)` missing is not a reason to fail a teardown.
-    _cannot_signal -> :ok
+    # `kill(1)` missing is not a reason to fail a teardown — but a
+    # teardown that silently signals nothing leaks processes, so say so.
+    e ->
+      Logger.warning("could not signal os process #{os_pid}: #{Exception.message(e)}")
+      :ok
   end
 
   @doc """
@@ -61,7 +66,20 @@ defmodule CodeLead.OsProcess do
   end
 
   defp terminate_pid(os_pid) do
-    _ = System.cmd("kill", ["-TERM", to_string(os_pid)], stderr_to_stdout: true)
-    :ok
+    case System.cmd("kill", ["-TERM", to_string(os_pid)], stderr_to_stdout: true) do
+      {_output, 0} ->
+        :ok
+
+      {output, status} ->
+        # "No such process" is the expected outcome after a successful
+        # group kill (procps `kill` exits 1 even when the signal landed).
+        unless output =~ "No such process" do
+          Logger.warning(
+            "could not signal os process #{os_pid} (kill exited #{status}): #{String.trim(output)}"
+          )
+        end
+
+        :ok
+    end
   end
 end
