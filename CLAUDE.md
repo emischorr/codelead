@@ -44,7 +44,7 @@ mix ecto.reset                # wipe per-task workspace state + drop + create + 
 
 `mix precommit` runs in `MIX_ENV=test` (set via `preferred_envs`). Run it when you're done with a change and fix anything it reports.
 
-Note that `docker-compose.yml` only declares `code_lead_dev`; the test database (`code_lead_test`) is created by the `mix test` alias against the same server.
+Note that `docker-compose.yml` only declares `front_seat_dev`; the test database (`front_seat_test`) is created by the `mix test` alias against the same server.
 
 CI (`.github/workflows/ci.yml`) runs on every push to `main` and every PR: `mix format --check-formatted`, `mix deps.unlock --check-unused`, then `mix precommit` against a Postgres 16 service. The explicit checks exist because precommit's `format`/`deps.unlock --unused` fix files rather than fail.
 

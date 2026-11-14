@@ -19,7 +19,7 @@ services:
     command: ["/app/bin/migrate"]
     restart: "no"
     environment:
-      DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
+      DATABASE_URL: ecto://frontseat:${APP_DB_PW}@db/frontseat
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
     depends_on:
@@ -30,7 +30,7 @@ services:
     image: ghcr.io/emischorr/frontseat:latest
     command: ["/app/bin/server"]
     environment:
-      DATABASE_URL: ecto://codelead:${APP_DB_PW}@db/codelead
+      DATABASE_URL: ecto://frontseat:${APP_DB_PW}@db/frontseat
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       # The instance's canonical address — see "URLs" in docs/deployment.md.

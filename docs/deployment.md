@@ -536,16 +536,35 @@ the entrypoint took that job over — and can delete `DOCKER_GID` from `.env`.
 
 ### Upgrading from CodeLead
 
-The product was renamed from CodeLead to FrontSeat. The database name, role and
-`DATABASE_URL` (`codelead`) are unchanged; everything else that carried the old
-name moved with it:
+The product was renamed from CodeLead to FrontSeat, including the database
+role and name (`codelead` → `frontseat`). The current compose file and
+`init-app-db.sh` expect the new names, so rename the database **before** the
+new stack starts — `init-app-db.sh` only runs on an empty volume and will not
+do it for you.
 
+- **Database:** with the stack's `app` stopped (`docker compose stop app`) and
+  a backup taken (`docker compose exec -T db pg_dump -U postgres codelead > pre-rename.sql`),
+  rename both as the superuser. A role rename keeps every ownership; it clears
+  the password only if it is MD5-hashed, so the last statement resets it from
+  `APP_DB_PW`:
+
+  ```bash
+  docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U postgres -v pw="$APP_DB_PW"' <<'SQL'
+  ALTER DATABASE codelead RENAME TO frontseat;
+  ALTER ROLE codelead RENAME TO frontseat;
+  ALTER ROLE frontseat PASSWORD :'pw';
+  SQL
+  ```
+
+  Keep the stack in the same directory (or set `COMPOSE_PROJECT_NAME` to the
+  old one): the `pg` volume is named after the compose project, and a renamed
+  directory starts on an empty volume with a fresh, empty database.
 - **Image:** `ghcr.io/emischorr/codelead` → `ghcr.io/emischorr/frontseat`.
-  Take the current compose file over yours (or change both `image:` lines).
+  Take the current compose file and `init-app-db.sh` over yours.
 - **Queued jobs:** Oban stores worker module names in `oban_jobs.worker`.
-  Rewrite pending ones before the new app starts, or scheduled task runs are
+  Rewrite them before the new app starts, or scheduled task runs are
   dropped:
-  `UPDATE oban_jobs SET worker = replace(worker, 'CodeLead.', 'FrontSeat.') WHERE state IN ('available','scheduled','retryable');`
+  `docker compose exec db psql -U postgres -d frontseat -c "UPDATE oban_jobs SET worker = replace(worker, 'CodeLead.', 'FrontSeat.') WHERE worker LIKE 'CodeLead.%'"`
 - **Containers:** task and preview-relay containers are now found by
   `frontseat.*` labels. Remove the old ones (this ends their sessions):
   `docker rm -f $(docker ps -aq --filter label=codelead.managed=true)`

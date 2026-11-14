@@ -16,7 +16,7 @@ Map of the repo's documentation. Design notes describe how things work
 
 ## Operations
 
-- [`deployment.md`](deployment.md) — running it on a server: the plain-HTTP posture and why TLS is the operator's, the published image, the `deployment/` compose stack (including the docker socket mount for container execution and the pinned data-volume name with its upgrade note), `PHX_HOST`/`SCHEME`/`URL_PORT` recipes for direct and proxied access, reverse proxy requirements, upgrades (including the one-time CodeLead → FrontSeat rename steps and checking the dashboard's session tiles first, since a restart now stops live previews and terminals), backups, and the gaps to know about before exposing it.
+- [`deployment.md`](deployment.md) — running it on a server: the plain-HTTP posture and why TLS is the operator's, the published image, the `deployment/` compose stack (including the docker socket mount for container execution and the pinned data-volume name with its upgrade note), `PHX_HOST`/`SCHEME`/`URL_PORT` recipes for direct and proxied access, reverse proxy requirements, upgrades (including the one-time CodeLead → FrontSeat rename steps, database role and name included and checking the dashboard's session tiles first, since a restart now stops live previews and terminals), backups, and the gaps to know about before exposing it.
 
 ## Design notes
 

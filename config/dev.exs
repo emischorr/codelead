@@ -6,7 +6,7 @@ config :front_seat, FrontSeat.Repo,
   username: "postgres",
   password: "postgres",
   hostname: System.get_env("PGHOST", "localhost"),
-  database: "code_lead_dev",
+  database: "front_seat_dev",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
