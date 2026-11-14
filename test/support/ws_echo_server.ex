@@ -1,8 +1,8 @@
-defmodule CodeLead.WsEchoServer do
+defmodule FrontSeat.WsEchoServer do
   @moduledoc """
   In-test websocket echo handler: pushes every data frame back, and
   closes with 1000/"bye" when told to. The upstream half of the preview
-  relay tests (served by `CodeLead.WsEchoPlug`).
+  relay tests (served by `FrontSeat.WsEchoPlug`).
   """
 
   @behaviour WebSock

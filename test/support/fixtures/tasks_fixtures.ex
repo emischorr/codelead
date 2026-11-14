@@ -1,14 +1,14 @@
-defmodule CodeLead.TasksFixtures do
+defmodule FrontSeat.TasksFixtures do
   @moduledoc """
   Test fixtures for the Tasks context.
   """
 
-  import CodeLead.AgentsFixtures
-  import CodeLead.ProjectsFixtures
+  import FrontSeat.AgentsFixtures
+  import FrontSeat.ProjectsFixtures
 
-  alias CodeLead.Repo
-  alias CodeLead.Tasks
-  alias CodeLead.Tasks.TaskStateTransition
+  alias FrontSeat.Repo
+  alias FrontSeat.Tasks
+  alias FrontSeat.Tasks.TaskStateTransition
 
   def task_fixture(project_id, attrs \\ %{}) do
     {:ok, task} =
@@ -52,7 +52,7 @@ defmodule CodeLead.TasksFixtures do
   `apply_transition/3`, which deliberately does not authorize.
   """
   def admin_scope do
-    CodeLead.AccountsFixtures.user_scope_fixture(CodeLead.AccountsFixtures.admin_fixture())
+    FrontSeat.AccountsFixtures.user_scope_fixture(FrontSeat.AccountsFixtures.admin_fixture())
   end
 
   @doc """

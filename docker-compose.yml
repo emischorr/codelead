@@ -1,4 +1,4 @@
-name: code_lead
+name: front_seat
 services:
 
   postgresql:

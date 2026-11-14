@@ -1,15 +1,15 @@
 # Configuration (last updated: 2026-11-04, org env store)
 
 All environment variables are read in `config/runtime.exs` and accessed in
-application code via `Application.get_env(:code_lead, ...)` — never
+application code via `Application.get_env(:front_seat, ...)` — never
 `System.get_env/1` outside of config files (see CODING_GUIDE.md).
 
 ## Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `CodeLead.Vault` (Cloak AES-GCM). Encrypts provider credentials and project/organization env store entries marked secret (the default — an entry can opt out per-value). Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
-| `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for CodeLead-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Container execution requires it to be host-coincident** — when the app itself runs in a container, the host directory must be bind-mounted at the identical path (the deployed stack's `DATA_ROOT` bind), because the devcontainer CLI's bind sources are resolved by the host daemon (ADR-0009, [deployment.md](deployment.md#the-data-directory)). **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
+| `ENCRYPTION_KEY` | fixed dev/test key; **required in prod** | Base64-encoded 32-byte key for `FrontSeat.Vault` (Cloak AES-GCM). Encrypts provider credentials and project/organization env store entries marked secret (the default — an entry can opt out per-value). Generate: `32 \|> :crypto.strong_rand_bytes() \|> Base.encode64()`, or `openssl rand -base64 32`. Anything that does not decode to exactly 32 bytes fails at boot. |
+| `WORKSPACE_ROOT` | `<repo>/workspace` (dev/prod) | Root for FrontSeat-managed working state: base clones, per-task git worktrees, task folders. Gitignored. **Container execution requires it to be host-coincident** — when the app itself runs in a container, the host directory must be bind-mounted at the identical path (the deployed stack's `DATA_ROOT` bind), because the devcontainer CLI's bind sources are resolved by the host daemon (ADR-0009, [deployment.md](deployment.md#the-data-directory)). **Ignored in `:test`** — the test suite wipes its workspace root before running, and an agent's `mix test` inside a task worktree inherits the instance's env, so honoring this var in test once wiped a deployed instance's workspace. |
 | `TEST_WORKSPACE_ROOT` | `<repo>/tmp/test_workspace` | Test-env-only workspace root override (for CI). Must resolve to a path inside the checkout — `test_helper.exs` refuses to wipe anything outside it. |
 | `MAX_CONCURRENT_RUNS` | `3` | Cap on simultaneously executing task runs; excess stays queued. |
 | `LICENSE_KEY` | — | Signed license key for the instance. Optional everywhere including prod — absent means the community tier, which grants everything except container execution (tasks whose Execution is set to Container). Verified offline at boot; anything unusable (bad signature, expired, malformed) logs a warning and falls back to community rather than failing the boot. See [`licensing.md`](licensing.md). |
@@ -28,7 +28,7 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | — | Relay credentials. Leave both unset for an unauthenticated relay (auth is only attempted when a username is given). |
 | `SMTP_TLS` | `if_available` | STARTTLS policy: `always`, `never`, or `if_available`. The peer certificate is verified against the system CA store whenever TLS is used. |
 | `SMTP_SSL` | `false` | `true`/`1` for implicit TLS (the connection is TLS from the start, rather than upgrading via STARTTLS). |
-| `MAIL_FROM` | `codelead@$PHX_HOST` | Sender address. Most relays reject a sender they don't recognise, so set this to an address the relay accepts. |
+| `MAIL_FROM` | `frontseat@$PHX_HOST` | Sender address. Most relays reject a sender they don't recognise, so set this to an address the relay accepts. |
 | `MAIL_FROM_NAME` | `FrontSeat` | Display name on the sender. |
 | `WORKSPACE_VOLUME` | — | **Legacy** (pre-ADR-0009 stacks): name of the docker volume holding `/data`. A volume's data has no stable host path, so devcontainer execution cannot work under it — when set, container-selecting tasks refuse to start with guidance. Migrate to the `DATA_ROOT` bind. |
 | `WORKSPACE_VOLUME_MOUNT` | `/data` | Legacy companion to `WORKSPACE_VOLUME`/`HOST_DATA_ROOT`: where that source was mounted inside sibling containers. |
@@ -37,13 +37,13 @@ application code via `Application.get_env(:code_lead, ...)` — never
 | `DEVCONTAINER_CLI` | `devcontainer` | The devcontainer CLI executable provisioning task environments. Baked into the published image; on a dev machine install it with `npm i -g @devcontainers/cli`. |
 | `HARNESS_VERSION` | `0.66.0`, pinned in `config/runtime.exs` in sync with the image's `CLAUDE_ACP_VERSION` build arg | Version directory the compiled harness binary is staged under (`<WORKSPACE_ROOT>/harness/<version>/`). |
 | `HARNESS_SOURCE` | — | Air-gapped escape hatch: a directory of pre-staged harness runtime dirs, one per libc flavor (`<flavor>/` with `claude-agent-acp`, `bun`, `node_modules/`), copied at boot. Normally unset — the harness runtime is staged lazily in-docker on the first container run needing the flavor (ADR-0005/0007). |
-| `PREVIEW_PUBLISH_IP` | auto | Host interface a container task's declared `preview_port` is published on — by a per-task relay sidecar (`codelead-preview-<task_id>`, ephemeral host port), not by the task container itself. Unset, it is auto-detected (`CodeLead.PreviewGateway.Address`): loopback when the BEAM runs on the docker host (dev), the docker bridge gateway when the app itself runs in a container (the deployed stack). Set it only for setups the detection cannot cover — custom bridge networks, a remote daemon, Docker Desktop. Never a public interface — browsers only ever reach previews through the authenticated `/preview/:task_id/` proxy (ADR-0008). |
+| `PREVIEW_PUBLISH_IP` | auto | Host interface a container task's declared `preview_port` is published on — by a per-task relay sidecar (`frontseat-preview-<task_id>`, ephemeral host port), not by the task container itself. Unset, it is auto-detected (`FrontSeat.PreviewGateway.Address`): loopback when the BEAM runs on the docker host (dev), the docker bridge gateway when the app itself runs in a container (the deployed stack). Set it only for setups the detection cannot cover — custom bridge networks, a remote daemon, Docker Desktop. Never a public interface — browsers only ever reach previews through the authenticated `/preview/:task_id/` proxy (ADR-0008). |
 | `PREVIEW_UPSTREAM_HOST` | auto | Address the in-app preview proxy dials for container-task upstreams (the host port comes from `docker port` on the relay). Auto-detected the same way as `PREVIEW_PUBLISH_IP` and matches it in practice; override both together or neither. Local-task previews always dial loopback and need neither variable. |
 | `PREVIEW_RELAY_IMAGE` | `alpine/socat` | Image the preview relay sidecar runs. Pulled on the first container-task preview; override for mirrored/air-gapped registries — any image whose entrypoint is `socat` works. |
 | `PREVIEW_IDLE_MINUTES` | `30` | How long a one-click preview server keeps running with nobody on the Review tab before it stops itself. |
 | `PREVIEW_START_TIMEOUT_SECONDS` | `120` | How long a started preview command gets to answer on the preview port before the session gives up and surfaces its log tail. |
 | `TERMINAL_IDLE_MINUTES` | `15` | How long a viewer-less Terminal session keeps its shell alive before stopping it. |
-| `MAINTENANCE_IMAGE` | `alpine:3.20` | Image `CodeLead.Workspace.Remover` uses to delete root-owned leftovers of container runs (a short-lived `docker run … rm -rf` over the mounted socket). Any image with a POSIX `rm` works; override for mirrored/air-gapped registries. Installs without docker never use it — blocked deletions surface for manual cleanup instead. |
+| `MAINTENANCE_IMAGE` | `alpine:3.20` | Image `FrontSeat.Workspace.Remover` uses to delete root-owned leftovers of container runs (a short-lived `docker run … rm -rf` over the mounted socket). Any image with a POSIX `rm` works; override for mirrored/air-gapped registries. Installs without docker never use it — blocked deletions surface for manual cleanup instead. |
 | `PREVIEW_DOMAIN` | — | Unset (the convention), previews are served at `/preview/<task_id>/` on the app's own origin with zero configuration. Set to a wildcard-DNS'd domain (e.g. `preview.example.com`) to switch the **whole instance** to per-task subdomain previews at `task-<id>.$PREVIEW_DOMAIN` — for apps that break under path-prefix hosting. See [Subdomain previews](#subdomain-previews-preview_domain). |
 
 **Production serves plain HTTP.** `force_ssl` is commented out in
@@ -61,9 +61,9 @@ template is not.
 
 - `:workspace_root` — see above.
 - `:max_concurrent_runs` — see above.
-- `CodeLead.Vault` — Cloak cipher config (set from `ENCRYPTION_KEY`).
-- `CodeLead.License` — `key:` only, set from `LICENSE_KEY`. Resolved once in
-  `CodeLead.Application.start/2` and cached in `:persistent_term`; nothing
+- `FrontSeat.Vault` — Cloak cipher config (set from `ENCRYPTION_KEY`).
+- `FrontSeat.License` — `key:` only, set from `LICENSE_KEY`. Resolved once in
+  `FrontSeat.Application.start/2` and cached in `:persistent_term`; nothing
   re-reads it at runtime. There is deliberately no config key for the gated
   feature list or the verification public key — a runtime switch for either
   would be a bypass, which is also why there is no dev-only way to enable
@@ -85,13 +85,13 @@ template is not.
   with `Oban.drain_queue/1` (pass `with_scheduled: true` to fire a
   scheduled run's wake-up early).
 - `:git_access_check` — `{module, function}` the first-run wizard calls
-  to verify a forge token, default `{CodeLead.Git, :check_access}`. Test
-  points it at `CodeLead.GitHelpers` so the suite stays off the network.
+  to verify a forge token, default `{FrontSeat.Git, :check_access}`. Test
+  points it at `FrontSeat.GitHelpers` so the suite stays off the network.
 - `:docker_cli` — argv prefix for every docker invocation the container
   executor makes, default `["docker"]`. Tests swap it for
   `test/support/fake_docker.sh` the same way `:harnesses` swaps in the
   fake ACP agent. The CLI honours `DOCKER_HOST` as usual.
-- `:preview_gateway` — the `CodeLead.PreviewGateway` implementation.
+- `:preview_gateway` — the `FrontSeat.PreviewGateway` implementation.
   Default `PathProxy`; `config/runtime.exs` flips it to `SubdomainProxy`
   when `PREVIEW_DOMAIN` is set. Exactly one gateway is active at a time.
   Tests swap it directly (the test env ignores a dev shell's
@@ -114,7 +114,7 @@ template is not.
 
 ## Mail
 
-Email is **opt-in and off by default**. `CodeLead.Mailer.enabled?/0` reads
+Email is **opt-in and off by default**. `FrontSeat.Mailer.enabled?/0` reads
 `:mail_enabled`, which is `false` in `config/config.exs`, `true` in dev and
 test, and set to `true` in `config/runtime.exs` only when `SMTP_HOST` is
 present. Everything else about mail hangs off that one predicate.
@@ -148,7 +148,7 @@ run a local catcher (`python3 -m aiosmtpd -n -l localhost:1025`) and point
 `SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS=never` at it.
 
 In development, mail is on with the `Local` adapter and sent mail is
-browsable at `/dev/mailbox`. `CodeLead.Mailer.local_mailbox?/0` gates the
+browsable at `/dev/mailbox`. `FrontSeat.Mailer.local_mailbox?/0` gates the
 links to it on *both* that adapter and the dev routes being compiled in, so
 it never points at a route that doesn't exist.
 
@@ -167,12 +167,12 @@ one-click preview sessions export `PREVIEW_BASE_PATH` (e.g.
 `/preview/42`), `PREVIEW_ORIGIN`, and `PREVIEW_PORT` (the repository's
 declared port — unique per repository across the instance, so serve
 commands should bind it rather than hardcode one). Terminal sessions
-additionally export `CODELEAD_TTY_FILE`, which is CodeLead's own
+additionally export `FRONTSEAT_TTY_FILE`, which is FrontSeat's own
 resize channel and not something to set or rely on (ADR-0010):
 
 The project-side view of all this — collected as a checklist, with
 drop-in templates for a repository's `CLAUDE.md`/`AGENTS.md` and a
-`codelead-ready` skill — is in
+`frontseat-ready` skill — is in
 [`project-readiness.md`](project-readiness.md).
 
 | Stack | Recipe |
@@ -198,7 +198,7 @@ default:
 
 - **The LiveSocket path.** `assets/js/app.js` carries a literal
   `new LiveSocket("/live", …)` straight from the generator. Under a
-  path preview that socket opens against **CodeLead's own** LiveView
+  path preview that socket opens against **FrontSeat's own** LiveView
   endpoint, which completes the upgrade and then rejects the join — the
   session token was signed by a different `secret_key_base`. The
   client reads that as `stale` and falls back to a full page load, so
@@ -223,15 +223,15 @@ default:
   undo in production.
 
 - **Absolute `url()` in CSS.** `url("/fonts/x.woff2")` misses the mount
-  and 404s against CodeLead. Make it relative to the stylesheet, which
+  and 404s against FrontSeat. Make it relative to the stylesheet, which
   resolves under any mount — counting the levels from where the
   *bundle* lands, not the source: from `assets/css/app.css` up to a
   top-level `fonts/` that is `url("../../fonts/x.woff2")`.
 
 - **Hand-written literal `href`/`src`.** A stray `href="/"` in a layout
-  walks the user out of the preview and into CodeLead. Use `~p`.
+  walks the user out of the preview and into FrontSeat. Use `~p`.
 
-CodeLead notices the reload loop and breaks it: repeated navigations to
+FrontSeat notices the reload loop and breaks it: repeated navigations to
 the same `/preview/<id>/` URL get a diagnostic page naming these three
 causes instead of another proxied response. The page carries a
 one-click bypass, and `PREVIEW_LOOP_BREAKER=off` disarms the check
@@ -240,12 +240,12 @@ rewritten.
 
 ### Cookies in the preview (path gateway)
 
-Under the default path gateway the preview shares CodeLead's own
+Under the default path gateway the preview shares FrontSeat's own
 origin, so the proxy gives each task its own cookie jar: an upstream
 `Set-Cookie: sid=abc; Path=/` reaches the browser as
-`_clp<task_id>_sid=abc; Path=/preview/<task_id>`, and the prefix is
+`_fsp<task_id>_sid=abc; Path=/preview/<task_id>`, and the prefix is
 peeled off again on the way upstream. The previewed app sees exactly
-the cookies it set, and a previewed CodeLead can no longer overwrite
+the cookies it set, and a previewed FrontSeat can no longer overwrite
 your session cookie and log you out of your own instance.
 
 One consequence is worth knowing before you preview a Django, Laravel,
@@ -286,18 +286,18 @@ Setup, once:
 4. Restart.
 
 The recommended value is `preview.<apex of PHX_HOST>` —
-`PHX_HOST=codelead.example.com` → `PREVIEW_DOMAIN=preview.example.com`,
+`PHX_HOST=frontseat.example.com` → `PREVIEW_DOMAIN=preview.example.com`,
 previews at `task-42.preview.example.com`. Staying on the same
 registrable domain keeps app and previews same-site, so `SameSite=Lax`
-cookies (CodeLead's and the previewed app's) behave normally. A
+cookies (FrontSeat's and the previewed app's) behave normally. A
 `PREVIEW_DOMAIN` on a *foreign* registrable domain makes every preview
 cookie third-party — browsers block those, the auth handshake breaks,
 and boot logs a prominent warning: that configuration is unsupported.
 
-Since the preview origin never sees CodeLead's (host-only) session
+Since the preview origin never sees FrontSeat's (host-only) session
 cookie, the **Open preview** button carries a short-lived signed token;
 the preview origin exchanges it for its own session cookie
-(`_clp_session` — a name previewed apps should not use) and strips it
+(`_fsp_session` — a name previewed apps should not use) and strips it
 via redirect. Visiting a preview subdomain directly without that
 handshake gets a branded 401 — open previews from the Review tab.
 Authorization is unchanged from the path gateway: any logged-in user
@@ -319,12 +319,12 @@ gateway's mount until it is restarted. The symptom is a preview whose
 document loads but whose stylesheets and scripts 404 under
 `/preview/<id>/…`.
 
-CodeLead reconciles the sessions it owns. A session is fingerprinted
+FrontSeat reconciles the sessions it owns. A session is fingerprinted
 with the preview URL it was started for, so a mismatch with the active
 gateway stops the server and starts a fresh one — at boot for a
 container survivor (which is discarded rather than adopted), and on the
 next Start for a live session. A server started **by hand** from the
-Terminal tab is outside that: CodeLead only ever signals the process it
+Terminal tab is outside that: FrontSeat only ever signals the process it
 recorded, so kill that one yourself before starting the preview. When
 a request still arrives under the old mount and the upstream 404s it,
 the proxy serves a diagnostic naming this cause instead of the
@@ -440,13 +440,13 @@ Done — one token, one place. Set it in the first-run wizard's project
 step, or on an existing project from the console:
 
 ```elixir
-CodeLead.Projects.put_env(project_id, "GITHUB_TOKEN", "github_pat_…")
+FrontSeat.Projects.put_env(project_id, "GITHUB_TOKEN", "github_pat_…")
 ```
 
 If every project uses the same forge account, set the token once in the
 **organization** env store instead (`/settings/organization`) — every
-project inherits it (`CodeLead.Projects.forge_token/2` falls through to
-`CodeLead.Accounts.org_env_var/1` when a project has no entry of its own),
+project inherits it (`FrontSeat.Projects.forge_token/2` falls through to
+`FrontSeat.Accounts.org_env_var/1` when a project has no entry of its own),
 and rotating it is a single edit rather than one per project. A project
 can still define its own `GITHUB_TOKEN`/`GITLAB_TOKEN` to override the
 org-wide one — see *Org env store* below.
@@ -455,7 +455,7 @@ The wizard verifies the token against the remote (`git ls-remote`) the
 moment you save it, so a bad one is reported there rather than at the
 first dispatch.
 
-`CodeLead.Git` hands the token to git through a per-invocation
+`FrontSeat.Git` hands the token to git through a per-invocation
 `credential.helper` that reads it back out of the subprocess
 environment, so it never lands in `.git/config`, in argv, or anywhere on
 disk. The helper answers with the username `x-access-token`; both forges
@@ -480,7 +480,7 @@ Three limits worth knowing:
 
 `/settings/organization` carries its own env store, same shape as a
 project's (encrypted-by-default key/value entries, same UI). Every
-project's `CodeLead.Projects.env_vars/1`, `env_var/2` and `forge_token/2`
+project's `FrontSeat.Projects.env_vars/1`, `env_var/2` and `forge_token/2`
 merge the org store in live — there is no copy-on-create step, so editing
 or removing an org entry takes effect on every project immediately, in
 contrast to the default project budget limits (`docs/web-ui.md`), which
@@ -513,7 +513,7 @@ these messages, so they are safe to match on:
 | `non-fast-forward` / `Updates were rejected` | Merge or squash mode only: the default branch moved on the remote between the fetch and the push. Nothing landed — approve again to retry against its new tip. Never force-pushed. |
 | `protected branch` / `GH006` / `pre-receive hook declined` | The remote refuses direct pushes to the default branch. This is exactly what Pull request mode is for; switch the task or the project default. |
 
-`CodeLead.Git.refusal/1` sorts output into these three classes
+`FrontSeat.Git.refusal/1` sorts output into these three classes
 (`:auth` / `:write_denied` / `:other`) and `remote_failure/4` turns one
 into the sentence the operator reads. The last three rows are not about
 credentials, so they get their own pair — `merge_refusal/1` and
@@ -552,16 +552,16 @@ the built-in default:
 {{description}}
 
 ---
-Created by CodeLead for task #{{task_id}}.
+Created by FrontSeat for task #{{task_id}}.
 ```
 
-`CodeLead.Finalizer.create_pull_request/4` substitutes four
+`FrontSeat.Finalizer.create_pull_request/4` substitutes four
 placeholders before sending the body to the forge: `{{title}}`,
 `{{description}}`, `{{task_id}}` and `{{branch}}`. The template only
 affects the PR/MR **body** — the title is always `tasks.title`
 verbatim, and merge/squash mode never opens a PR at all.
 
-Triage a GitHub token without involving CodeLead:
+Triage a GitHub token without involving FrontSeat:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -583,7 +583,7 @@ instead of failing; on a headless host it would hang instead.
 ## Harness prerequisites
 
 `:acp` agents launch a harness binary that must be on the **`PATH` of
-the process running CodeLead** (`System.find_executable/1` resolves it
+the process running FrontSeat** (`System.find_executable/1` resolves it
 before the port is opened — putting `PATH` in the project env store does
 not help).
 
@@ -605,8 +605,8 @@ bring-your-own there. See *Docker image* below.
 
 ## Docker image
 
-Published as `ghcr.io/emischorr/codelead:latest` (multi-arch, amd64 and
-arm64). `docker build -t codelead .` produces the same release image
+Published as `ghcr.io/emischorr/frontseat:latest` (multi-arch, amd64 and
+arm64). `docker build -t frontseat .` produces the same release image
 locally; it needs no manual harness install. The buildx invocation used to
 publish is in the `Dockerfile` header comment, and repeated with the rest of
 the deployment story in [`deployment.md`](deployment.md).
@@ -639,13 +639,13 @@ for by habit — `grep -P`, `find -printf`, `sort -V`, `date -d`), plus `curl`,
 `jq`, `ripgrep` and `openssh-client`. `SHELL=/bin/bash` is set explicitly
 rather than left to a fallback.
 
-**The agent does not see CodeLead's own configuration.** Local subprocesses
+**The agent does not see FrontSeat's own configuration.** Local subprocesses
 (and ACP terminal commands) inherit the app's environment, so
-`CodeLead.Executor.EnvScrub` strips the instance-internal variables —
+`FrontSeat.Executor.EnvScrub` strips the instance-internal variables —
 `WORKSPACE_ROOT`, `DATABASE_URL`, `SECRET_KEY_BASE`, `ENCRYPTION_KEY` and
 the rest of the names read in `config/runtime.exs` — before spawning.
 An inherited `WORKSPACE_ROOT` once let an agent's `mix test` (run inside a
-task worktree on CodeLead's own repo) resolve the instance's workspace root
+task worktree on FrontSeat's own repo) resolve the instance's workspace root
 and wipe it. Operator-exported vars outside that denylist still pass
 through, and an env store entry — project or organization, project
 winning on a shared key — always wins over the scrub, even under an
@@ -660,11 +660,11 @@ Go, Rust, a JVM — is there at all. An agent working on an Elixir project
 therefore cannot run `mix test` in the stock image, however well the shell
 works.
 
-Extend the image with whatever the projects you point CodeLead at need to
+Extend the image with whatever the projects you point FrontSeat at need to
 build and test themselves:
 
 ```dockerfile
-FROM ghcr.io/emischorr/codelead:latest
+FROM ghcr.io/emischorr/frontseat:latest
 USER root
 RUN apk add --no-cache elixir     # or nodejs npm / python3 / go / cargo …
 USER elixir
@@ -745,22 +745,22 @@ Air-gapped or picky setups can bypass the build by pointing
 the real-daemon integration test, and `mix test --only devcontainer`
 the real-CLI one.
 
-The quickest end-to-end check is dogfooding: CodeLead's own repo ships
+The quickest end-to-end check is dogfooding: FrontSeat's own repo ships
 a `.devcontainer` (app + Postgres via compose). Point your dev instance
 at the checkout, set the repository to Devcontainer with
 `preview_port: 4001` (4000 is the instance's own port, which is
 blocked) and `preview_command: PORT="$PREVIEW_PORT" mix phx.server`,
 and run a container task — the Review tab's Open preview then shows
-CodeLead itself through `/preview/<task_id>/` (or, with
+FrontSeat itself through `/preview/<task_id>/` (or, with
 `PREVIEW_DOMAIN` set, on its own subdomain — where the previewed
-CodeLead's session cookie works unrenamed, so you can even log into
+FrontSeat's session cookie works unrenamed, so you can even log into
 it). The repo's `config/dev.exs` and `config/test.exs` read `PGHOST`
 (the compose `db` service) and `DEVCONTAINER` (bind `0.0.0.0` instead
 of loopback) for exactly this.
 
 Migrations are not automatic *inside the image*: `/app/bin/server` is the
 default command, and `/app/bin/migrate` (which evals
-`CodeLead.Release.migrate/0`) has to be run separately. The compose stack in
+`FrontSeat.Release.migrate/0`) has to be run separately. The compose stack in
 [`deployment/`](../deployment/) does that with a one-shot `migrate` service
 the app waits on, so a deployed instance migrates itself on every
 `docker compose up`.

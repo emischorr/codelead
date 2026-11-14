@@ -8,22 +8,22 @@ what exists today.
 
 | Route | Module | Purpose |
 |---|---|---|
-| `/` | `CodeLeadWeb.DashboardLive` (`:index`) | org-wide dashboard; the onboarding card when no projects exist |
-| `/projects/:project_id/board` | `CodeLeadWeb.BoardLive` (`:index`) | the Kanban board |
-| `/projects/:project_id/board/new` | `CodeLeadWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
-| `/projects/:project_id/archive` | `CodeLeadWeb.ArchiveLive` (`:index`) | full task history (archived and not, every state); filter/sort, no state-changing actions — see `## ArchiveLive` below |
-| `/projects/:project_id/tasks/:id` | `CodeLeadWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
-| `/preview/launch/:task_id` | `CodeLeadWeb.PreviewLaunchController` | Open-preview target: redirects the new tab onto the active gateway's preview URL (minting the subdomain auth token when that gateway is active) |
-| `/preview/:task_id/*path` | `CodeLeadWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets, path gateway); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing. Subdomain-gateway traffic bypasses the router entirely (host match in `Endpoint.call/2` → `CodeLeadWeb.PreviewHost`) |
-| `/settings` | `CodeLeadWeb.SettingsLive` (`:index`) | overview tiles with live counts |
-| `/settings/users` | `CodeLeadWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
-| `/settings/providers` | `CodeLeadWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
-| `/settings/agents` | `CodeLeadWeb.SettingsLive.Agents` | org- and project-scoped agents; `/new` and `/:id/edit` |
-| `/settings/projects` | `CodeLeadWeb.SettingsLive.Projects` | list; `/new` |
-| `/settings/projects/:id` | `CodeLeadWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, this project's own agents, default reviewers |
-| `/projects/:project_id/tasks/:id/artifact` | `CodeLeadWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
-| `/setup` | `CodeLeadWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
-| `/users/*` | `CodeLeadWeb.UserLive.*` | log in (username/password by default, email magic-link opt-in), magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
+| `/` | `FrontSeatWeb.DashboardLive` (`:index`) | org-wide dashboard; the onboarding card when no projects exist |
+| `/projects/:project_id/board` | `FrontSeatWeb.BoardLive` (`:index`) | the Kanban board |
+| `/projects/:project_id/board/new` | `FrontSeatWeb.BoardLive` (`:new`) | new-task modal (patch-based) |
+| `/projects/:project_id/archive` | `FrontSeatWeb.ArchiveLive` (`:index`) | full task history (archived and not, every state); filter/sort, no state-changing actions — see `## ArchiveLive` below |
+| `/projects/:project_id/tasks/:id` | `FrontSeatWeb.TaskLive` (`:show`) | task page; `?tab=task\|agent\|review\|terminal` (`diff` survives as an alias for `review`) |
+| `/preview/launch/:task_id` | `FrontSeatWeb.PreviewLaunchController` | Open-preview target: redirects the new tab onto the active gateway's preview URL (minting the subdomain auth token when that gateway is active) |
+| `/preview/:task_id/*path` | `FrontSeatWeb.PreviewProxyController` | reverse proxy to the task's preview server (HTTP + websockets, path gateway); own `:preview` pipeline — session auth without `accepts`/CSRF/secure headers, per-task cookie namespacing. Subdomain-gateway traffic bypasses the router entirely (host match in `Endpoint.call/2` → `FrontSeatWeb.PreviewHost`) |
+| `/settings` | `FrontSeatWeb.SettingsLive` (`:index`) | overview tiles with live counts |
+| `/settings/users` | `FrontSeatWeb.SettingsLive.Users` | list; `/new` and `/:id/edit` are patch-based modals |
+| `/settings/providers` | `FrontSeatWeb.SettingsLive.Providers` | list; `/new` and `/:id/edit` |
+| `/settings/agents` | `FrontSeatWeb.SettingsLive.Agents` | org- and project-scoped agents; `/new` and `/:id/edit` |
+| `/settings/projects` | `FrontSeatWeb.SettingsLive.Projects` | list; `/new` |
+| `/settings/projects/:id` | `FrontSeatWeb.SettingsLive.Project` (`:show`) | details, approve defaults, PR template, repositories, env store, this project's own agents, default reviewers |
+| `/projects/:project_id/tasks/:id/artifact` | `FrontSeatWeb.TaskArtifactController` (`:download`) | a folder task's task folder, zipped |
+| `/setup` | `FrontSeatWeb.SetupLive` (`:index`) | first-run wizard, only while `setup_done` is false |
+| `/users/*` | `FrontSeatWeb.UserLive.*` | log in (username/password by default, email magic-link opt-in), magic-link confirmation, account settings (email/password, plus personal preferences: language, timezone, theme) |
 
 The project detail page also carries four patch-based sub-routes:
 `/repositories/new`, `/repositories/:repository_id/edit`, `/env/new`
@@ -34,20 +34,20 @@ pair for its own env store.
 
 The app routes are split across three authenticated `live_session`s —
 general, admin-only, and project-keyed — each behind the setup gate, the
-auth gate, and (for the latter two) `CodeLeadWeb.Authorization`'s
+auth gate, and (for the latter two) `FrontSeatWeb.Authorization`'s
 matching plug + hook pair; see [`setup-and-auth.md`](setup-and-auth.md)
 for the router shape and the two-layer role model. The artifact download
 is a **controller** route, which cannot live inside a `live_session`, so
 it sits in the project-keyed scope — same pipeline, same gates. All of
 them render the same sidebar from the `@nav` map assigned by
-`CodeLeadWeb.NavContext` — see [`navigation.md`](navigation.md).
+`FrontSeatWeb.NavContext` — see [`navigation.md`](navigation.md).
 
 **Authorization is enforced in the contexts and mirrored in the UI.**
 Admin-only settings tiles (Users, Providers, Organization) are hidden
 from members; project-keyed pages need `:view_project`; board and task
 action buttons render only when `Policy.can?/3` allows the action — and
 the context still refuses if someone gets past the hiding
-(`CodeLeadWeb.FlashMessages.transition_error(:unauthorized)` is the
+(`FrontSeatWeb.FlashMessages.transition_error(:unauthorized)` is the
 copy). Reporters see other people's tasks fully read-only, with no
 special chrome.
 
@@ -58,7 +58,7 @@ modal, following `BoardLive`'s new-task modal. The exception is the
 project **detail** page, a full page because it hosts four independent
 sub-surfaces (its own dialogs are patched over it).
 
-`CodeLeadWeb.SettingsLive.Components` holds what the component library
+`FrontSeatWeb.SettingsLive.Components` holds what the component library
 lacks — there is no table and no modal component: `settings_page_header`,
 `settings_tile` (a tile without `navigate` renders as a disabled
 placeholder), `list_row`, `modal`, `delete_button` (inert with a
@@ -66,9 +66,9 @@ placeholder), `list_row`, `modal`, `delete_button` (inert with a
 `UIComponents`; promoting them means also refactoring `BoardLive`'s
 hand-rolled modal, so that is a follow-up.
 
-`CodeLeadWeb.FormOptions` holds the select options and credential label
+`FrontSeatWeb.FormOptions` holds the select options and credential label
 copy that the wizard and the settings pages share, so the two surfaces
-cannot drift. `CodeLeadWeb.FlashMessages.delete_error/1` renders the
+cannot drift. `FrontSeatWeb.FlashMessages.delete_error/1` renders the
 guarded-delete refusals.
 
 **Secret inputs carry `autocomplete="new-password"`**, plus
@@ -166,7 +166,7 @@ self-hosted variable DM Sans (UI) and JetBrains Mono (numbers/code) in
 `priv/static/fonts/`. daisyUI was removed; the scaffold components in
 `core_components.ex` (flash/button/input) are hand-styled on tokens.
 
-Agent prose is markdown, rendered by `CodeLeadWeb.Markdown` (MDEx) and
+Agent prose is markdown, rendered by `FrontSeatWeb.Markdown` (MDEx) and
 styled by a hand-written `.md` block in `app.css` — the typography
 plugin is not used, because `--color-*: initial` removes the palette its
 defaults are built on. Agent output is untrusted, so the wrapper renders
@@ -208,7 +208,7 @@ short viewport squeezes the links rather than the chrome.
 
 ## Component inventory
 
-- `CodeLeadWeb.UIComponents` (imported in `html_helpers`): `badge`,
+- `FrontSeatWeb.UIComponents` (imported in `html_helpers`): `badge`,
   `state_badge`, `agent_pill` (harness dot: claude_code `#D97757`,
   codex run, other accent), `pulse_dot`, `cost_stat` (`cost_cents`,
   `tokens`, `duration_ms`, `cost_mode`), `section_card`,
@@ -220,7 +220,7 @@ short viewport squeezes the links rather than the chrome.
   scroll-snap hour/minute wheel, all resolved in the viewer's own
   timezone by the `.SchedulePicker` hook and converted to UTC
   server-side; the caller owns the `schedule_task` / `close_schedule`
-  events, and `CodeLeadWeb.ScheduleForm` supplies the schemaless
+  events, and `FrontSeatWeb.ScheduleForm` supplies the schemaless
   changeset behind it),
   `fab`, `stat_tile` (icon chip + headline number +
   detail, five tones, optional `navigate` and `meter` slot) and
@@ -229,12 +229,12 @@ short viewport squeezes the links rather than the chrome.
   `stat_tile` is deliberately not `SettingsLive.Components.settings_tile`:
   that one is a navigation affordance with a disabled "Coming soon"
   variant and a pre-stringified stat, not a readout.
-- `CodeLeadWeb.DiffComponents`: `file_list` (jump buttons, active
+- `FrontSeatWeb.DiffComponents`: `file_list` (jump buttons, active
   state), `file_diff` (collapsible header, dual line-number gutters,
-  add/del row tints) over `CodeLead.Git.Diff` parser structs, plus
+  add/del row tints) over `FrontSeat.Git.Diff` parser structs, plus
   `file_dom_id/1` — the shared card id, Base64 rather than a slug so
   `a/b.ex` and `a-b.ex` cannot collide on one scroll target.
-- `CodeLeadWeb.Layouts.app`: sidebar navigation — one collapsible
+- `FrontSeatWeb.Layouts.app`: sidebar navigation — one collapsible
   sidebar on desktop (232px expanded, 64px glyph rail collapsed, toggled
   by `#sidebar-collapse` and remembered in `localStorage["cl:nav"]`),
   overlay drawer on mobile (`Layouts.sidebar_toggle` opens it). Takes
@@ -243,16 +243,16 @@ short viewport squeezes the links rather than the chrome.
   the toggle — `TaskLive` passes `:closed`); no context calls in the
   layout. The `nav` map and the rules the sidebar renders by are
   documented in [`navigation.md`](navigation.md).
-- `CodeLeadWeb.Layouts.auth`: the chromeless shell (wordmark + theme
+- `FrontSeatWeb.Layouts.auth`: the chromeless shell (wordmark + theme
   toggle + centered column, `width` configurable) used by the setup
   wizard and the auth pages.
-- `CodeLeadWeb.Format`: `cents/1`, `tokens/1`, `cost_tokens/2`,
+- `FrontSeatWeb.Format`: `cents/1`, `tokens/1`, `cost_tokens/2`,
   `cost/2`, `duration/1`, `run_stat/4`, `relative/1`, `absolute/1`,
   `iso8601/1`, `time/1`.
   `run_stat/4` is the standard run readout (`$2.07 · 183.5k · 2m 14s`)
   and drops segments with nothing to say rather than printing dashes,
   so a subscription-free run reads `183.5k · 2m 14s`.
-  `CodeLeadWeb.FlashMessages` maps `Tasks.transition_error/0` reasons
+  `FrontSeatWeb.FlashMessages` maps `Tasks.transition_error/0` reasons
   to flash text.
 
 ## DashboardLive
@@ -296,7 +296,7 @@ icon to `hero-hand-raised` — the same hand the sidebar pill and the
 task page's Agent tab use — whenever `Tasks.agent_blocked?/0` is true.
 Its count is unchanged (every `:agent_question`/`:permission_request`
 task, executor- or advisory-sourced); only the icon is gated on
-`CodeLead.Tasks.Attention.blocks_agent?/1`'s stricter rule, so a
+`FrontSeat.Tasks.Attention.blocks_agent?/1`'s stricter rule, so a
 reviewer or the planning survey asking a question bumps the number
 without raising the hand.
 
@@ -349,7 +349,7 @@ shows the same 14-day window as the chart above it
 tokens and run count as its subtitle; there is no longer a separate
 token-count tile.
 
-Panels live in `CodeLeadWeb.DashboardLive.Widgets`. Both charts are the
+Panels live in `FrontSeatWeb.DashboardLive.Widgets`. Both charts are the
 same `bar_chart/1`: pure CSS, no library and no asset. The bar *is* the
 flex item, because a percentage height resolves against the flex line
 and only the container's fixed height makes that definite; `min-h-[2px]`
@@ -455,7 +455,7 @@ Tab from `?tab=`, defaulting by state (planning→task, running→agent,
 review→review, done→task; the legacy `?tab=diff` param maps to
 `:review`). Tab bodies are plain `Phoenix.Component` modules under
 `task_live/` (`TaskTab`, `AgentTab`, `ReviewTab` + `PreviewPane`,
-`TerminalTab`). All actions go through `CodeLead.Runtime`; errors map
+`TerminalTab`). All actions go through `FrontSeat.Runtime`; errors map
 to flashes.
 
 Header actions are chosen by `{state, run_state}` plus a precomputed
@@ -611,7 +611,7 @@ above the bar instead of underneath it.
   re-prefills the reviewer set from the project defaults.
 - **Agent tab** — the executor transcript from `AgentFeed.list_run/2`
   (the current run; "Show earlier runs" switches to `list_all/2`), never
-  from task steps. `CodeLeadWeb.TaskLive.AgentFeedBlocks.fold/2` groups
+  from task steps. `FrontSeatWeb.TaskLive.AgentFeedBlocks.fold/2` groups
   consecutive `:tool_call` rows into one collapsible block keyed by its
   first row's id; `apply_row/2` applies each incoming `{:agent_feed, _,
   row}` and returns just the blocks to re-`stream_insert`. Re-inserting
@@ -726,7 +726,7 @@ above the bar instead of underneath it.
   With a `preview_command` declared on the repository, the strip also
   carries a **Start/Stop preview** button (`#preview-server-start`
   / `#preview-server-stop`) and a status chip (`#preview-run-status`):
-  `CodeLead.Preview` runs the command in the task's execution context
+  `FrontSeat.Preview` runs the command in the task's execution context
   (host shell for local tasks, `docker exec` into the devcontainer for
   container tasks) with the project env plus `PREVIEW_BASE_PATH`, and a
   `Preview.Session` probes the upstream until it *answers a request* —
@@ -750,7 +750,7 @@ above the bar instead of underneath it.
   session whose fingerprint no longer matches the active gateway is
   replaced. Start also refuses (`port_in_use`) when something already
   answers on the declared port with no session owning it — a
-  hand-started server, which CodeLead cannot signal because it only
+  hand-started server, which FrontSeat cannot signal because it only
   records its own. The branded 502 page's auto-refresh picks the tab up
   the moment the server answers.
 
@@ -760,22 +760,22 @@ above the bar instead of underneath it.
   doors, exactly one of which is active per instance: the
   `/preview/:task_id/*` routes (`PreviewProxyController`, `:preview`
   pipeline, path gateway) or a host match on
-  `task-<id>.<PREVIEW_DOMAIN>` in `CodeLeadWeb.Endpoint.call/2`
-  (`CodeLeadWeb.PreviewHost`, subdomain gateway) that diverts the
+  `task-<id>.<PREVIEW_DOMAIN>` in `FrontSeatWeb.Endpoint.call/2`
+  (`FrontSeatWeb.PreviewHost`, subdomain gateway) that diverts the
   request before sockets, `Plug.Static`, and the parsers ever see it.
   What differs per gateway is a `PreviewProxy.Policy`: the mount path,
   and whether cookies and `Location` headers are rewritten.
 
   **Cookie namespacing (path gateway only).** The previewed app shares
-  CodeLead's origin there, so `PreviewProxy.Headers` gives it its own
-  jar: every upstream `Set-Cookie` is renamed to `_clp<task_id>_<name>`
+  FrontSeat's origin there, so `PreviewProxy.Headers` gives it its own
+  jar: every upstream `Set-Cookie` is renamed to `_fsp<task_id>_<name>`
   and re-pathed under `/preview/<task_id>` (`Domain` dropped so it
   stays host-only; `Secure`/`Partitioned`/`SameSite=None` dropped over
   plain http, where a browser would void the whole cookie), and only
   this task's prefixed cookies are forwarded upstream, with the prefix
-  peeled off. So a previewed CodeLead can no longer overwrite
-  `_code_lead_key` and log the operator out of their own instance,
-  sibling previews cannot read each other's jar, and CodeLead's session
+  peeled off. So a previewed FrontSeat can no longer overwrite
+  `_front_seat_key` and log the operator out of their own instance,
+  sibling previews cannot read each other's jar, and FrontSeat's session
   and remember-me cookies never reach an agent's container. Renaming
   also defuses `__Host-`/`__Secure-` names, whose rules are purely
   name-based — they would otherwise be rejected outright once
@@ -784,7 +784,7 @@ above the bar instead of underneath it.
   (Django/Laravel/Angular — see `configuration.md`, *Cookies in the
   preview*); subdomain previews remove the problem, since each task
   owns a real origin and nothing is renamed. `Plugs.RequirePreviewAccess`
-  clears a shadow `_code_lead_key`/remember-me left at the mount by
+  clears a shadow `_front_seat_key`/remember-me left at the mount by
   older builds when it denies, and serves a self-reloading page in that
   one case.
 
@@ -792,7 +792,7 @@ above the bar instead of underneath it.
   so a preview subdomain has no session of its own: the launch redirect
   appends a 60-second task-scoped `Phoenix.Token` (`?_preview_auth=`),
   which `PreviewHost.Auth` verifies, exchanges for the preview host's
-  own session cookie (`_clp_session`), and strips via redirect to `/`.
+  own session cookie (`_fsp_session`), and strips via redirect to `/`.
   A direct visit without it gets a branded 401. Authorization is the
   same coarse rule as the path gateway: any logged-in user may view any
   preview. Under the subdomain gateway the `/preview/:task_id/*` routes
@@ -800,7 +800,7 @@ above the bar instead of underneath it.
   that links to the launch route.
 
   **Diff view** — for repo targets with a worktree: `Git.diff/2` parsed
-  by `CodeLead.Git.Diff` in `start_async`; collapsible reviewer
+  by `FrontSeat.Git.Diff` in `start_async`; collapsible reviewer
   findings (latest cycle) above the diff. Folder targets show the task
   folder listing + `output.md` preview.
 
@@ -853,7 +853,7 @@ above the bar instead of underneath it.
   component knows nothing about targets or task states. xterm.js
   (vendored in `assets/vendor/xterm/`, imported by the colocated
   `.Terminal` hook via esbuild's `@` alias) talks to
-  `CodeLead.Terminal` over the LiveView socket: the hook pushes
+  `FrontSeat.Terminal` over the LiveView socket: the hook pushes
   `terminal_ready` (initial cols/rows) and receives the scrollback in
   the reply, keystrokes go up as base64 `terminal_input`, output comes
   down as `terminal:data` push_events (dropped while the tab is
@@ -870,13 +870,13 @@ above the bar instead of underneath it.
   in the target (host or container image), plain-pipe `sh -i` fallback
   flagged in the status line; container sessions are license-gated and
   self-heal the container (`ensure_for_task/1`). Sessions export
-  `TERM`/`COLUMNS`/`LINES`, `CODELEAD_TTY_FILE`, `CODELEAD_PID_FILE`,
+  `TERM`/`COLUMNS`/`LINES`, `FRONTSEAT_TTY_FILE`, `FRONTSEAT_PID_FILE`,
   the project env, and `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN` (see
   ADR-0008).
 - **Terminal resize** — xterm's `onResize` pushes `terminal_resize`
   (debounced 150 ms, since a window drag fires it continuously) and the
   session applies it to the PTY *device* it recorded in
-  `$CODELEAD_TTY_FILE` at spawn — the spawning side never holds the
+  `$FRONTSEAT_TTY_FILE` at spawn — the spawning side never holds the
   PTY, so `stty` from outside the session is the only way in
   (ADR-0010). Best-effort by design: a plain-pipe session, or a target
   without `stty`, ignores it silently. The resize runs detached from the

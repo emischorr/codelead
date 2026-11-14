@@ -2,7 +2,7 @@ import Config
 
 # Configure your database. PGHOST covers containerized dev (the repo's
 # own .devcontainer runs Postgres as a compose service named `db`).
-config :code_lead, CodeLead.Repo,
+config :front_seat, FrontSeat.Repo,
   username: "postgres",
   password: "postgres",
   hostname: System.get_env("PGHOST", "localhost"),
@@ -17,13 +17,13 @@ config :code_lead, CodeLead.Repo,
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
-config :code_lead, CodeLeadWeb.Endpoint,
+config :front_seat, FrontSeatWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Inside a container (the repo's .devcontainer sets DEVCONTAINER) the
   # server must be reachable beyond loopback — VS Code port forwards and
-  # CodeLead's own preview relay alike.
+  # FrontSeat's own preview relay alike.
   http: [ip: if(System.get_env("DEVCONTAINER"), do: {0, 0, 0, 0}, else: {127, 0, 0, 1})],
-  # When this checkout runs as a CodeLead task, the preview proxy serves it
+  # When this checkout runs as a FrontSeat task, the preview proxy serves it
   # under /preview/<task_id>/ and injects PREVIEW_BASE_PATH — the documented
   # Phoenix recipe (docs/configuration.md, "Preview base path").
   url: [path: System.get_env("PREVIEW_BASE_PATH", "/")],
@@ -32,8 +32,8 @@ config :code_lead, CodeLeadWeb.Endpoint,
   debug_errors: true,
   secret_key_base: "9s4MwdANlQx76kpJ299amvx6m2yFMnuAT5J81JqvUnm4DkLaaWfCL+IUYwgZD8hg",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:code_lead, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:code_lead, ~w(--watch)]}
+    esbuild: {Esbuild, :install_and_run, [:front_seat, ~w(--sourcemap=inline --watch)]},
+    tailwind: {Tailwind, :install_and_run, [:front_seat, ~w(--watch)]}
   ]
 
 # ## SSL Support
@@ -60,7 +60,7 @@ config :code_lead, CodeLeadWeb.Endpoint,
 # different ports.
 
 # Reload browser tabs when matching files change.
-config :code_lead, CodeLeadWeb.Endpoint,
+config :front_seat, FrontSeatWeb.Endpoint,
   live_reload: [
     web_console_logger: true,
     patterns: [
@@ -69,17 +69,17 @@ config :code_lead, CodeLeadWeb.Endpoint,
       # Gettext translations
       ~r"priv/gettext/.*\.po$",
       # Router, Controllers, LiveViews and LiveComponents
-      ~r"lib/code_lead_web/router\.ex$",
-      ~r"lib/code_lead_web/(controllers|live|components)/.*\.(ex|heex)$"
+      ~r"lib/front_seat_web/router\.ex$",
+      ~r"lib/front_seat_web/(controllers|live|components)/.*\.(ex|heex)$"
     ]
   ]
 
 # Enable dev routes for dashboard and mailbox
-config :code_lead, dev_routes: true
+config :front_seat, dev_routes: true
 
 # The Local adapter plus /dev/mailbox is a working transport for development,
 # so the email surfaces are shown here.
-config :code_lead, mail_enabled: true
+config :front_seat, mail_enabled: true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"

@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddSecretToProjectEnvs do
+defmodule FrontSeat.Repo.Migrations.AddSecretToProjectEnvs do
   use Ecto.Migration
 
   def change do

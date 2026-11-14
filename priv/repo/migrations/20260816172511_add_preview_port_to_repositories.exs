@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddPreviewPortToRepositories do
+defmodule FrontSeat.Repo.Migrations.AddPreviewPortToRepositories do
   use Ecto.Migration
 
   def change do

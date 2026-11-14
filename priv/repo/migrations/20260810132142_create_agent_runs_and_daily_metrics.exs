@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateAgentRunsAndDailyMetrics do
+defmodule FrontSeat.Repo.Migrations.CreateAgentRunsAndDailyMetrics do
   use Ecto.Migration
 
   def change do

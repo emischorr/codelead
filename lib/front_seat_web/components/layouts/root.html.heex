@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" data-timezone={user_timezone(assigns)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <%!-- Mount-aware: /live normally, /preview/<id>/live under a FrontSeat
+         path preview. A hardcoded "/live" in app.js would open against the
+         proxy's own LiveView endpoint and reload this page forever. --%>
+    <meta name="live-socket-path" content={FrontSeatWeb.Endpoint.path("/live")} />
+    <.live_title default="FrontSeat" suffix=" · FrontSeat">
+      {assigns[:page_title]}
+    </.live_title>
+    <link rel="icon" href={~p"/favicon.ico"} sizes="48x48" />
+    <link rel="icon" type="image/svg+xml" href={~p"/images/icon.svg"} />
+    <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
+    <link rel="manifest" href={~p"/images/site.webmanifest"} />
+    <meta name="theme-color" content="#7c7ae6" />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+    <script>
+      (() => {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const applyTheme = (mode) => {
+          const resolved = mode === "system" ? (media.matches ? "dark" : "light") : mode;
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.setAttribute("data-theme-mode", mode);
+        };
+        const setTheme = (mode) => {
+          if (mode === "system") {
+            localStorage.removeItem("phx:theme");
+          } else {
+            localStorage.setItem("phx:theme", mode);
+          }
+          applyTheme(mode);
+        };
+        applyTheme(localStorage.getItem("phx:theme") || "system");
+        // Sidebar width preference, applied before first paint so a collapsed
+        // sidebar never flashes open. Always written, so the CSS vocabulary in
+        // app.css stays total. The .NavCollapse hook owns it from here.
+        document.documentElement.setAttribute(
+          "data-nav",
+          localStorage.getItem("cl:nav") === "collapsed" ? "collapsed" : "expanded"
+        );
+        media.addEventListener("change", () => {
+          if (!localStorage.getItem("phx:theme")) applyTheme("system");
+        });
+        window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
+        window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
+      })();
+    </script>
+  </head>
+  <body>
+    {@inner_content}
+  </body>
+</html>

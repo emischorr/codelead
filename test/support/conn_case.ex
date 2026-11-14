@@ -1,4 +1,4 @@
-defmodule CodeLeadWeb.ConnCase do
+defmodule FrontSeatWeb.ConnCase do
   @moduledoc """
   This module defines the test case to be used by
   tests that require setting up a connection.
@@ -11,7 +11,7 @@ defmodule CodeLeadWeb.ConnCase do
   we enable the SQL sandbox, so changes done to the database
   are reverted at the end of every test. If you are using
   PostgreSQL, you can even run database tests asynchronously
-  by setting `use CodeLeadWeb.ConnCase, async: true`, although
+  by setting `use FrontSeatWeb.ConnCase, async: true`, although
   this option is not recommended for other databases.
   """
 
@@ -20,23 +20,23 @@ defmodule CodeLeadWeb.ConnCase do
   using do
     quote do
       # The default endpoint for testing
-      @endpoint CodeLeadWeb.Endpoint
+      @endpoint FrontSeatWeb.Endpoint
 
-      use CodeLeadWeb, :verified_routes
+      use FrontSeatWeb, :verified_routes
 
       # Import conveniences for testing with connections
       import Plug.Conn
       import Phoenix.ConnTest
-      import CodeLeadWeb.ConnCase
+      import FrontSeatWeb.ConnCase
     end
   end
 
   # Web tests run against an instance that has already been through the
-  # first-run wizard, otherwise `CodeLeadWeb.SetupGate` redirects them all to
+  # first-run wizard, otherwise `FrontSeatWeb.SetupGate` redirects them all to
   # /setup. Tag a case `@moduletag :setup_pending` to test the wizard itself.
   setup tags do
-    CodeLead.DataCase.setup_sandbox(tags)
-    unless tags[:setup_pending], do: CodeLead.AccountsFixtures.organization_fixture()
+    FrontSeat.DataCase.setup_sandbox(tags)
+    unless tags[:setup_pending], do: FrontSeat.AccountsFixtures.organization_fixture()
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 
@@ -50,8 +50,8 @@ defmodule CodeLeadWeb.ConnCase do
   `@tag role: :admin`) to log in an admin instead.
   """
   def register_and_log_in_user(%{conn: conn} = context) do
-    user = CodeLead.AccountsFixtures.user_fixture(Map.take(context, [:role]))
-    scope = CodeLead.Accounts.Scope.for_user(user)
+    user = FrontSeat.AccountsFixtures.user_fixture(Map.take(context, [:role]))
+    scope = FrontSeat.Accounts.Scope.for_user(user)
 
     opts =
       context
@@ -69,9 +69,9 @@ defmodule CodeLeadWeb.ConnCase do
   Stores the project and a scope that carries the membership.
   """
   def create_project_as_maintainer(%{user: user}) do
-    project = CodeLead.ProjectsFixtures.project_fixture()
-    CodeLead.AccountsFixtures.membership_fixture(project, user, :maintainer)
-    %{project: project, scope: CodeLead.Accounts.Scope.for_user(user)}
+    project = FrontSeat.ProjectsFixtures.project_fixture()
+    FrontSeat.AccountsFixtures.membership_fixture(project, user, :maintainer)
+    %{project: project, scope: FrontSeat.Accounts.Scope.for_user(user)}
   end
 
   @doc """
@@ -80,7 +80,7 @@ defmodule CodeLeadWeb.ConnCase do
   It returns an updated `conn`.
   """
   def log_in_user(conn, user, opts \\ []) do
-    token = CodeLead.Accounts.generate_user_session_token(user)
+    token = FrontSeat.Accounts.generate_user_session_token(user)
 
     maybe_set_token_authenticated_at(token, opts[:token_authenticated_at])
 
@@ -92,6 +92,6 @@ defmodule CodeLeadWeb.ConnCase do
   defp maybe_set_token_authenticated_at(_token, nil), do: nil
 
   defp maybe_set_token_authenticated_at(token, authenticated_at) do
-    CodeLead.AccountsFixtures.override_token_authenticated_at(token, authenticated_at)
+    FrontSeat.AccountsFixtures.override_token_authenticated_at(token, authenticated_at)
   end
 end

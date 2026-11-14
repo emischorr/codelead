@@ -1,10 +1,10 @@
 # Review cycle (last updated: 2026-08-31, reviewers registered as live runs)
 
-Implemented in `CodeLead.Reviews`. Reviewers are ordinary agents with
+Implemented in `FrontSeat.Reviews`. Reviewers are ordinary agents with
 `:review` in `roles`, matched to the task's work type, selected per
 task (pre-filled from project defaults) — not a separate abstraction.
 
-The run itself is `CodeLead.AdvisoryRun`, shared with the planning
+The run itself is `FrontSeat.AdvisoryRun`, shared with the planning
 survey (see [`planning.md`](planning.md)): the same read-only posture
 pointed at a different subject. `Reviews` owns only the artifact, the
 prompt, the verdict, and the rows.
@@ -22,7 +22,7 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
 - **No reviewers selected** → Review is human-only; attention
   `:review_ready` is raised immediately (cycle 0).
 - Otherwise one run per reviewer is fanned out concurrently (max 4)
-  under `CodeLead.TaskSupervisor`, through the ordinary drivers:
+  under `FrontSeat.TaskSupervisor`, through the ordinary drivers:
   - `llm_api` reviewers get the artifact in-prompt: the branch diff for
     `:repo` targets, the file listing + text file contents for
     `:folder` targets (truncated at 60k chars).
@@ -75,7 +75,7 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
   a minute longer, so the deadline that cancels the driver and still
   records a row is the one that fires). Neither is answerable for an
   advisory run — see the gap noted in [`planning.md`](planning.md).
-- Each reviewer run registers itself in `CodeLead.Runtime.LiveRuns`
+- Each reviewer run registers itself in `FrontSeat.Runtime.LiveRuns`
   under `{task_id, :review, agent_id}` as its first act — the key's
   uniqueness is the one-run-per-reviewer rule, and the registry (not
   any state on the task) is the truth about which reviewers are still
@@ -87,7 +87,7 @@ is Running → Review, driven by the `TaskRunner` on a successful result.
   broadcast still fires). Cycles increment per Review entry; prior
   cycles are retained for audit.
 
-## Human decision (all via `CodeLead.Runtime`)
+## Human decision (all via `FrontSeat.Runtime`)
 
 - `Runtime.request_changes(task, feedback)` — keeps worktree, branch,
   and ACP session; feedback becomes the next prompt; re-queued through

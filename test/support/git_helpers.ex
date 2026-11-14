@@ -1,4 +1,4 @@
-defmodule CodeLead.GitHelpers do
+defmodule FrontSeat.GitHelpers do
   @moduledoc """
   Builds throwaway git repositories (bare origin + seeded default
   branch) for executor/git tests.
@@ -12,7 +12,7 @@ defmodule CodeLead.GitHelpers do
   test workspace root.
   """
   def create_origin! do
-    root = Application.fetch_env!(:code_lead, :workspace_root)
+    root = Application.fetch_env!(:front_seat, :workspace_root)
     id = System.unique_integer([:positive])
     origin_path = Path.join([root, "test_origins", "origin-#{id}.git"])
     seed_path = Path.join([root, "test_origins", "seed-#{id}"])
@@ -36,7 +36,7 @@ defmodule CodeLead.GitHelpers do
   useful to simulate upstream movement.
   """
   def commit_on_origin!(git_url, filename, content) do
-    root = Application.fetch_env!(:code_lead, :workspace_root)
+    root = Application.fetch_env!(:front_seat, :workspace_root)
     tmp = Path.join([root, "test_origins", "tmp-#{System.unique_integer([:positive])}"])
     {_, 0} = git(["clone", git_url, tmp])
     path = Path.join(tmp, filename)
@@ -50,7 +50,7 @@ defmodule CodeLead.GitHelpers do
   end
 
   @doc """
-  Stands in for `CodeLead.Git.check_access/2` (see the `:git_access_check`
+  Stands in for `FrontSeat.Git.check_access/2` (see the `:git_access_check`
   config) so the first-run wizard never reaches a real forge from a test.
   A URL containing `reject` is refused; everything else is reachable.
   """

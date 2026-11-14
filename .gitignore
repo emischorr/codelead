@@ -23,7 +23,7 @@ erl_crash.dump
 /tmp/
 
 # Ignore package tarball (built via "mix hex.build").
-code_lead-*.tar
+front_seat-*.tar
 
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
@@ -47,7 +47,7 @@ npm-debug.log
 # ElixirLS artifacts.
 /.elixir_ls/
 
-# CodeLead workspace root (base clones, worktrees, task folders).
+# FrontSeat workspace root (base clones, worktrees, task folders).
 /workspace/
 
 *.har

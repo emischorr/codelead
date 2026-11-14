@@ -1,4 +1,4 @@
-defmodule CodeLead.LicenseHelpers do
+defmodule FrontSeat.LicenseHelpers do
   @moduledoc """
   Installs an instance-wide license grant for tests.
 
@@ -12,8 +12,8 @@ defmodule CodeLead.LicenseHelpers do
   `grant_community!/0` must be `async: false`.
   """
 
-  alias CodeLead.License
-  alias CodeLead.License.Entitlements
+  alias FrontSeat.License
+  alias FrontSeat.License.Entitlements
 
   @doc """
   Grants every gated feature, as a real `:owner` key would.

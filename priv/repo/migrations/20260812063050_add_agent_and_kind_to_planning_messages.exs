@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddAgentAndKindToPlanningMessages do
+defmodule FrontSeat.Repo.Migrations.AddAgentAndKindToPlanningMessages do
   use Ecto.Migration
 
   def change do

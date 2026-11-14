@@ -1,7 +1,7 @@
 # Snippet for your project's `CLAUDE.md` / `AGENTS.md`
 
 Paste the block below into the agent instruction file at the root of a
-repository you develop with CodeLead — `CLAUDE.md`, `AGENTS.md`, or whatever
+repository you develop with FrontSeat — `CLAUDE.md`, `AGENTS.md`, or whatever
 your harness reads. It is what keeps an agent from breaking the Review tab's
 live preview while it works.
 
@@ -14,14 +14,14 @@ The reasoning behind each rule is in
 ---
 
 ```markdown
-## CodeLead preview contract
+## FrontSeat preview contract
 
-This repository is developed with CodeLead. Tasks run in a git worktree and
+This repository is developed with FrontSeat. Tasks run in a git worktree and
 the Review tab previews this app's dev server, so a few things have to keep
 working. Check them before touching dev config, the server entrypoint, or how
 URLs and assets are emitted.
 
-CodeLead exports three variables into the preview command and into every
+FrontSeat exports three variables into the preview command and into every
 terminal session. All three are absent in ordinary local dev, so each rule
 below must be a no-op when they are unset:
 
@@ -41,7 +41,7 @@ The rest holds whether or not those variables are set:
 - **Never write a root-absolute URL by hand.** The preview proxy never
   rewrites response bodies, so `href="/"`, `src="/assets/…"`, `url("/fonts/…")`
   in CSS, `fetch("/api/…")` and hardcoded websocket paths escape the prefix and
-  hit CodeLead instead of this app. Use the router's own path helper; make CSS
+  hit FrontSeat instead of this app. Use the router's own path helper; make CSS
   urls relative to where the *bundle* lands. A hardcoded socket path is the
   worst case — it makes the preview reload itself in a loop.
 
@@ -56,7 +56,7 @@ The rest holds whether or not those variables are set:
   of a task costs minutes and tokens for nothing — do it only after you change
   the manifest or lockfile.
 
-- **Keep toolchain state out of `$HOME`.** CodeLead overrides `HOME` per task,
+- **Keep toolchain state out of `$HOME`.** FrontSeat overrides `HOME` per task,
   so anything installed under `~` (nvm, rustup, pyenv, cargo, hex) is invisible
   to agents — point those at `/opt/…` in the devcontainer image instead. Build
   output belongs off the shared workspace mount for the same class of reason.
@@ -72,7 +72,7 @@ which stays authoritative.
 
 | Stack | Line to paste |
 |---|---|
-| Vite | it rides in the CodeLead-side preview command as `--base "$PREVIEW_BASE_PATH/"`, so leave this repo's own config alone. |
+| Vite | it rides in the FrontSeat-side preview command as `--base "$PREVIEW_BASE_PATH/"`, so leave this repo's own config alone. |
 | Next.js | set `basePath: process.env.PREVIEW_BASE_PATH ?? ""` in `next.config`. |
 | Phoenix | set `url: [path: System.get_env("PREVIEW_BASE_PATH", "/")]` on the endpoint in `config/dev.exs`. |
 | Rails | set `config.relative_url_root = ENV["PREVIEW_BASE_PATH"]`. |

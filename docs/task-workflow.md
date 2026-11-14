@@ -1,23 +1,23 @@
 # Task workflow (last updated: 2026-08-31, background finalization)
 
-Implementation of architecture spec §4 and §4.1 in `CodeLead.Tasks`
-(lib/code_lead/tasks.ex). `state` is the Kanban column
+Implementation of architecture spec §4 and §4.1 in `FrontSeat.Tasks`
+(lib/front_seat/tasks.ex). `state` is the Kanban column
 (planning/running/review/done/cancelled), `run_state` tracks execution
 inside Running (idle/queued/dispatched/executing/failed). `archived_at`
 is orthogonal to `state`.
 
 ## The definition drives the machine
 
-The column transitions are not hardcoded. `CodeLead.Workflow`
-(lib/code_lead/workflow.ex) holds one declarative `%Workflow{}` — the
+The column transitions are not hardcoded. `FrontSeat.Workflow`
+(lib/front_seat/workflow.ex) holds one declarative `%Workflow{}` — the
 built-in, keyed `"builtin.default"`, named per task by
 `tasks.workflow_key` — and everything else looks moves up in it:
 
 | Module | Role |
 |---|---|
-| `CodeLead.Workflow` | `built_in/0`, `fetch!/1`, `stage/2`, `fetch_transition/3`, `outgoing/2`. Pure data, no dependencies. |
-| `CodeLead.Workflow.Stage` | `key` (the `tasks.state` value), `name`, `position`, `stage_type` (`:plan`/`:execute`/`:review`/`:finalize`/`:custom`, defaulting to the inert `:custom`). |
-| `CodeLead.Workflow.Transition` | `from`, `to`, `trigger` (`:human`/`:auto`), `context_policy` (`:carry`/`:reset`), `worktree_policy` (`:keep`/`:discard`). |
+| `FrontSeat.Workflow` | `built_in/0`, `fetch!/1`, `stage/2`, `fetch_transition/3`, `outgoing/2`. Pure data, no dependencies. |
+| `FrontSeat.Workflow.Stage` | `key` (the `tasks.state` value), `name`, `position`, `stage_type` (`:plan`/`:execute`/`:review`/`:finalize`/`:custom`, defaulting to the inert `:custom`). |
+| `FrontSeat.Workflow.Transition` | `from`, `to`, `trigger` (`:human`/`:auto`), `context_policy` (`:carry`/`:reset`), `worktree_policy` (`:keep`/`:discard`). |
 | `Tasks.apply_transition/3` | Takes the edge as `{from, to}`; derives every field change from the edge's policies and the target stage's type; writes, records the step, broadcasts. |
 | `Runtime.advance/3` | The same edge plus side effects: `prepare` → write → worktree policy → `on_enter`. |
 | `Runtime.StageEffects` | The only stage-type → behaviour map: `prepare/2` (pre-commit, may veto) and `on_enter/3` (post-commit). |
@@ -26,7 +26,7 @@ The named functions below name an edge and supply the audit summary;
 they carry no column logic of their own. An edge the definition does
 not contain is `{:error, :invalid_state}`.
 
-`test/code_lead/workflow_test.exs` is the characterisation guardrail:
+`test/front_seat/workflow_test.exs` is the characterisation guardrail:
 it transcribes spec §4 and fails if the definition drifts from it.
 
 ## Transitions as implemented
@@ -51,7 +51,7 @@ it transcribes spec §4 and fails if the definition drifts from it.
 Every transition writes a `:transition` task step (denormalized actor).
 Since the multi-user change the human functions are scope-first
 (`move_to_running(scope, task)` etc.): they authorize `:operate_task`
-through `CodeLead.Accounts.Policy` before moving anything, and a human
+through `FrontSeat.Accounts.Policy` before moving anything, and a human
 step records who acted — the username lands in `executor_name` (where
 the literal `"human"` used to be) and the id in `task_steps.user_id`
 (nilified if the account is later deleted). System steps keep the
@@ -78,7 +78,7 @@ request changes, send back, and any board move all wait for the worker
 (and entering the `:finalize` stage resets `run_state` to `:idle`, so
 success clears the marker structurally). An interrupted finalization
 (restart mid-push) is reset at boot by
-`CodeLead.Runtime.FinalizeReconciler` to `review/idle` with a
+`FrontSeat.Runtime.FinalizeReconciler` to `review/idle` with a
 `:finalize_interrupted` attention — never retried, because PR creation
 and merge are not idempotent (ADR-0016).
 
@@ -136,7 +136,7 @@ and merge are not idempotent (ADR-0016).
   stage — and `Runtime.delete_task/2`, since delete is not an edge —
   refuse with `{:error, :planning_agent_running}` while the task's
   `{task_id, :plan}` registry slot is held (see
-  [`planning.md`](planning.md)). The guard lives in `CodeLead.Runtime`
+  [`planning.md`](planning.md)). The guard lives in `FrontSeat.Runtime`
   (`check_stage_exit/2` inside `advance/3`), not in `Tasks`: knowing
   about live processes is the runtime layer's job.
 - **`move_to_running/1` no longer requires `run_state: :idle`.** The
@@ -162,7 +162,7 @@ and merge are not idempotent (ADR-0016).
 
 ## Two layers: Tasks (data) vs Runtime (side effects)
 
-`CodeLead.Tasks` holds the pure state machine. `CodeLead.Runtime` is
+`FrontSeat.Tasks` holds the pure state machine. `FrontSeat.Runtime` is
 the human-facing run control that adds the runtime side effects —
 dispatching agents through the scheduler, terminating processes,
 kicking the queue — and is what the future LiveView (and the IEx
@@ -247,7 +247,7 @@ folder modes keep. `branch_name` survives pruning — it still names what
 was pushed or merged. There is a named test guarding this in
 `workflow_test.exs`; see architecture spec §4.1.
 
-The scheduler (`CodeLead.Scheduler.PassThrough`) runs an **ordered list
+The scheduler (`FrontSeat.Scheduler.PassThrough`) runs an **ordered list
 of gates**, short-circuiting on the first hold; held tasks stay
 `run_state: :queued`. The queue is kicked after each run completes.
 
@@ -296,7 +296,7 @@ result, and broadcasts run events over PubSub:
   run_completed, run_failed, run_cancelled. These drive attention and
   UI reloads.
 - `"task:<id>"` → `{:agent_feed, task_id, row}` — a transcript row
-  inserted or updated, broadcast by `CodeLead.AgentFeed`. `tool_call`
+  inserted or updated, broadcast by `FrontSeat.AgentFeed`. `tool_call`
   travels only this way; there is no `:task_event` for it.
 
 **Two per-task logs, deliberately separate.** `task_steps` is the
@@ -341,7 +341,7 @@ files behind surfaces (flash + task step + log) instead of failing the
 human's decision; see `docs/git-workspace.md` for the verified-removal
 mechanics.
 
-Board notifications are owned by `CodeLead.Tasks` itself: every task
+Board notifications are owned by `FrontSeat.Tasks` itself: every task
 write (transitions, `update_task`, archive/unarchive, attention
 changes, `delete_task`) broadcasts `{:board_changed, project_id,
 task_id}` on `"project:<id>"`, so human and system changes alike sync
@@ -374,13 +374,13 @@ oldest still-pending escalation rather than clearing it outright.
 ## Console usage (IEx)
 
 ```elixir
-alias CodeLead.{Tasks, Runtime, Planning}
+alias FrontSeat.{Tasks, Runtime, Planning}
 
 {:ok, task} = Tasks.create_task(project_id, %{title: "Add pricing page", work_type: :code})
 {:ok, task} = Tasks.set_executor(task, agent_id)
 :ok         = Tasks.set_reviewers(task, [reviewer_id])
 
-Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
+Phoenix.PubSub.subscribe(FrontSeat.PubSub, "task:#{task.id}")
 {:ok, task} = Runtime.start_task(task)      # queued → dispatched → executing
 flush()                                      # watch the live event stream
 

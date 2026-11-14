@@ -1,11 +1,11 @@
-# CodeLead
+# FrontSeat
 
 <p align="center">
   <a href="LICENSE.txt"><img alt="License: ELv2" src="https://img.shields.io/badge/license-ELv2-blue"></a>
-  <a href="https://github.com/emischorr/codelead/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/emischorr/codelead?sort=semver&label=version"></a>
-  <a href="https://github.com/emischorr/codelead/pkgs/container/codelead"><img alt="Docker image" src="https://img.shields.io/badge/ghcr.io-emischorr%2Fcodelead-2496ED?logo=docker&logoColor=white"></a>
-  <a href="https://github.com/emischorr/codelead/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/emischorr/codelead/ci.yml?branch=main&label=CI"></a>
-  <a href="https://github.com/emischorr/codelead/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/emischorr/codelead"></a>
+  <a href="https://github.com/emischorr/frontseat/tags"><img alt="Latest version" src="https://img.shields.io/github/v/tag/emischorr/frontseat?sort=semver&label=version"></a>
+  <a href="https://github.com/emischorr/frontseat/pkgs/container/frontseat"><img alt="Docker image" src="https://img.shields.io/badge/ghcr.io-emischorr%2Ffrontseat-2496ED?logo=docker&logoColor=white"></a>
+  <a href="https://github.com/emischorr/frontseat/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/emischorr/frontseat/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/emischorr/frontseat/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/emischorr/frontseat"></a>
 </p>
 
 **Self-hosted orchestration for AI coding agents. Built for engineers and product builders who stay accountable for what they ship.**
@@ -16,7 +16,7 @@
 
 Most agent tools trade control for speed: the agent runs, you skim, you merge. That's fine for experiments. It doesn't hold up when your name is on the release.
 
-CodeLead takes the other side of that trade. Agents (Claude Code, Codex) do the work. **Every handoff is a human decision**: spec approved before work starts, isolated branch per task, independent AI review before you look, your explicit approval before anything lands. Nothing happens that you can't see, trace, or stop.
+FrontSeat takes the other side of that trade. Agents (Claude Code, Codex) do the work. **Every handoff is a human decision**: spec approved before work starts, isolated branch per task, independent AI review before you look, your explicit approval before anything lands. Nothing happens that you can't see, trace, or stop.
 
 This is not a vibe-coding tool. It's the software engineering practices the industry built over the last decades: specs, branches, code review, budgets, an audit trail. Applied at the boundary between you and your agents.
 
@@ -46,11 +46,11 @@ No "Ready" column, no auto-start, no auto-merge. In agent-driven work you are th
 
 ## Quickstart
 
-CodeLead runs as a small Docker Compose stack. The files are in [`deployment/`](deployment/). You need a Linux (or Mac) host with Docker and the Compose plugin.
+FrontSeat runs as a small Docker Compose stack. The files are in [`deployment/`](deployment/). You need a Linux (or Mac) host with Docker and the Compose plugin.
 
 ```bash
-git clone https://github.com/emischorr/codelead.git
-cd codelead/deployment
+git clone https://github.com/emischorr/frontseat.git
+cd frontseat/deployment
 cp .env.example .env        # fill in POSTGRES_PW, APP_DB_PW, SECRET_KEY_BASE, ENCRYPTION_KEY; check DATA_ROOT
 docker compose up -d
 ```
@@ -63,13 +63,13 @@ Open `http://<host>:4000/setup`. The first-run wizard creates the admin user, co
 
 Before other people use it, set `PHX_HOST` in `docker-compose.yml` to the address they will type. The app serves plain HTTP, so put a TLS-terminating reverse proxy in front of it. Also add `restart: unless-stopped`. To upgrade, run `docker compose pull && docker compose up -d`. Migrations apply automatically. [`docs/deployment.md`](docs/deployment.md) covers URLs, proxy configs, container execution (the docker socket), backups and what to know before exposing an instance.
 
-Prebuilt images: `ghcr.io/emischorr/codelead` (`linux/amd64`, `linux/arm64`).
+Prebuilt images: `ghcr.io/emischorr/frontseat` (`linux/amd64`, `linux/arm64`).
 
-<sub>Working on CodeLead itself? The root `docker-compose.yml` only starts the dev database. To run a dev server: `docker compose up -d && mix setup && mix phx.server`.</sub>
+<sub>Working on FrontSeat itself? The root `docker-compose.yml` only starts the dev database. To run a dev server: `docker compose up -d && mix setup && mix phx.server`.</sub>
 
 ## How it compares
 
-| | CodeLead | [Kandev](https://github.com/kdlbs/kandev) | [Paperclip](https://github.com/paperclipai/paperclip) | [Symphony](https://github.com/openai/symphony) |
+| | FrontSeat | [Kandev](https://github.com/kdlbs/kandev) | [Paperclip](https://github.com/paperclipai/paperclip) | [Symphony](https://github.com/openai/symphony) |
 |---|---|---|---|---|
 | Human gate at every transition | ✅ mandatory | configurable review gates | configurable approval stages | — (optional handoff state) |
 | Structured planning findings | ✅ | — | plan approvals | — |
@@ -82,7 +82,7 @@ Prebuilt images: `ghcr.io/emischorr/codelead` (`linux/amd64`, `linux/arm64`).
 
 <sub>As of November 2026, from each project's own README or spec.</sub>
 
-Kandev is the closest in shape and a good tool: worktrees, ACP agents, a web board, no telemetry. The difference is emphasis. Kandev is a flexible workbench where review gates are something you configure. In CodeLead the gates *are* the model and planning findings, parallel reviewers and enforced budgets come built in.
+Kandev is the closest in shape and a good tool: worktrees, ACP agents, a web board, no telemetry. The difference is emphasis. Kandev is a flexible workbench where review gates are something you configure. In FrontSeat the gates *are* the model and planning findings, parallel reviewers and enforced budgets come built in.
 
 ## Stack
 
@@ -98,7 +98,7 @@ Flexible workflows, scheduled dispatch into subscription windows, ops tasks via 
 
 ## Licence
 
-[Elastic License 2.0](LICENSE). Free to use, modify and self-host, including inside your company. The only restriction is offering CodeLead itself as a hosted service to others.
+[Elastic License 2.0](LICENSE). Free to use, modify and self-host, including inside your company. The only restriction is offering FrontSeat itself as a hosted service to others.
 
 One feature, container execution (running tasks inside the repository's own devcontainer), is unlocked with an offline licence key. No phone-home, no account. Everything else runs unrestricted without a key. Commercial licensing and support for teams: [enrico@mischorr.com](mailto:enrico@mischorr.com).
 

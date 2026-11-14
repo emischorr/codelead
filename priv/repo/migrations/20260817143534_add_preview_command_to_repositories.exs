@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddPreviewCommandToRepositories do
+defmodule FrontSeat.Repo.Migrations.AddPreviewCommandToRepositories do
   use Ecto.Migration
 
   def change do

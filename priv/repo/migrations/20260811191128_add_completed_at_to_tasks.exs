@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddCompletedAtToTasks do
+defmodule FrontSeat.Repo.Migrations.AddCompletedAtToTasks do
   use Ecto.Migration
 
   def change do

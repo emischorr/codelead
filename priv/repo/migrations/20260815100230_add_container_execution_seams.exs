@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddContainerExecutionSeams do
+defmodule FrontSeat.Repo.Migrations.AddContainerExecutionSeams do
   use Ecto.Migration
 
   # Dormant seams for the container executor (ADR-0003). Nothing reads

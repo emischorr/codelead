@@ -13,7 +13,7 @@ services:
       # config/dev.exs + config/test.exs read PGHOST for the Repo host.
       PGHOST: db
       # config/dev.exs binds 0.0.0.0 instead of loopback when set — port
-      # forwards and CodeLead's preview relay both need that.
+      # forwards and FrontSeat's preview relay both need that.
       DEVCONTAINER: "true"
     depends_on:
       db:

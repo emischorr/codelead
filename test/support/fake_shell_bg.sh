@@ -3,7 +3,7 @@
 # records its pid — the process a stopper that signals only the shell
 # would leave behind.
 sleep 300 &
-echo $! > "$CODELEAD_MARKER_FILE"
+echo $! > "$FRONTSEAT_MARKER_FILE"
 
 echo "FAKE SHELL READY"
 

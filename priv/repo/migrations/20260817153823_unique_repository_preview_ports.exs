@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.UniqueRepositoryPreviewPorts do
+defmodule FrontSeat.Repo.Migrations.UniqueRepositoryPreviewPorts do
   use Ecto.Migration
 
   # Preview ports become unique across the instance: local-execution

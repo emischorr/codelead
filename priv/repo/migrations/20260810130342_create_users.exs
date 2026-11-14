@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateUsers do
+defmodule FrontSeat.Repo.Migrations.CreateUsers do
   use Ecto.Migration
 
   def change do

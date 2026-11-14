@@ -1,6 +1,6 @@
 # Matches .tool-versions and the prod Dockerfile's pins (Elixir 1.20.3 /
 # Erlang 28.5.0.5). Debian rather than prod's Alpine: glibc, apt, and
-# script(1) for CodeLead's PTY terminal come for free in a dev image.
+# script(1) for FrontSeat's PTY terminal come for free in a dev image.
 FROM hexpm/elixir:1.20.3-erlang-28.5.0.5-debian-trixie-20260803
 
 # git: deps (heroicons is a git dep) and the product's own workflow;
@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root, uid 1000: the devcontainer CLI remaps it to the workspace
-# owner on Linux (updateRemoteUserUID), and CodeLead execs run as it
+# owner on Linux (updateRemoteUserUID), and FrontSeat execs run as it
 # via remoteUser.
 RUN useradd -m -u 1000 -s /bin/bash dev
 
-# Hex/rebar outside $HOME: CodeLead execs override HOME per task (the
+# Hex/rebar outside $HOME: FrontSeat execs override HOME per task (the
 # agent home), so the toolchain must not live there.
 #
 # MIX_BUILD_ROOT and MIX_DEPS_PATH off the workspace mount: a host

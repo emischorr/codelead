@@ -7,7 +7,7 @@ will call. Prerequisites: `docker compose up -d`, `mix ecto.reset`
 local `demo-site` git origin), then `iex -S mix`.
 
 ```elixir
-alias CodeLead.{Accounts, Agents, Costs, Planning, Projects, Reviews, Runtime, Tasks}
+alias FrontSeat.{Accounts, Agents, Costs, Planning, Projects, Reviews, Runtime, Tasks}
 
 project = Projects.list_projects() |> hd()
 [repo] = Projects.list_repositories(project.id)
@@ -28,7 +28,7 @@ Projects.put_env(project.id, "API_KEY", "s3cret")
 
 # Optional AI planning chat (uses an llm_api agent, read-only repo context):
 [judy, auditor, _copy] = for n <- ["Judy (Frontend Coder)", "Security Auditor", "Copywriter"],
-                             do: CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: n)
+                             do: FrontSeat.Repo.get_by!(FrontSeat.Agents.Agent, name: n)
 Planning.chat(task.id, auditor.id)      # type into the REPL; `exit` to leave
 {:ok, task} = Tasks.update_task(task, %{spec: "…crystallized acceptance criteria…"})
 
@@ -50,8 +50,8 @@ Planning.chat(task.id, auditor.id)      # type into the REPL; `exit` to leave
 ## 2. Run it
 
 ```elixir
-Phoenix.PubSub.subscribe(CodeLead.PubSub, "task:#{task.id}")
-Phoenix.PubSub.subscribe(CodeLead.PubSub, "project:#{project.id}")
+Phoenix.PubSub.subscribe(FrontSeat.PubSub, "task:#{task.id}")
+Phoenix.PubSub.subscribe(FrontSeat.PubSub, "project:#{project.id}")
 
 {:ok, task} = Runtime.start_task(task)   # queued → dispatched → executing
 flush()                                  # live event stream
@@ -80,7 +80,7 @@ Reviewers ran automatically on Review entry (advisory only):
 ```elixir
 task = Tasks.get_task!(task.id)          # state: :review, attention: :review_ready
 Reviews.list_reviews(task.id)            # verdicts + findings per reviewer/cycle
-CodeLead.Git.diff(task.worktree_path, repo.default_branch) |> elem(1) |> IO.puts()
+FrontSeat.Git.diff(task.worktree_path, repo.default_branch) |> elem(1) |> IO.puts()
 
 # Decide:
 {:ok, task} = Runtime.request_changes(task, "Add tests for the toggle")  # same branch/session

@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.BackfillMembershipsAndTaskCreators do
+defmodule FrontSeat.Repo.Migrations.BackfillMembershipsAndTaskCreators do
   use Ecto.Migration
 
   # Existing instances have a handful of fully trusted users: every user

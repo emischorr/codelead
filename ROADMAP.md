@@ -7,8 +7,8 @@ them up with the reasoning intact instead of rediscovering it.
 Two neighbours own their own lists; nothing here should duplicate them:
 
 - **Product features** for the MVP target state live in
-  `codelead-product-spec.md` §11 ("Designed-for-now, built later" and
-  "Out of scope on purpose") and `codelead-architecture-spec.md`. Those
+  `frontseat-product-spec.md` §11 ("Designed-for-now, built later" and
+  "Out of scope on purpose") and `frontseat-architecture-spec.md`. Those
   are commitments; this file is not.
 - **Decisions already taken** live in `docs/adr/`. An entry here that
   gets built ends up as an ADR or a design note, not as an edit to the
@@ -31,7 +31,7 @@ toolbar channel became moot when the iframe went away. What is left:
   Heroku-style review apps): the repository declares a URL template
   (`https://task-{id}.preview.example.com`,
   `https://{branch}--app.netlify.app`) or a webhook that returns a URL
-  after the agent pushes the branch; CodeLead's contribution is URL
+  after the agent pushes the branch; FrontSeat's contribution is URL
   construction plus a readiness poll — no proxying at all. Honest
   limits: every iteration pays the pipeline's build-and-deploy latency,
   and the repo must be branch-deployable. It is also the correct home
@@ -110,14 +110,14 @@ and ADR-0009 instead.)
   aimed at letting Django/Laravel/Angular JS find `csrftoken` /
   `XSRF-TOKEN` by name inside a preview. *Collision-only renaming*:
   path-scope every cookie to the mount as today, but rename only what
-  CodeLead's own pipeline reads on a preview request (`_code_lead_key`,
-  `_code_lead_web_user_remember_me`, `request_logger`) plus `__Host-` /
+  FrontSeat's own pipeline reads on a preview request (`_front_seat_key`,
+  `_front_seat_web_user_remember_me`, `request_logger`) plus `__Host-` /
   `__Secure-`, which browsers reject outright once re-pathed. It works —
   RFC 6265 path-matching already isolates `/preview/43` cookies from
   `/preview/42` requests, so renaming is only needed against host
   cookies at `Path=/` — but it trades a provable invariant ("nothing
   un-namespaced reaches the origin") for a denylist that must be kept in
-  step with every cookie CodeLead ever reads. *A `document.cookie` shim*
+  step with every cookie FrontSeat ever reads. *A `document.cookie` shim*
   injected into HTML responses is stronger still and invisible to the
   previewed app, but it breaks the no-body-rewriting decision and has to
   survive gzip, streaming, and the previewed app's own CSP. Both were

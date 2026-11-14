@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateAgentEvents do
+defmodule FrontSeat.Repo.Migrations.CreateAgentEvents do
   use Ecto.Migration
 
   def change do

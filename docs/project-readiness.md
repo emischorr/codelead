@@ -1,6 +1,6 @@
 # Project readiness (last updated: 2026-08-27)
 
-What a repository has to do to be pleasant to work on **with** CodeLead. This
+What a repository has to do to be pleasant to work on **with** FrontSeat. This
 is the project owner's half; the operator's half — DNS, TLS, the reverse
 proxy, the instance's own environment — is in
 [`deployment.md`](deployment.md) and [`configuration.md`](configuration.md),
@@ -16,7 +16,7 @@ Drop-in templates for both are in
 for the project's `CLAUDE.md` / `AGENTS.md`, and a Claude Skill that applies
 the whole checklist in one pass.
 
-## What CodeLead hands your project
+## What FrontSeat hands your project
 
 Exactly three environment variables, injected into the preview command **and**
 into every Terminal session — nothing else, and nothing at all when the
@@ -30,7 +30,7 @@ repository declares no preview port:
 
 The port is **declared, never detected**: a human sets it on the repository
 (Settings → Projects → repository), it must be unique across the instance, and
-it cannot be CodeLead's own port. That is also the port a relay forwards for
+it cannot be FrontSeat's own port. That is also the port a relay forwards for
 container tasks, so a server listening anywhere else resolves to nothing.
 
 Operator-side variables (`PREVIEW_DOMAIN`, `PREVIEW_PUBLISH_IP`, …) are
@@ -44,7 +44,7 @@ local development.
 
 **Bind `$PREVIEW_PORT`, with the project's usual port as the fallback.**
 Hardcoding a port is the single most common reason a preview never comes up.
-When it fails, CodeLead's diagnostic page says so in as many words: *the
+When it fails, FrontSeat's diagnostic page says so in as many words: *the
 command names neither `$PREVIEW_PORT` nor `<port>`, so the server is probably
 listening on its framework's default port*.
 
@@ -64,12 +64,12 @@ recipes are in [`configuration.md`](configuration.md#preview-base-path).
 
 **Never write a root-absolute URL by hand.** Honoring the base path configures
 the *router*; anything outside the router still emits `/…` and lands on
-CodeLead instead of your app. Three escapes account for nearly all of it —
+FrontSeat instead of your app. Three escapes account for nearly all of it —
 hardcoded websocket paths, `url("/…")` in CSS, and literal `href="/"` — and
 [*When the preview tab flickers*](configuration.md#when-the-preview-tab-flickers)
 covers each with the fix. Read it before debugging a preview that reloads
 itself: a hardcoded socket path does not merely lose its connection, it puts
-the page into a permanent reload loop, and the diagnostic CodeLead serves in
+the page into a permanent reload loop, and the diagnostic FrontSeat serves in
 its place is a diagnostic, not a fix.
 
 ## Making the devcontainer work for agents too
@@ -98,7 +98,7 @@ config fails the run visibly.
 
 **Strongly recommended — the three at the top are the ones that actually bite.**
 
-- **Keep toolchain and package-manager state out of `$HOME`.** CodeLead
+- **Keep toolchain and package-manager state out of `$HOME`.** FrontSeat
   overrides `HOME` per task (each task gets its own agent home on the
   workspace), so anything a feature or image installed under `~` — nvm,
   rustup, pyenv, cargo, hex — is simply not there for an agent. Point them at
@@ -144,7 +144,7 @@ config fails the run visibly.
 - Install `script` (util-linux) for a real PTY in the Terminal tab; without it
   the terminal degrades to a plain pipe.
 - Cap resources with `runArgs` / `hostRequirements` if you need to. There is
-  no CodeLead-side knob.
+  no FrontSeat-side knob.
 
 The first three are the ones that get skipped, and a devcontainer written for
 VS Code has no reason to have them — so check rather than assume. For a Phoenix
@@ -165,15 +165,15 @@ container is the check that proves it reaches an exec.
 Substitute the equivalents for other stacks — `GEM_HOME`/`BUNDLE_PATH` +
 `Gemfile.lock`, `CARGO_HOME`/`RUSTUP_HOME`/`CARGO_TARGET_DIR` + `Cargo.lock`,
 `NPM_CONFIG_PREFIX`/`PNPM_HOME` + the npm lockfile. The
-[`codelead-ready` skill](../templates/project-readiness/skills/codelead-ready)
+[`frontseat-ready` skill](../templates/project-readiness/skills/frontseat-ready)
 runs this audit for you and fixes what it finds.
 
-**Ignored — do not configure these for CodeLead's sake.** This is the list
+**Ignored — do not configure these for FrontSeat's sake.** This is the list
 that saves the most time:
 
 | Key | Why it does nothing here |
 |---|---|
-| `forwardPorts`, `appPort`, `portsAttributes` | Never read. Preview reachability is handled by a relay sidecar on CodeLead's side. |
+| `forwardPorts`, `appPort`, `portsAttributes` | Never read. Preview reachability is handled by a relay sidecar on FrontSeat's side. |
 | `workspaceFolder` | Honored by the CLI for its own mount and lifecycle hooks, but execs run at the host-coincident worktree path instead. Never "fix" paths to match it. |
 | `overrideCommand` / an idle entrypoint | The CLI owns keepalive. |
 | node, or anything harness-related | The harness ships its own staged runtime on the workspace. |
@@ -188,7 +188,7 @@ agent home, or somewhere you are content to lose on the next teardown.
 
 ## What no project change can fix
 
-Under the default path gateway the preview shares CodeLead's origin, so cookie
+Under the default path gateway the preview shares FrontSeat's origin, so cookie
 names are namespaced per task. Frameworks using **double-submit CSRF** —
 Django, Laravel, Angular — read the cookie by name in client JS, find the
 namespaced one, and send no header, so **AJAX writes get 403**. Server-rendered
@@ -199,7 +199,7 @@ There is no repo-side workaround. The fix is the operator enabling
 which gives each task a real origin and makes this section moot along with the
 whole base-path contract.
 
-Also reserved: the cookie name **`_clp_session`**, used by the subdomain
+Also reserved: the cookie name **`_fsp_session`**, used by the subdomain
 gateway's auth handshake. A previewed app must not use it.
 
 ## The worked example
@@ -208,7 +208,7 @@ This repository is its own. `config/dev.exs` reads `PREVIEW_BASE_PATH` into
 `url: [path: …]` and flips the bind to `0.0.0.0` when the devcontainer sets
 `DEVCONTAINER`; `.devcontainer/` carries the compose services, the `remoteUser`,
 the out-of-`$HOME` toolchain env, the lockfile-keyed dep prewarm, and hooks
-that only reconcile the delta. Point a CodeLead instance at this repo
+that only reconcile the delta. Point a FrontSeat instance at this repo
 with Container execution enabled and it dogfoods the whole contract —
 [*Container execution in dev*](configuration.md#container-execution-in-dev)
 walks through it.

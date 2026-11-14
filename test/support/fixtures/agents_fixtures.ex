@@ -1,9 +1,9 @@
-defmodule CodeLead.AgentsFixtures do
+defmodule FrontSeat.AgentsFixtures do
   @moduledoc """
   Test fixtures for the Agents context.
   """
 
-  alias CodeLead.Agents
+  alias FrontSeat.Agents
 
   def provider_fixture(attrs \\ %{}) do
     {:ok, provider} =

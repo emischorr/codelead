@@ -6,7 +6,7 @@ docker/
 docs/
 node_modules/
 
-# Local CodeLead-managed state: real clones, worktrees and task folders.
+# Local FrontSeat-managed state: real clones, worktrees and task folders.
 workspace/
 tmp/
 

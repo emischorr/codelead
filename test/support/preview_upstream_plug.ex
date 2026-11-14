@@ -1,4 +1,4 @@
-defmodule CodeLead.PreviewUpstreamPlug do
+defmodule FrontSeat.PreviewUpstreamPlug do
   @moduledoc """
   In-test upstream for the preview proxy: a tiny plug served by a real
   Bandit listener on an ephemeral port, echoing back whatever the proxy
@@ -59,11 +59,11 @@ defmodule CodeLead.PreviewUpstreamPlug do
     |> send_resp(200, "cookies")
   end
 
-  # The reported bug: an upstream CodeLead setting the host's own
+  # The reported bug: an upstream FrontSeat setting the host's own
   # session cookie name on the shared origin.
   def call(%Plug.Conn{path_info: ["clobber"]} = conn, _opts) do
     conn
-    |> put_resp_cookie("_code_lead_key", "junk", path: "/")
+    |> put_resp_cookie("_front_seat_key", "junk", path: "/")
     |> send_resp(200, "clobber")
   end
 

@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.SimplifyRepositoryEnvToDevcontainer do
+defmodule FrontSeat.Repo.Migrations.SimplifyRepositoryEnvToDevcontainer do
   use Ecto.Migration
 
   # Devcontainer becomes the one container execution path (ADR-0009):

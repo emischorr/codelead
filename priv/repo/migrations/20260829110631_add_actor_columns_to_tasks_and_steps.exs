@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddActorColumnsToTasksAndSteps do
+defmodule FrontSeat.Repo.Migrations.AddActorColumnsToTasksAndSteps do
   use Ecto.Migration
 
   # Who did what: tasks remember their creator (reporter ownership checks),

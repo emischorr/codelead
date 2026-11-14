@@ -7,63 +7,63 @@
 # General application configuration
 import Config
 
-config :code_lead, :scopes,
+config :front_seat, :scopes,
   user: [
     default: true,
-    module: CodeLead.Accounts.Scope,
+    module: FrontSeat.Accounts.Scope,
     assign_key: :current_scope,
     access_path: [:user, :id],
     schema_key: :user_id,
     schema_type: :id,
     schema_table: :users,
-    test_data_fixture: CodeLead.AccountsFixtures,
+    test_data_fixture: FrontSeat.AccountsFixtures,
     test_setup_helper: :register_and_log_in_user
   ]
 
-config :code_lead,
-  ecto_repos: [CodeLead.Repo],
+config :front_seat,
+  ecto_repos: [FrontSeat.Repo],
   generators: [timestamp_type: :utc_datetime],
   # How the first-run wizard checks a forge token against the remote;
   # stubbed in test so the suite stays off the network.
-  git_access_check: {CodeLead.Git, :check_access}
+  git_access_check: {FrontSeat.Git, :check_access}
 
 # Configure the endpoint
-config :code_lead, CodeLeadWeb.Endpoint,
+config :front_seat, FrontSeatWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: CodeLeadWeb.ErrorHTML, json: CodeLeadWeb.ErrorJSON],
+    formats: [html: FrontSeatWeb.ErrorHTML, json: FrontSeatWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: CodeLead.PubSub,
+  pubsub_server: FrontSeat.PubSub,
   live_view: [signing_salt: "7RIZkNdC"]
 
 # Background jobs. The cron plugin gains entries as workers are added
 # (nightly cost rollups live in the :rollups queue).
-config :code_lead, Oban,
+config :front_seat, Oban,
   engine: Oban.Engines.Basic,
-  repo: CodeLead.Repo,
+  repo: FrontSeat.Repo,
   queues: [rollups: 1, dispatch: 5],
   plugins: [
-    {Oban.Plugins.Cron, crontab: [{"0 2 * * *", CodeLead.Costs.RollupWorker}]}
+    {Oban.Plugins.Cron, crontab: [{"0 2 * * *", FrontSeat.Costs.RollupWorker}]}
   ]
 
 # Launch commands for ACP harnesses, resolved against the PATH of the
-# process running CodeLead (not the execution context's). Overridable
+# process running FrontSeat (not the execution context's). Overridable
 # per environment. The Docker image bundles `claude-agent-acp`; `codex`
 # is bring-your-own — see docs/configuration.md.
-config :code_lead, :harnesses, %{
+config :front_seat, :harnesses, %{
   claude_code: ["claude-agent-acp"],
   codex: ["codex", "acp"]
 }
 
 # Docker CLI argv prefix for the container executor. Tests swap it for a
 # fake, mirroring the :harnesses pattern above.
-config :code_lead, :docker_cli, ["docker"]
+config :front_seat, :docker_cli, ["docker"]
 
 # Best-effort pricing (cents per million tokens) for cost_cents on
 # agent_runs. Token counts stay exact; unknown models cost 0.
-config :code_lead, :model_prices, %{
+config :front_seat, :model_prices, %{
   "claude-sonnet-5" => %{input_cents_per_mtok: 300, output_cents_per_mtok: 1500},
   "claude-opus-5" => %{input_cents_per_mtok: 1500, output_cents_per_mtok: 7500},
   "claude-haiku-4-5-20251001" => %{input_cents_per_mtok: 100, output_cents_per_mtok: 500}
@@ -76,18 +76,18 @@ config :code_lead, :model_prices, %{
 #
 # In production a real adapter is configured from SMTP_* in
 # `config/runtime.exs`; without those vars the instance has no transport.
-config :code_lead, CodeLead.Mailer, adapter: Swoosh.Adapters.Local
+config :front_seat, FrontSeat.Mailer, adapter: Swoosh.Adapters.Local
 
 # Email is opt-in. Off means every email surface (magic-link login, invites)
-# is hidden rather than silently failing — see `CodeLead.Mailer`. dev and test
+# is hidden rather than silently failing — see `FrontSeat.Mailer`. dev and test
 # turn it on; prod only does so when SMTP_HOST is set.
-config :code_lead, mail_enabled: false
-config :code_lead, mail_from: {"FrontSeat", "codelead@localhost"}
+config :front_seat, mail_enabled: false
+config :front_seat, mail_from: {"FrontSeat", "frontseat@localhost"}
 
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
-  code_lead: [
+  front_seat: [
     args:
       ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
@@ -99,7 +99,7 @@ config :esbuild,
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "4.1.12",
-  code_lead: [
+  front_seat: [
     args: ~w(
       --input=assets/css/app.css
       --output=priv/static/assets/css/app.css

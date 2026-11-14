@@ -1,4 +1,4 @@
-defmodule CodeLead.OsProcessHelpers do
+defmodule FrontSeat.OsProcessHelpers do
   @moduledoc """
   Assertions about OS processes the BEAM spawned. Teardown correctness
   is invisible to `assert_receive` — a leaked child sends nothing — so

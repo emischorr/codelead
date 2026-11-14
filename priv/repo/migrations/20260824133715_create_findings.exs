@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateFindings do
+defmodule FrontSeat.Repo.Migrations.CreateFindings do
   use Ecto.Migration
 
   # One row per itemized survey (later: review) finding. Agent-side

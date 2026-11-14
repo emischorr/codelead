@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateTaskStateTransitions do
+defmodule FrontSeat.Repo.Migrations.CreateTaskStateTransitions do
   use Ecto.Migration
 
   def change do

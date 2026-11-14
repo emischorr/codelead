@@ -3,9 +3,9 @@
 # - docker buildx use multiarch
 # - docker login ghcr.io
 # build & push it:
-# docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/codelead:0.1.0 -t ghcr.io/emischorr/codelead:latest --push .
+# docker buildx build --platform=linux/amd64,linux/arm64 --no-cache -t ghcr.io/emischorr/frontseat:0.1.0 -t ghcr.io/emischorr/frontseat:latest --push .
 
-ARG RELEASE_NAME=code_lead
+ARG RELEASE_NAME=front_seat
 
 ARG ELIXIR_VERSION="1.20.3"
 ARG ERLANG_VERSION="28.5.0.5"
@@ -188,7 +188,7 @@ ENV CONTAINER_USER=1000:1000
 # anything installed outside the profile's fixed list — the harness here, and
 # any toolchain an operator layers on in /opt or $HOME — is invisible to every
 # command the agent runs.
-RUN printf 'export PATH="/opt/harness/bin:/opt/devcontainer/bin:$PATH"\n' > /etc/profile.d/codelead-path.sh
+RUN printf 'export PATH="/opt/harness/bin:/opt/devcontainer/bin:$PATH"\n' > /etc/profile.d/frontseat-path.sh
 
 # Mutable state, kept out of the release directory. Mount a volume here:
 # `home` is where the agent harness writes its own config and session state,

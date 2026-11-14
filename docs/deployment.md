@@ -1,13 +1,13 @@
-# Deployment (last updated: 2026-11-13)
+# Deployment (last updated: 2026-11-14)
 
-How to run CodeLead on a server. For the five-minute version see the
+How to run FrontSeat on a server. For the five-minute version see the
 README's *Quickstart*; for the full environment variable reference see
 [`configuration.md`](configuration.md). This document covers the parts that
 only matter once the instance is not on your laptop.
 
 ## The HTTP posture
 
-**CodeLead serves plain HTTP and knows nothing about TLS.** There is no
+**FrontSeat serves plain HTTP and knows nothing about TLS.** There is no
 https→http redirect, no HSTS header, no `force_ssl`. `config/prod.exs` says
 why:
 
@@ -26,7 +26,7 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 
 ## The image
 
-`ghcr.io/emischorr/codelead:latest`, built from the repo's `Dockerfile`.
+`ghcr.io/emischorr/frontseat:latest`, built from the repo's `Dockerfile`.
 
 | | |
 |---|---|
@@ -38,8 +38,8 @@ unencrypted. Put a proxy in front, or keep it on a private network.
 | Entrypoints | `/app/bin/server` (default `CMD`) and `/app/bin/migrate` |
 | Mutable state | `$DATA_ROOT/home` (`HOME`) and `$DATA_ROOT/workspace` (`WORKSPACE_ROOT`); the image defaults to `/data/*`, which the compose stack overrides to follow the `DATA_ROOT` bind |
 
-`/app/bin/migrate` evals `CodeLead.Release.migrate/0`
-(`lib/code_lead/release.ex`), which runs every pending migration for each repo
+`/app/bin/migrate` evals `FrontSeat.Release.migrate/0`
+(`lib/front_seat/release.ex`), which runs every pending migration for each repo
 in `:ecto_repos`. It is safe to run repeatedly and safe to run when there is
 nothing to do.
 
@@ -51,7 +51,7 @@ docker buildx create --name multiarch --driver docker-container --use   # once
 docker login ghcr.io                                                    # once
 
 docker buildx build --platform=linux/amd64,linux/arm64 --no-cache \
-  -t ghcr.io/OWNER/code_lead:0.1.0 -t ghcr.io/OWNER/code_lead:latest --push .
+  -t ghcr.io/OWNER/front_seat:0.1.0 -t ghcr.io/OWNER/front_seat:latest --push .
 ```
 
 See [`configuration.md`](configuration.md#docker-image) for the build args.
@@ -71,8 +71,8 @@ back. `cp .env.example .env` and fill in all four values before the first
 **`db`** — `postgres:18-alpine`, with the named volume `pg` mounted at
 `/var/lib/postgresql` (the Postgres 18 image keeps its data one level below
 that). `init-app-db.sh` is mounted into `/docker-entrypoint-initdb.d/` and
-runs **only on first init of an empty volume**, creating a `codelead` role
-and a `codelead` database owned by it — the app does not connect as the
+runs **only on first init of an empty volume**, creating a `frontseat` role
+and a `frontseat` database owned by it — the app does not connect as the
 superuser. Changing `APP_DB_PW` later will *not* re-run the script; alter the
 role by hand.
 
@@ -111,23 +111,23 @@ empty directory and mount that, and the devcontainer fails on its first
 lifecycle hook ("no mix.exs was found", missing `package.json`, …).
 
 This *reverses* the earlier advice. Stacks deployed before ADR-0009 used a
-named volume (`codelead-data` at `/data`, announced via `WORKSPACE_VOLUME`),
-which worked for the old image-based executor because CodeLead authored every
+named volume (`frontseat-data` at `/data`, announced via `WORKSPACE_VOLUME`),
+which worked for the old image-based executor because FrontSeat authored every
 mount by volume name — but a volume's data has no stable host path, so
 devcontainer execution under it is impossible and such tasks now refuse to
 start with a message pointing here. **Migrating an existing stack** (with the
 stack down, after setting `DATA_ROOT` in `.env`):
 
 ```bash
-docker run --rm -v codelead-data:/from -v /srv/codelead/data:/to alpine cp -a /from/. /to/
+docker run --rm -v frontseat-data:/from -v /srv/frontseat/data:/to alpine cp -a /from/. /to/
 ```
 
 (`cp -a` preserves the volume's uid-1000 ownership, and the entrypoint owns
 the directory roots on the next start — no chown needed.)
 
-(Stacks older than the `name: codelead-data` pin hold their data in
-`deployment_codelead-data` — substitute that name.) Afterwards `docker volume
-rm codelead-data` reclaims the space. Also check the host for phantom
+(Stacks older than the `name: frontseat-data` pin hold their data in
+`deployment_frontseat-data` — substitute that name.) Afterwards `docker volume
+rm frontseat-data` reclaims the space. Also check the host for phantom
 directories a failed pre-migration devcontainer attempt left behind — the
 daemon auto-creates the missing bind source, so an empty host-side
 `/data/workspace/…` tree may exist; remove it.
@@ -171,7 +171,7 @@ The `app` service mounts `/var/run/docker.sock`, which is what lets a task
 run in the environment its repository's `.devcontainer` configuration
 describes — the bundled devcontainer CLI provisions it through this socket.
 **A mounted docker socket is root-equivalent on the host** — anyone who
-controls the CodeLead process can start privileged containers. That trade is
+controls the FrontSeat process can start privileged containers. That trade is
 accepted, and stated here rather than discovered, under the single-tenant,
 self-hosted assumption ([ADR-0003](adr/0003-container-execution-model.md),
 [ADR-0009](adr/0009-devcontainer-execution.md)). To run without
@@ -229,11 +229,11 @@ server — started with the one-click Start preview button (repositories with a
 [ADR-0009](adr/0009-devcontainer-execution.md)).
 For **local** tasks nothing needs configuring — the server runs in the app's
 own process space and the proxy dials loopback. For **container** tasks a
-relay sidecar (`codelead-preview-<task_id>`, image `PREVIEW_RELAY_IMAGE`,
+relay sidecar (`frontseat-preview-<task_id>`, image `PREVIEW_RELAY_IMAGE`,
 default `alpine/socat` — pulled on first use) joins the task container's
 network and publishes the declared `preview_port` on the host, and the app
 dials that published port. This also works with zero configuration: the
-address is auto-detected (`CodeLead.PreviewGateway.Address`) — loopback when
+address is auto-detected (`FrontSeat.PreviewGateway.Address`) — loopback when
 the BEAM runs directly on the docker host, the docker bridge gateway (asked
 from the daemon itself, so custom subnets resolve too) when the app runs in
 a container, as in this stack. The port binds to that address only — never a
@@ -286,7 +286,7 @@ listening on its framework's default instead. The relay's own log is the
 second opinion:
 
 ```bash
-docker logs --tail 20 codelead-preview-<task_id>   # socat: "Connection refused" to <ip>:<port>
+docker logs --tail 20 frontseat-preview-<task_id>   # socat: "Connection refused" to <ip>:<port>
 ```
 
 Relay and docker failures also log with the underlying docker error; check
@@ -304,7 +304,7 @@ two independent jobs:
 
 - **The canonical URL** — `PHX_HOST` + `SCHEME` + `URL_PORT`. These build the
   absolute URLs in login links, user invites, and email-change confirmations
-  (`lib/code_lead_web/live/user_live/login.ex`, `settings_live/users.ex`).
+  (`lib/front_seat_web/live/user_live/login.ex`, `settings_live/users.ex`).
   There is exactly one canonical URL, whatever else the instance answers to.
 - **The origin check** — `PHX_HOST` + `ALLOWED_HOSTS`. Together they list
   every address a browser may open the LiveView WebSocket from.
@@ -321,7 +321,7 @@ dead UI, repeated connection attempts in the browser console, and
 `PHX_HOST` is always allowed. `ALLOWED_HOSTS` is a comma-separated list of
 additional addresses:
 
-- a **bare host** — `192.168.1.50`, `codelead.local`, `*.example.com` —
+- a **bare host** — `192.168.1.50`, `frontseat.local`, `*.example.com` —
   matches that host on any scheme and any port;
 - a **full origin** — `http://192.168.1.50:4000` — must match exactly;
 - `*` on its own **disables the origin check entirely**. Useful when the
@@ -329,8 +329,8 @@ additional addresses:
   cross-origin WebSocket protection. Only do this on a network you trust.
 
 Note that `PHX_HOST` itself matches on host only, ignoring scheme and port —
-so `PHX_HOST: codelead.example.com` accepts both `https://codelead.example.com`
-and `http://codelead.example.com:4000`.
+so `PHX_HOST: frontseat.example.com` accepts both `https://frontseat.example.com`
+and `http://frontseat.example.com:4000`.
 
 ### Recipes
 
@@ -340,10 +340,10 @@ them, and it defaults to the standard port for `SCHEME` (443 for `https`, 80
 for `http`). Keeping the two apart is what lets an instance listen on 4000 as
 an unprivileged user while telling the world it lives at `https://host`.
 
-**Direct HTTP, no proxy** — reachable at `http://codelead.example.com:4000`:
+**Direct HTTP, no proxy** — reachable at `http://frontseat.example.com:4000`:
 
 ```yaml
-      PHX_HOST: codelead.example.com
+      PHX_HOST: frontseat.example.com
       SCHEME: http
       PORT: "4000"
       URL_PORT: "4000"
@@ -354,25 +354,25 @@ type 4000. They are still separate settings — with `ports: - "8080:4000"`
 published instead, `PORT` stays `4000` and `URL_PORT` becomes `8080`.
 
 **Behind a TLS-terminating proxy on 443** — reachable at
-`https://codelead.example.com`:
+`https://frontseat.example.com`:
 
 ```yaml
-      PHX_HOST: codelead.example.com
+      PHX_HOST: frontseat.example.com
       SCHEME: https
       # URL_PORT deliberately unset — defaults to 443, so links carry no
       # port suffix. PORT stays at its 4000 default; the proxy talks to that.
 ```
 
 For a proxy on some other port, set `URL_PORT` to the port people type — e.g.
-`URL_PORT: "8443"` for `https://codelead.example.com:8443`. Never move `PORT`
+`URL_PORT: "8443"` for `https://frontseat.example.com:8443`. Never move `PORT`
 to a privileged port to fix links: the container's unprivileged uid 1000
 cannot bind it and the app will fail to start.
 
-**Both at once** — `https://codelead.example.com` through the proxy *and*
+**Both at once** — `https://frontseat.example.com` through the proxy *and*
 `http://192.168.1.50:4000` straight from the LAN:
 
 ```yaml
-      PHX_HOST: codelead.example.com   # canonical: what emailed links use
+      PHX_HOST: frontseat.example.com   # canonical: what emailed links use
       SCHEME: https                    # ...and the canonical address is TLS
       # URL_PORT deliberately unset — 443
       ALLOWED_HOSTS: "192.168.1.50"
@@ -390,7 +390,7 @@ that works from anywhere, and it is what login links and invites will say.
 Two consequences worth knowing:
 
 - **Sessions are per-host.** Cookies set on `192.168.1.50` and on
-  `codelead.example.com` are separate, so the two addresses are separate
+  `frontseat.example.com` are separate, so the two addresses are separate
   logins. This is browser behaviour, not something the app can bridge.
 - **Emailed links always point at `PHX_HOST`.** A login link opened on the LAN
   will still send the browser to the canonical address.
@@ -414,7 +414,7 @@ Whatever you put in front must:
 **Caddy** — the short version, with automatic certificates:
 
 ```caddyfile
-codelead.example.com {
+frontseat.example.com {
 	reverse_proxy localhost:4000
 }
 ```
@@ -424,10 +424,10 @@ codelead.example.com {
 ```nginx
 server {
 	listen 443 ssl http2;
-	server_name codelead.example.com;
+	server_name frontseat.example.com;
 
-	ssl_certificate     /etc/letsencrypt/live/codelead.example.com/fullchain.pem;
-	ssl_certificate_key /etc/letsencrypt/live/codelead.example.com/privkey.pem;
+	ssl_certificate     /etc/letsencrypt/live/frontseat.example.com/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/frontseat.example.com/privkey.pem;
 
 	location / {
 		proxy_pass http://127.0.0.1:4000;
@@ -534,11 +534,35 @@ adopting the new file without the one-time copy starts you on an empty
 directory. A stack from the `group_add`/`DOCKER_GID` era simply drops both —
 the entrypoint took that job over — and can delete `DOCKER_GID` from `.env`.
 
+### Upgrading from CodeLead
+
+The product was renamed from CodeLead to FrontSeat. The database name, role and
+`DATABASE_URL` (`codelead`) are unchanged; everything else that carried the old
+name moved with it:
+
+- **Image:** `ghcr.io/emischorr/codelead` → `ghcr.io/emischorr/frontseat`.
+  Take the current compose file over yours (or change both `image:` lines).
+- **Queued jobs:** Oban stores worker module names in `oban_jobs.worker`.
+  Rewrite pending ones before the new app starts, or scheduled task runs are
+  dropped:
+  `UPDATE oban_jobs SET worker = replace(worker, 'CodeLead.', 'FrontSeat.') WHERE state IN ('available','scheduled','retryable');`
+- **Containers:** task and preview-relay containers are now found by
+  `frontseat.*` labels. Remove the old ones (this ends their sessions):
+  `docker rm -f $(docker ps -aq --filter label=codelead.managed=true)`
+- **Sessions:** the session and remember-me cookies were renamed, so every user
+  logs in once more. Preview cookies moved from `_clp*` to `_fsp*`.
+- **Mail:** the sender default is now `frontseat@$PHX_HOST`. If your relay only
+  accepts the old address, set `MAIL_FROM=codelead@…` in `.env`.
+- **Git:** new task branches use the `frontseat/` prefix and commits are
+  authored by `FrontSeat <frontseat@localhost>`. Existing tasks keep their
+  `codelead/…` branch; artifact branches pushed under `codelead/task-*-artifact`
+  are not reused.
+
 ## Backups
 
 Three things, and all three are needed to restore:
 
-1. **The database.** `docker compose exec db pg_dump -U codelead codelead > backup.sql`
+1. **The database.** `docker compose exec db pg_dump -U frontseat frontseat > backup.sql`
 2. **The `DATA_ROOT` directory**, if you have in-flight work — unmerged task
    branches live in worktrees there, not in the database.
 3. **`ENCRYPTION_KEY`.** Provider credentials and project secrets are

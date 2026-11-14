@@ -116,7 +116,7 @@ case "$1" in
     # The devcontainer executor resolves the task's primary container by
     # its id-labels; the docker state scenarios answer for it.
     case "$*" in
-      *label=codelead.task_container=true*)
+      *label=frontseat.task_container=true*)
         case "$docker_scenario" in
           running | exec_dies | orphans) echo "${FAKE_DEVCONTAINER_CONTAINER_ID:-f4k3devc0ntainer}|running" ;;
           stopped) echo "${FAKE_DEVCONTAINER_CONTAINER_ID:-f4k3devc0ntainer}|exited" ;;
@@ -168,9 +168,9 @@ case "$1" in
     esac
     ;;
   run)
-    # A relay `run -d --name codelead-preview-<id> ...` only needs an id.
+    # A relay `run -d --name frontseat-preview-<id> ...` only needs an id.
     case "$*" in
-      *codelead-preview-*)
+      *frontseat-preview-*)
         echo "f4k3r3l4yid"
         exit 0
         ;;

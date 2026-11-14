@@ -1,7 +1,7 @@
-defmodule CodeLead.WsEchoPlug do
+defmodule FrontSeat.WsEchoPlug do
   @moduledoc """
   In-test upstream plug that upgrades every request to the
-  `CodeLead.WsEchoServer` websocket handler.
+  `FrontSeat.WsEchoServer` websocket handler.
   """
 
   @behaviour Plug
@@ -11,6 +11,6 @@ defmodule CodeLead.WsEchoPlug do
 
   @impl true
   def call(conn, _opts) do
-    WebSockAdapter.upgrade(conn, CodeLead.WsEchoServer, %{}, [])
+    WebSockAdapter.upgrade(conn, FrontSeat.WsEchoServer, %{}, [])
   end
 end

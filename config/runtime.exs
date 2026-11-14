@@ -12,23 +12,23 @@ import Config
 # If you use `mix release`, you need to explicitly enable the server
 # by passing the PHX_SERVER=true when you start it:
 #
-#     PHX_SERVER=true bin/code_lead start
+#     PHX_SERVER=true bin/front_seat start
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 if System.get_env("PHX_SERVER") do
-  config :code_lead, CodeLeadWeb.Endpoint, server: true
+  config :front_seat, FrontSeatWeb.Endpoint, server: true
 end
 
 # The port the endpoint binds to. It has no bearing on the port in generated
 # links — that is URL_PORT, set in the prod block below.
-config :code_lead, CodeLeadWeb.Endpoint,
+config :front_seat, FrontSeatWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 # The same port again as plain app config: core code (the repository
 # changeset blocks it as a preview port) reads it without touching the
 # endpoint.
-config :code_lead, app_port: String.to_integer(System.get_env("PORT", "4000"))
+config :front_seat, app_port: String.to_integer(System.get_env("PORT", "4000"))
 
 # Encryption key for Cloak (provider credentials, project env store).
 # Base64-encoded 32 bytes; generate with:
@@ -52,7 +52,7 @@ encryption_key =
       key
   end
 
-config :code_lead, CodeLead.Vault,
+config :front_seat, FrontSeat.Vault,
   ciphers: [
     default:
       {Cloak.Ciphers.AES.GCM,
@@ -61,10 +61,10 @@ config :code_lead, CodeLead.Vault,
 
 # Signed license key for the instance. Optional everywhere, including
 # prod: absent means the community tier, which today grants everything.
-# See `CodeLead.License` and docs/licensing.md.
-config :code_lead, CodeLead.License, key: System.get_env("LICENSE_KEY")
+# See `FrontSeat.License` and docs/licensing.md.
+config :front_seat, FrontSeat.License, key: System.get_env("LICENSE_KEY")
 
-# Root directory for CodeLead-managed working state: base clones,
+# Root directory for FrontSeat-managed working state: base clones,
 # per-task git worktrees, and task folders.
 #
 # The test env deliberately ignores WORKSPACE_ROOT: agent subprocesses
@@ -78,7 +78,7 @@ workspace_root =
     _dev_or_prod -> System.get_env("WORKSPACE_ROOT", Path.expand("workspace"))
   end
 
-config :code_lead,
+config :front_seat,
   workspace_root: workspace_root,
   max_concurrent_runs: String.to_integer(System.get_env("MAX_CONCURRENT_RUNS", "2")),
   # Image the workspace remover uses to delete root-owned leftovers of
@@ -95,7 +95,7 @@ config :code_lead,
 # HARNESS_SOURCE directory of pre-staged flavor dirs is the air-gapped
 # escape hatch, copied at boot. HARNESS_VERSION's default must stay in
 # sync with the Dockerfile's ARG CLAUDE_ACP_VERSION.
-config :code_lead,
+config :front_seat,
   # Scoped to the one-shot harness build container these days: task
   # containers get their user from the repo's devcontainer config
   # (resource caps likewise via runArgs/hostRequirements, ADR-0009).
@@ -118,8 +118,8 @@ config :code_lead,
 # the BEAM runs on the docker host (dev), the docker bridge gateway —
 # asked from the daemon — when the app itself runs in a container (the
 # deployed stack). Set them only for setups the detection cannot cover;
-# see CodeLead.PreviewGateway.Address.
-config :code_lead,
+# see FrontSeat.PreviewGateway.Address.
+config :front_seat,
   preview_publish_ip: System.get_env("PREVIEW_PUBLISH_IP"),
   preview_upstream_host: System.get_env("PREVIEW_UPSTREAM_HOST"),
   preview_relay_image: System.get_env("PREVIEW_RELAY_IMAGE", "alpine/socat"),
@@ -159,8 +159,8 @@ if preview_domain not in [nil, ""] and config_env() != :test do
       {value, _env} -> String.to_integer(value)
     end
 
-  config :code_lead,
-    preview_gateway: CodeLead.PreviewGateway.SubdomainProxy,
+  config :front_seat,
+    preview_gateway: FrontSeat.PreviewGateway.SubdomainProxy,
     preview_domain: preview_domain,
     preview_url: [scheme: preview_scheme, port: preview_url_port]
 end
@@ -175,7 +175,7 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  config :code_lead, CodeLead.Repo,
+  config :front_seat, FrontSeat.Repo,
     # ssl: true,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
@@ -232,9 +232,9 @@ if config_env() == :prod do
       |> Enum.uniq()
     end
 
-  config :code_lead, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  config :front_seat, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  config :code_lead, CodeLeadWeb.Endpoint,
+  config :front_seat, FrontSeatWeb.Endpoint,
     url: [host: host, port: url_port, scheme: scheme],
     check_origin: check_origin,
     http: [
@@ -251,7 +251,7 @@ if config_env() == :prod do
   # To get SSL working, you will need to add the `https` key
   # to your endpoint configuration:
   #
-  #     config :code_lead, CodeLeadWeb.Endpoint,
+  #     config :front_seat, FrontSeatWeb.Endpoint,
   #       https: [
   #         ...,
   #         port: 443,
@@ -273,7 +273,7 @@ if config_env() == :prod do
   # We also recommend setting `force_ssl` in your config/prod.exs,
   # ensuring no data is ever sent via http, always redirecting to https:
   #
-  #     config :code_lead, CodeLeadWeb.Endpoint,
+  #     config :front_seat, FrontSeatWeb.Endpoint,
   #       force_ssl: [hsts: true]
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
@@ -298,7 +298,7 @@ if config_env() == :prod do
         other -> raise "SMTP_TLS must be always, never, or if_available — got #{inspect(other)}"
       end
 
-    config :code_lead, CodeLead.Mailer,
+    config :front_seat, FrontSeat.Mailer,
       adapter: Swoosh.Adapters.SMTP,
       relay: smtp_host,
       port: String.to_integer(System.get_env("SMTP_PORT") || "587"),
@@ -316,11 +316,11 @@ if config_env() == :prod do
       auth: if(smtp_username, do: :always, else: :never),
       retries: 1
 
-    config :code_lead, mail_enabled: true
+    config :front_seat, mail_enabled: true
 
-    config :code_lead,
+    config :front_seat,
            :mail_from,
            {System.get_env("MAIL_FROM_NAME") || "FrontSeat",
-            System.get_env("MAIL_FROM") || "codelead@#{host}"}
+            System.get_env("MAIL_FROM") || "frontseat@#{host}"}
   end
 end

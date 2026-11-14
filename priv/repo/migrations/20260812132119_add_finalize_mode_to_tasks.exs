@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddFinalizeModeToTasks do
+defmodule FrontSeat.Repo.Migrations.AddFinalizeModeToTasks do
   use Ecto.Migration
 
   # Nullable on purpose: NULL means "inherit the project's default", which is

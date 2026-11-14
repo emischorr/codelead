@@ -9,7 +9,7 @@ reasoning.
 
 ## 1. The problem, and the trilemma
 
-CodeLead's proxy never rewrites response bodies (ADR-0008, upheld by ADR-0011).
+FrontSeat's proxy never rewrites response bodies (ADR-0008, upheld by ADR-0011).
 Body rewriting looks like the free lunch — proxy under any path, fix up the HTML —
 but it can never be complete: URLs built in JavaScript by string concatenation,
 `fetch` targets, service-worker scopes, sourcemaps, WASM-embedded paths. The result
@@ -41,13 +41,13 @@ so in the standard deployment it *behaves* like 1 + 2 + 3.
 The `PREVIEW_BASE_PATH` tax is not uniform, and the distinction matters:
 
 - **CLI-flag frameworks** (Vite and friends): the flag rides in the repository's
-  `preview_command` *inside CodeLead* — `npm run dev -- --base "$PREVIEW_BASE_PATH/"`.
-  The repo source is untouched. This is CodeLead-side configuration, not project
+  `preview_command` *inside FrontSeat* — `npm run dev -- --base "$PREVIEW_BASE_PATH/"`.
+  The repo source is untouched. This is FrontSeat-side configuration, not project
   adaptation.
 - **Config-file-only frameworks** (Next.js `basePath`, Phoenix `url: [path:]`,
   Rails `relative_url_root`): the repo itself must read the env var in its own
   config. This is the adaptation worth designing away — a project should not need
-  CodeLead-specific code to be usable with CodeLead.
+  FrontSeat-specific code to be usable with FrontSeat.
 
 Separate from base paths, every preview (under any gateway) expects two things that
 are deliberately *not* counted as adaptation, being ordinary dev-server behavior:
@@ -60,14 +60,14 @@ All three share one proxy core — `Forwarder` (HTTP via streamed `Req`, websock
 via a `Mint.WebSocket` relay), header hygiene, `Upstream` resolution, and for
 container tasks the socat relay sidecar (ADR-0009). A gateway is only two things:
 how the browser-facing URL is minted (`PreviewGateway.url_for/1`) and which rewrite
-policy applies (`CodeLeadWeb.PreviewProxy.Policy`). Exactly one gateway is active
+policy applies (`FrontSeatWeb.PreviewProxy.Policy`). Exactly one gateway is active
 per instance (ADR-0011).
 
 ### 3.1 `PathProxy` — shipped, the default
 
 - **Origin:** none of its own. The preview lives at `/preview/<task_id>/` on
-  CodeLead's origin.
-- **Auth:** the existing CodeLead session, via the `:preview` router pipeline.
+  FrontSeat's origin.
+- **Auth:** the existing FrontSeat session, via the `:preview` router pipeline.
   Nothing new to hand shake — the cheapest auth story of the three.
 - **Operator cost:** zero. Works through any reverse proxy, any deployment, because
   it is just more paths on the one port. This is why it is the default and why it
@@ -75,7 +75,7 @@ per instance (ADR-0011).
   has no other option.
 - **Project cost:** the app is reachable under a prefix it doesn't know about.
   The proxy rewrites root-relative `Location` headers and namespaces cookies
-  (`sid` → `_clp<id>_sid`, path-scoped), but bodies pass untouched — so absolute
+  (`sid` → `_fsp<id>_sid`, path-scoped), but bodies pass untouched — so absolute
   asset paths, `fetch('/api/...')`, and absolutely-built websocket URLs miss the
   mount unless the app honors `PREVIEW_BASE_PATH`.
 - **What stays broken even when honored:** two things. Double-submit CSRF (Django,
@@ -85,10 +85,10 @@ per instance (ADR-0011).
   is narrower than it sounds: it configures the router, so anything outside the
   router still emits root-absolute URLs. A Phoenix app is the worked example — its
   generated `assets/js/app.js` hardcodes `new LiveSocket("/live", …)`, which under
-  a path preview opens against **CodeLead's own** LiveView endpoint. CodeLead
+  a path preview opens against **FrontSeat's own** LiveView endpoint. FrontSeat
   completes the upgrade, rejects the join as `stale`, and the client falls back to
   a full page load — so the preview reloads itself indefinitely rather than merely
-  losing its socket. `CodeLeadWeb.Plugs.PreviewLoopGuard` detects that shape and
+  losing its socket. `FrontSeatWeb.Plugs.PreviewLoopGuard` detects that shape and
   serves a diagnostic naming the likely causes; it is a **diagnostic, not a fix**,
   and rewrites nothing. The per-framework recipes and the remaining escapes (CSS
   `url(/…)`, literal `href="/"`) are in
@@ -100,9 +100,9 @@ per instance (ADR-0011).
 
 - **Origin:** a real one per task, `task-<id>.<PREVIEW_DOMAIN>`, matched before the
   regular pipeline in an overridden `Endpoint.call/2`.
-- **Auth:** the CodeLead session cookie is host-only and doesn't travel to the
+- **Auth:** the FrontSeat session cookie is host-only and doesn't travel to the
   preview origin, so the launch route mints a 60-second task-scoped `Phoenix.Token`
-  which the preview host exchanges for its own `_clp_session` cookie (ADR-0011).
+  which the preview host exchanges for its own `_fsp_session` cookie (ADR-0011).
 - **Operator cost:** wildcard DNS for `*.<PREVIEW_DOMAIN>` plus, under TLS, a
   DNS-01 wildcard certificate — once per instance. Must stay same-site with
   `PHX_HOST` (boot warning otherwise). Dev is free: `PREVIEW_DOMAIN=preview.localhost`
@@ -117,18 +117,18 @@ per instance (ADR-0011).
 ### 3.3 Port-per-task — designed, **not implemented**
 
 - **Origin:** per task via the port: `http://<host>:<port>/`, one port from a
-  published range, terminated by CodeLead itself.
+  published range, terminated by FrontSeat itself.
 - **Auth:** the ADR-0011 token handshake reused, with a per-task session cookie
   *name* — browsers scope cookies by host and ignore the port, so a single
-  `_clp_session` would collide across previews and with CodeLead itself.
+  `_fsp_session` would collide across previews and with FrontSeat itself.
 - **Operator cost:** a published port range. Static enough to ship open in the
   default compose stack, making the standard deployment zero-config. Firewall
-  footprint is the honest price; the ports are auth-gated by CodeLead, nothing
+  footprint is the honest price; the ports are auth-gated by FrontSeat, nothing
   bypasses login.
 - **Project cost:** none — same root-origin story as subdomains.
 - **Structural weakness:** cookie isolation. Same host ⇒ shared cookie jar across
   ports: two concurrent previews see each other's real-named app cookies (task A's
-  Django `sessionid` is sent to task B's Django), and CodeLead's own session cookie
+  Django `sessionid` is sent to task B's Django), and FrontSeat's own session cookie
   must be stripped before forwarding upstream. Decided **acceptable** for the
   self-hosted single-operator posture — it is the operator's own tasks on the
   operator's own box — but it is the one dimension where ports are strictly weaker
@@ -154,14 +154,14 @@ per instance (ADR-0011).
 
 Shipped today:
 
-- The seam: `CodeLead.PreviewGateway` (`url_for/1`, `upstream_for/1`,
+- The seam: `FrontSeat.PreviewGateway` (`url_for/1`, `upstream_for/1`,
   `preview_env/2` emitting `PREVIEW_BASE_PATH`/`PREVIEW_ORIGIN`/`PREVIEW_PORT`).
   The one browser-facing entry point is `GET /preview/launch/:task_id`.
 - Gateway selection in `config/runtime.exs`: `PREVIEW_DOMAIN` set → `SubdomainProxy`,
   else `PathProxy`. The inactive gateway's URLs fail loudly.
-- Rewrites as policy: `CodeLeadWeb.PreviewProxy.Policy` — path gateway gets
+- Rewrites as policy: `FrontSeatWeb.PreviewProxy.Policy` — path gateway gets
   `mount_path`/cookie prefix/`Location` rewriting, subdomain gateway gets none.
-- The shared core under `lib/code_lead_web/preview_proxy/` and the container-task
+- The shared core under `lib/front_seat_web/preview_proxy/` and the container-task
   plumbing (`Relay`, `Address`, `Upstream`) — gateway-independent, reusable as-is
   by a third gateway.
 - Gateway drift is reconciled, because a dev server captures its base path at spawn
@@ -193,12 +193,12 @@ it the **default**, demoting `PathProxy` to an explicit opt-in.
   unchanged — they just stop being part of the default operator experience.
 - **Compose ships the range open.** Convention over configuration: the default
   stack publishes the preview port range out of the box, so a domainless instance
-  previews unmodified repos with zero setup. CodeLead terminates those ports itself
+  previews unmodified repos with zero setup. FrontSeat terminates those ports itself
   and runs the same auth gate; the relay sidecar's host ports stay unpublished as
   today.
 - **Why plain-http extra ports are viable at all:** ADR-0011's new-tab-only
   decision. With no iframe there is no mixed-content constraint, so a preview tab
-  on `http://host:41042/` is fine even when CodeLead itself sits behind TLS.
+  on `http://host:41042/` is fine even when FrontSeat itself sits behind TLS.
 
 Design wrinkles recorded for the implementer (settle these first):
 
@@ -236,4 +236,4 @@ default stack.
   says why." Usable as a documented trick, not as the domainless story.
 - **Exposing the relay ports directly** (skip the proxy for container tasks): the
   proxy *is* the auth gate; direct exposure would put previews on the network with
-  no login. Ports must terminate at CodeLead.
+  no login. Ports must terminate at FrontSeat.

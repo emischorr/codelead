@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddIsDefaultToRepositories do
+defmodule FrontSeat.Repo.Migrations.AddIsDefaultToRepositories do
   use Ecto.Migration
 
   def up do

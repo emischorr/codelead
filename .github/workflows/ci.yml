@@ -53,7 +53,7 @@ jobs:
 
       - name: Git identity for test repos
         run: |
-          git config --global user.name "CodeLead CI"
+          git config --global user.name "FrontSeat CI"
           git config --global user.email "ci@localhost"
 
       - run: mix deps.get

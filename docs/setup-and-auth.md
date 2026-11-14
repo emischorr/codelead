@@ -7,7 +7,7 @@ afterwards. Product spec §11/§12 (first-run `/setup` wizard) and §4
 ## The `setup_done` flag
 
 The flag lives in `organizations.settings["setup_done"]` — a string key,
-because it is a JSON column. Two functions in `CodeLead.Accounts` own it:
+because it is a JSON column. Two functions in `FrontSeat.Accounts` own it:
 
 - `setup_done?/0` — the only read. It selects `settings` directly and
   treats a missing organization as "not set up", so it is safe on an
@@ -17,13 +17,13 @@ because it is a JSON column. Two functions in `CodeLead.Accounts` own it:
   settings map (it does not replace it).
 
 `priv/repo/seeds.exs` writes the flag as `true`, so a seeded dev instance
-skips the wizard. `CodeLead.AccountsFixtures.organization_fixture/1`
+skips the wizard. `FrontSeat.AccountsFixtures.organization_fixture/1`
 defaults to `true` for the same reason.
 
 ## The three gates
 
-`CodeLeadWeb.SetupGate`, the generated `CodeLeadWeb.UserAuth`, and
-`CodeLeadWeb.Authorization` stack in that order:
+`FrontSeatWeb.SetupGate`, the generated `FrontSeatWeb.UserAuth`, and
+`FrontSeatWeb.Authorization` stack in that order:
 
 1. `:browser` runs `fetch_current_scope_for_user` (session → `@current_scope`,
    which loads the user's project memberships — see "Authorization" below).
@@ -55,7 +55,7 @@ pipelines.
 The `:project` live_session must hold **only** project-keyed routes —
 `require_project_access` reads `params["project_id"] || params["id"]`,
 and the fallback is safe only under that invariant (see the
-`CodeLeadWeb.Authorization` moduledoc). Crossing between the three app
+`FrontSeatWeb.Authorization` moduledoc). Crossing between the three app
 sessions is a full page load, so the router pipeline and the session
 hook are both always consulted.
 
@@ -68,7 +68,7 @@ users to log in as — `/users/log-in` redirects to `/setup` too.
 
 ## The wizard
 
-`CodeLeadWeb.SetupLive` (panels in `CodeLeadWeb.SetupLive.Steps`) walks
+`FrontSeatWeb.SetupLive` (panels in `FrontSeatWeb.SetupLive.Steps`) walks
 admin → provider → project → agent → finish.
 
 **The current step is derived from the database on every mount**, not
@@ -92,7 +92,7 @@ Admin and provider are required; project and agent are skippable
 A LiveView cannot write the session, and the wizard must leave the admin
 logged in. So `SetupLive` validates the admin form live and then sets
 `phx-trigger-action`, letting the browser POST it to
-`CodeLeadWeb.SetupController.create_admin/2`, which registers the admin,
+`FrontSeatWeb.SetupController.create_admin/2`, which registers the admin,
 stores `:user_return_to` and calls `UserAuth.log_in_user/2`. This is the
 same trick the generated `UserLive.Login` uses.
 
@@ -154,7 +154,7 @@ generated output:
   and share the confirmation LiveView; invites get their own email copy
   (`UserNotifier.deliver_invite_instructions/2`).
 - **Both contexts exist only when mail does.** Email is opt-in
-  (`CodeLead.Mailer.enabled?/0`, off unless `SMTP_HOST` is set), and with
+  (`FrontSeat.Mailer.enabled?/0`, off unless `SMTP_HOST` is set), and with
   no transport the login page drops its magic-link form and
   `/settings/users` drops the invite option and *Resend invite* — an
   instance then runs entirely on the username + password path this whole
@@ -203,9 +203,9 @@ Two flat layers, one policy seam:
   Project creation stays open to every signed-in user — the creator
   becomes maintainer in the same transaction.
 
-`CodeLead.Accounts.Scope` carries `user`, `role`, and a
+`FrontSeat.Accounts.Scope` carries `user`, `role`, and a
 `%{project_id => role}` memberships map, loaded once per request/mount
-by `Scope.for_user/1`. `CodeLead.Accounts.Policy` is the single seam:
+by `Scope.for_user/1`. `FrontSeat.Accounts.Policy` is the single seam:
 `can?(scope, action, subject)` / `authorize(scope, action, subject)`
 over a flat action list, comparing project roles through a rank map.
 Contexts enforce with `authorize/3` at the boundary
@@ -215,7 +215,7 @@ UI hides what the context would refuse; reads are scoped at the query
 `project_ids` filter).
 
 Membership and role writes broadcast `{:scope_changed, user_id}` on
-`Accounts.user_topic/1`; `CodeLeadWeb.NavContext` rebuilds the scope in
+`Accounts.user_topic/1`; `FrontSeatWeb.NavContext` rebuilds the scope in
 open LiveViews (or forces a remount when the instance role changed or
 the open project was lost) — see [`navigation.md`](navigation.md).
 Revoking a membership deliberately does **not** log the person out;
@@ -237,7 +237,7 @@ budget attrs for everyone else, and new projects copy the organization's
 
 ## Testing
 
-`CodeLeadWeb.ConnCase` creates the organization singleton (already set
+`FrontSeatWeb.ConnCase` creates the organization singleton (already set
 up) for every web test, so the gate does not redirect the whole suite.
 Tag a case `@moduletag :setup_pending` to get an empty instance and test
 the wizard itself. `setup :register_and_log_in_user` logs a member in;

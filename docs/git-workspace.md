@@ -3,7 +3,7 @@
 Applies to `:repo`-target tasks of any work type; `:folder`-target
 tasks use a task folder and skip the branch/push flow.
 
-## Layout (`CodeLead.Workspace`)
+## Layout (`FrontSeat.Workspace`)
 
 ```
 <WORKSPACE_ROOT>/
@@ -21,11 +21,11 @@ tasks use a task folder and skip the branch/push flow.
                             container run (ADR-0005/0006/0007)
 ```
 
-## Flow (`CodeLead.Git` + `CodeLead.Executor.LocalSubprocess`)
+## Flow (`FrontSeat.Git` + `FrontSeat.Executor.LocalSubprocess`)
 
 - `provision/1` (repo target): `ensure_clone` the base clone (fetches
   when it already exists), then a worktree on branch
-  `codelead/task-<id>-<slug>` starting from `origin/<default_branch>`.
+  `frontseat/task-<id>-<slug>` starting from `origin/<default_branch>`.
   Worktree path + branch are persisted on the task
   (`Tasks.set_execution_context/3`) on **every** provisioning, not just
   the first — a run whose context is missing from the task leaves the
@@ -42,7 +42,7 @@ tasks use a task folder and skip the branch/push flow.
   volume standing, so `worktrees/task-<id>` may well be a leftover from
   an earlier generation, on an unrelated repository; reusing one
   unchecked runs the agent in the wrong repo and reports nothing. `mix
-  code_lead.workspace.clean` (wired into the `ecto.reset` alias, ahead
+  front_seat.workspace.clean` (wired into the `ecto.reset` alias, ahead
   of `ecto.drop` so its guard can still query the database) best-effort
   removes labeled task containers *first* — that is the only lever it
   has over processes still writing into the worktrees — then drops
@@ -77,7 +77,7 @@ tasks use a task folder and skip the branch/push flow.
   rather than `read-tree HEAD` keeps the stat cache, so a refresh
   re-hashes only what changed. Callers pass extra environment through
   `git/3`'s `:env` option.
-- `commit_all/2` commits as `CodeLead <codelead@localhost>`; `:noop`
+- `commit_all/2` commits as `FrontSeat <frontseat@localhost>`; `:noop`
   when clean. `push/3` pushes the feature branch with upstream;
   `push_ref/4` pushes a ref to a differently-named remote branch
   (`HEAD:main`) and is never forced.
@@ -95,7 +95,7 @@ tasks use a task folder and skip the branch/push flow.
   (`{:workspace_blocked, path}` with a host-side remedy) rather than
   dying on git's bare `already exists`.
 - File deletion inside the workspace goes through
-  `CodeLead.Workspace.Remover`: `rm_rf`, verify, and on `eacces` —
+  `FrontSeat.Workspace.Remover`: `rm_rf`, verify, and on `eacces` —
   root-owned files a container-executed agent left behind; the
   entrypoint chown is deliberately non-recursive — escalate to a
   root-privileged `docker run --rm -v <parent>:<parent>
@@ -125,7 +125,7 @@ keep that from happening again:
   `Workspace.root/0` (checked by `Workspace.under_root?/1`) is never
   used — the canonical location is recomputed, an error is logged, and
   the next provisioning re-persists the healed value.
-- **Boot reconciliation.** `CodeLead.Workspace.Reconciler` runs as a
+- **Boot reconciliation.** `FrontSeat.Workspace.Reconciler` runs as a
   blocking one-shot before Oban and the endpoint: rows pointing outside
   the current root are rewritten to the recomputed location when the
   files actually exist there (a volume migration), and `git worktree
@@ -134,7 +134,7 @@ keep that from happening again:
   DB cannot see them. Genuinely lost paths are logged loudly and left
   in place (the resolvers make them inert); nothing is ever deleted at
   boot. Skipped in the test env
-  (`config :code_lead, reconcile_workspace_at_boot: false`).
+  (`config :front_seat, reconcile_workspace_at_boot: false`).
 
 ## Reading current default-branch source
 
@@ -224,7 +224,7 @@ Functions that touch a remote (`ensure_clone/3`, `push/3`,
 resolves it — `Git.forge(git_url)` classifies the remote and
 `Projects.forge_token/2` reads `GITHUB_TOKEN`/`GITLAB_TOKEN` out of the
 encrypted project env store — so `Git` never reaches into the domain.
-Both `LocalSubprocess.provision/1` and `CodeLead.Finalizer` do this.
+Both `LocalSubprocess.provision/1` and `FrontSeat.Finalizer` do this.
 
 `Git` installs the token as a per-invocation `credential.helper` (via
 `-c`) that echoes it back from the subprocess environment as
@@ -251,7 +251,7 @@ plus the forge and whether a token was presented into one operator-facing
 sentence, redacting the detail on the way out. The git failure sites
 feed it — `LocalSubprocess.provision/1` via
 `TaskRunner.dispatch_error/1`, and `Finalizer.finalize/2` via
-`CodeLeadWeb.FlashMessages.finalize_error/1` — so each enriches its error
+`FrontSeatWeb.FlashMessages.finalize_error/1` — so each enriches its error
 with `%{output:, forge:, token_present?:}` at the point where those facts
 are still in scope.
 
@@ -268,7 +268,7 @@ because every one of those sentences names the branch being written.
 existing clone, so changing a project's repository URL retargets the
 base clone instead of being silently ignored.
 
-Executor selection: `CodeLead.Executor.for_task/1` resolves per task —
+Executor selection: `FrontSeat.Executor.for_task/1` resolves per task —
 `:repo` targets with `execution_env: :container` get `Devcontainer`,
 everything else (including every `:folder` target) the configured
 default (`impl/0`, `LocalSubprocess`). The resolved module travels on
@@ -283,7 +283,7 @@ git/worktree provisioning to `LocalSubprocess` — git stays host-side —
 and provisions the environment the repository's own `.devcontainer`
 configuration describes via `devcontainer up` (`env_kind:
 :devcontainer`; no fallback environment exists), identified by
-`codelead.task_container`/`codelead.task_id` id-labels so any number of
+`frontseat.task_container`/`frontseat.task_id` id-labels so any number of
 `docker exec -i` bridges can attach. The workspace rides in as one
 extra `--mount`: a bind of the workspace root at the identical path,
 which is how the worktree's gitdir and the staged harness resolve
@@ -307,5 +307,5 @@ as a whole project) while the worktree and agent home stay;
 send-back-to-planning removes all three. `agents.tool_features`
 remains a dormant seam.
 
-Tests build throwaway `file://` origins via `CodeLead.GitHelpers`
+Tests build throwaway `file://` origins via `FrontSeat.GitHelpers`
 inside the test workspace root — no network, no real harness needed.

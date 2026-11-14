@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddRunMetaToAgentRuns do
+defmodule FrontSeat.Repo.Migrations.AddRunMetaToAgentRuns do
   use Ecto.Migration
 
   def change do

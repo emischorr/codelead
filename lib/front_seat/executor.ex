@@ -1,0 +1,85 @@
+defmodule FrontSeat.Executor do
+  @moduledoc """
+  Behaviour for provisioning and tearing down task execution contexts
+  and spawning agent processes inside them.
+
+  The locked contract (ADR-0003): `spawn/3` launches the agent process
+  *inside* the provisioned execution context. Under the `Devcontainer`
+  implementation the ACP harness runs in the task's devcontainer,
+  attached over `docker exec -i` — the same Port stdio bridge as
+  locally. Client-side ACP capabilities (permission prompts, display)
+  stay host-side in the driver; they are not the executor's concern.
+
+  Implementations must not assume a `Context` round-trips intact:
+  `FrontSeat.Runtime.StageEffects.discard_context/1` rebuilds one from
+  DB rows with no `env` and no `exec_ref` before calling `teardown/2`,
+  so executor-private state must be recoverable from the task id alone
+  (e.g. container labels). Implementations must also default `spawn/3`'s
+  `port_opts` — callers use `spawn/2`. An implementation may export an
+  optional `diagnose(task_id)` (`{:ok, detail} | :none`), consulted via
+  `function_exported?/3` by the fail path to refine a failure detail.
+
+  Implementations: `FrontSeat.Executor.LocalSubprocess` (default) and
+  `FrontSeat.Executor.Devcontainer` (per-task opt-in via
+  `tasks.execution_env`, resolved by `for_task/1`). The agent driver is
+  independent of the executor.
+  """
+
+  alias FrontSeat.Executor.Context
+  alias FrontSeat.Tasks.Task
+
+  @doc """
+  Creates the execution context for a task by target: `:repo` → base
+  clone + git worktree on the feature branch, `:folder` → task folder.
+  Idempotent across runs of the same task (multi-run reuses the
+  worktree).
+  """
+  @callback provision(task :: Task.t()) :: {:ok, Context.t()} | {:error, term()}
+
+  @doc """
+  Whether `command` is runnable inside the execution environment —
+  under `LocalSubprocess`, the server `PATH`. Checked before
+  provisioning so a missing harness fails the run before a repository
+  is cloned.
+  """
+  @callback available?(command :: [String.t()]) :: :ok | {:error, term()}
+
+  @doc """
+  Spawns an OS process inside the context with the project env
+  injected, returning the connected port.
+  """
+  @callback spawn(context :: Context.t(), command :: [String.t()], port_opts :: keyword()) ::
+              {:ok, port()} | {:error, term()}
+
+  @doc """
+  Tears the context down. `keep: true` leaves everything on disk (the
+  cancel/inspection path); `keep: false` removes the worktree/folder
+  and deletes the feature branch (the send-back-to-planning path).
+
+  An error means durable state could not be removed — files are still
+  on disk. Callers proceed and surface it rather than abort: the
+  transition that asked for the teardown has already committed, and the
+  next provisioning refuses to build on the leftover.
+  """
+  @callback teardown(context :: Context.t(), opts :: keyword()) :: :ok | {:error, term()}
+
+  @doc """
+  The configured executor implementation.
+  """
+  @spec impl() :: module()
+  def impl do
+    Application.get_env(:front_seat, :executor, FrontSeat.Executor.LocalSubprocess)
+  end
+
+  @doc """
+  The executor for a task's runs. Only repo-target tasks that opted into
+  `:container` leave the default — a `:folder` target is structurally
+  local, whatever its `execution_env` says.
+  """
+  @spec for_task(Task.t()) :: module()
+  def for_task(%Task{target: :repo, execution_env: :container}) do
+    FrontSeat.Executor.Devcontainer
+  end
+
+  def for_task(%Task{}), do: impl()
+end

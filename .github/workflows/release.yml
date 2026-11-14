@@ -31,7 +31,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}   # → ghcr.io/emischorr/codelead
+          images: ghcr.io/${{ github.repository }}   # → ghcr.io/emischorr/frontseat
           tags: |
             type=ref,event=tag
             type=raw,value=latest

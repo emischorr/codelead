@@ -5,8 +5,8 @@
 
 import Ecto.Query
 
-alias CodeLead.Accounts
-alias CodeLead.Agents
+alias FrontSeat.Accounts
+alias FrontSeat.Agents
 
 {:ok, organization} =
   Accounts.ensure_organization(%{
@@ -16,14 +16,14 @@ alias CodeLead.Agents
 
 # The seeded instance is already marked set up, so it skips the wizard —
 # which means the admin needs a real password to log in with.
-admin_password = System.get_env("ADMIN_PASSWORD", "codelead-dev-password")
+admin_password = System.get_env("ADMIN_PASSWORD", "frontseat-dev-password")
 
 # On a database that already has an admin (seeding demo data into a
 # populated instance), the demo projects belong to that admin rather than
 # to a second seeded account.
 existing_admin =
-  CodeLead.Repo.one(
-    from u in CodeLead.Accounts.User, where: u.role == :admin, order_by: u.id, limit: 1
+  FrontSeat.Repo.one(
+    from u in FrontSeat.Accounts.User, where: u.role == :admin, order_by: u.id, limit: 1
   )
 
 admin =
@@ -55,7 +55,7 @@ IO.puts(
 # below cannot call. The Anthropic key comes from the local environment
 # when present; a placeholder otherwise (update via Agents.update_provider/2).
 anthropic =
-  CodeLead.Repo.get_by(CodeLead.Agents.Provider, name: "Anthropic API", kind: :anthropic_api) ||
+  FrontSeat.Repo.get_by(FrontSeat.Agents.Provider, name: "Anthropic API", kind: :anthropic_api) ||
     (
       {:ok, provider} =
         Agents.create_provider(%{
@@ -68,7 +68,7 @@ anthropic =
     )
 
 ollama =
-  CodeLead.Repo.get_by(CodeLead.Agents.Provider, name: "Ollama", kind: :ollama) ||
+  FrontSeat.Repo.get_by(FrontSeat.Agents.Provider, name: "Ollama", kind: :ollama) ||
     (
       {:ok, provider} =
         Agents.create_provider(%{
@@ -82,7 +82,7 @@ ollama =
 
 seed_agent = fn attrs ->
   existing =
-    CodeLead.Repo.get_by(CodeLead.Agents.Agent, name: attrs.name)
+    FrontSeat.Repo.get_by(FrontSeat.Agents.Agent, name: attrs.name)
 
   if existing do
     existing
@@ -169,26 +169,26 @@ seed_agent.(%{
 IO.puts("Seeded providers: Anthropic ##{anthropic.id}, Ollama ##{ollama.id}; 6 agents")
 
 # Demo project with tasks across the board (skipped if it exists).
-alias CodeLead.Projects
-alias CodeLead.Tasks
+alias FrontSeat.Projects
+alias FrontSeat.Tasks
 
-admin_scope = CodeLead.Accounts.Scope.for_user(admin)
+admin_scope = FrontSeat.Accounts.Scope.for_user(admin)
 
 unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   {:ok, project} = Projects.create_project(admin_scope, %{name: "Demo Product"})
 
   # A local git origin so the whole repo flow (worktree → commit →
   # push → compare) works offline. Lives under the workspace root.
-  workspace = Application.fetch_env!(:code_lead, :workspace_root)
+  workspace = Application.fetch_env!(:front_seat, :workspace_root)
   origin_path = Path.join([workspace, "demo", "demo-site.git"])
 
   unless File.dir?(origin_path) do
     seed_path = Path.join([workspace, "demo", "demo-site-seed"])
     File.mkdir_p!(origin_path)
-    identity = ["-c", "user.name=CodeLead", "-c", "user.email=codelead@localhost"]
+    identity = ["-c", "user.name=FrontSeat", "-c", "user.email=frontseat@localhost"]
     {_, 0} = System.cmd("git", ["init", "--bare", "--initial-branch=main", origin_path])
     {_, 0} = System.cmd("git", ["init", "--initial-branch=main", seed_path])
-    File.write!(Path.join(seed_path, "README.md"), "# Demo Site\n\nSeeded by CodeLead.\n")
+    File.write!(Path.join(seed_path, "README.md"), "# Demo Site\n\nSeeded by FrontSeat.\n")
     File.write!(Path.join(seed_path, "index.html"), "<html><body><h1>Demo</h1></body></html>\n")
     {_, 0} = System.cmd("git", ["-C", seed_path, "add", "-A"])
     {_, 0} = System.cmd("git", ["-C", seed_path] ++ identity ++ ["commit", "-m", "initial"])
@@ -203,11 +203,11 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       default_branch: "main"
     })
 
-  judy = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Judy (Frontend Coder)")
-  auditor = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Security Auditor")
-  copywriter = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
+  judy = FrontSeat.Repo.get_by!(FrontSeat.Agents.Agent, name: "Judy (Frontend Coder)")
+  auditor = FrontSeat.Repo.get_by!(FrontSeat.Agents.Agent, name: "Security Auditor")
+  copywriter = FrontSeat.Repo.get_by!(FrontSeat.Agents.Agent, name: "Copywriter")
 
-  :ok = CodeLead.Agents.set_default_reviewers(project.id, :code, [auditor.id])
+  :ok = FrontSeat.Agents.set_default_reviewers(project.id, :code, [auditor.id])
 
   {:ok, planning} =
     Tasks.create_task(project.id, %{
@@ -233,12 +233,12 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   # state renders in the UI without running real agents. Real workflows
   # never mutate tasks this way.
 
-  alias CodeLead.AgentFeed
-  alias CodeLead.Costs
-  alias CodeLead.Findings.Finding
-  alias CodeLead.Planning.PlanningMessage
-  alias CodeLead.Repo
-  alias CodeLead.Reviews.Review
+  alias FrontSeat.AgentFeed
+  alias FrontSeat.Costs
+  alias FrontSeat.Findings.Finding
+  alias FrontSeat.Planning.PlanningMessage
+  alias FrontSeat.Repo
+  alias FrontSeat.Reviews.Review
 
   fabricate = fn attrs, extra ->
     {:ok, task} = Tasks.create_task(project.id, attrs)
@@ -340,35 +340,35 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     %{kind: :message, text: "Reading the worktree teardown path before I touch the lock."},
     %{
       kind: :tool_call,
-      text: "Read lib/code_lead/git.ex",
+      text: "Read lib/front_seat/git.ex",
       external_id: "tc-1",
       data: %{
         "status" => "completed",
         "tool_kind" => "read",
-        "locations" => ["lib/code_lead/git.ex"]
+        "locations" => ["lib/front_seat/git.ex"]
       }
     },
     %{
       kind: :tool_call,
-      text: "Read lib/code_lead/workspace.ex",
+      text: "Read lib/front_seat/workspace.ex",
       external_id: "tc-2",
       data: %{"status" => "completed", "tool_kind" => "read"}
     },
     %{
       kind: :tool_call,
-      text: "Write lib/code_lead/workspace.ex",
+      text: "Write lib/front_seat/workspace.ex",
       external_id: "tc-3",
       data: %{"status" => "completed", "tool_kind" => "edit"}
     },
     %{
       kind: :tool_call,
-      text: "mix test test/code_lead/workspace_test.exs",
+      text: "mix test test/front_seat/workspace_test.exs",
       external_id: "tc-4",
       data: %{
         "status" => "completed",
         "tool_kind" => "execute",
         "input" => %{
-          "command" => "mix test test/code_lead/workspace_test.exs",
+          "command" => "mix test test/front_seat/workspace_test.exs",
           "description" => "Run the workspace tests"
         }
       }
@@ -453,7 +453,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     me — see the findings.
 
     ```json
-    {"verdict": "concerns", "findings": [{"title": "Cap the retry backoff in schedule_retry/1", "severity": "high", "body": "A stuck tree retries forever; add a max attempts or ceiling.", "paths": ["lib/code_lead/workspace.ex"]}, {"title": "Log the abort reason in acquire_lock/2 retries", "severity": "low", "body": "Retries swallow the abort reason, which makes stuck locks hard to debug.", "paths": ["lib/code_lead/workspace.ex:88"]}], "prior": []}
+    {"verdict": "concerns", "findings": [{"title": "Cap the retry backoff in schedule_retry/1", "severity": "high", "body": "A stuck tree retries forever; add a max attempts or ceiling.", "paths": ["lib/front_seat/workspace.ex"]}, {"title": "Log the abort reason in acquire_lock/2 retries", "severity": "low", "body": "Retries swallow the abort reason, which makes stuck locks hard to debug.", "paths": ["lib/front_seat/workspace.ex:88"]}], "prior": []}
     ```
     """
   })
@@ -467,7 +467,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     severity: :high,
     title: "Cap the retry backoff in schedule_retry/1",
     body: "A stuck tree retries forever; add a max attempts or ceiling.",
-    paths: ["lib/code_lead/workspace.ex"],
+    paths: ["lib/front_seat/workspace.ex"],
     observed: :open
   })
 
@@ -480,13 +480,13 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     severity: :low,
     title: "Log the abort reason in acquire_lock/2 retries",
     body: "Retries swallow the abort reason, which makes stuck locks hard to debug.",
-    paths: ["lib/code_lead/workspace.ex:88"],
+    paths: ["lib/front_seat/workspace.ex:88"],
     observed: :open
   })
 
   # Planning column: a task whose repo survey already reported findings —
   # one addressed (feeds the Decisions block), one dismissed, one open.
-  surveyor = CodeLead.Repo.get_by!(CodeLead.Agents.Agent, name: "Survey (Repo-aware Planner)")
+  surveyor = FrontSeat.Repo.get_by!(FrontSeat.Agents.Agent, name: "Survey (Repo-aware Planner)")
 
   {:ok, surveyed} =
     Tasks.create_task(project.id, %{
@@ -499,13 +499,13 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
   survey_step = Tasks.record_step(surveyed.id, :plan, :agent, surveyor.name, "repo survey: ok")
 
   survey_report = """
-  Cost rollups live in `lib/code_lead/costs.ex` (nightly Oban job, one
+  Cost rollups live in `lib/front_seat/costs.ex` (nightly Oban job, one
   row per day and provider). There is no export path and no controller
   that streams a download yet; the dashboard reads the rollups through
   `Costs.project_spend_month/1`.
 
   ```json
-  {"findings": [{"title": "Decide the CSV column set and date range", "severity": "high", "body": "The rollup table carries more than the dashboard shows; the spec has to pick columns.", "paths": ["lib/code_lead/costs.ex"]}, {"title": "Choose streaming vs. one-shot download", "severity": "medium", "body": "A year of rollups is small; a plain controller response is probably enough.", "paths": []}, {"title": "Filename convention for the download", "severity": "low", "body": "Pick something stable for spreadsheets, e.g. costs-<project>-<month>.csv.", "paths": []}], "prior": []}
+  {"findings": [{"title": "Decide the CSV column set and date range", "severity": "high", "body": "The rollup table carries more than the dashboard shows; the spec has to pick columns.", "paths": ["lib/front_seat/costs.ex"]}, {"title": "Choose streaming vs. one-shot download", "severity": "medium", "body": "A year of rollups is small; a plain controller response is probably enough.", "paths": []}, {"title": "Filename convention for the download", "severity": "low", "body": "Pick something stable for spreadsheets, e.g. costs-<project>-<month>.csv.", "paths": []}], "prior": []}
   ```
   """
 
@@ -537,7 +537,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       :high,
       "Decide the CSV column set and date range",
       "The rollup table carries more than the dashboard shows; the spec has to pick columns.",
-      ["lib/code_lead/costs.ex"]
+      ["lib/front_seat/costs.ex"]
     )
 
   streaming_finding =
@@ -603,7 +603,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       },
       state: :done,
       run_state: :idle,
-      branch_name: "codelead/rate-limit",
+      branch_name: "frontseat/rate-limit",
       pr_url: "https://github.com/example/demo-site/pull/42",
       pr_url_kind: :pull_request,
       finalize_mode: :pull_request,
@@ -621,7 +621,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
     :commit,
     :system,
     "finalizer",
-    "pushed codelead/rate-limit · compare on origin"
+    "pushed frontseat/rate-limit · compare on origin"
   )
 
   Tasks.record_step(done.id, :transition, :human, "human", "approved — Done")
@@ -738,7 +738,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       },
       state: :review,
       run_state: :idle,
-      branch_name: "codelead/dark-mode-settings"
+      branch_name: "frontseat/dark-mode-settings"
     )
 
   fake_run.(finalize_failed, judy, 233_000, 198, 300, 812_000)
@@ -777,7 +777,7 @@ unless Enum.any?(Projects.list_projects(), &(&1.name == "Demo Product")) do
       },
       state: :review,
       run_state: :idle,
-      branch_name: "codelead/settings-audit-log"
+      branch_name: "frontseat/settings-audit-log"
     )
 
   fake_run.(interrupted, judy, 176_400, 152, 200, 655_000)
@@ -831,16 +831,16 @@ end
 # without findings, and a review cycle that demos the degradation paths
 # (a verdict-only reply and a failed reviewer). Skipped if it exists.
 unless Enum.any?(Projects.list_projects(), &(&1.name == "Marketing Site")) do
-  alias CodeLead.Costs
-  alias CodeLead.Repo
-  alias CodeLead.Reviews.Review
+  alias FrontSeat.Costs
+  alias FrontSeat.Repo
+  alias FrontSeat.Reviews.Review
 
   {:ok, marketing} = Projects.create_project(admin_scope, %{name: "Marketing Site"})
 
-  copywriter = Repo.get_by!(CodeLead.Agents.Agent, name: "Copywriter")
-  style = Repo.get_by!(CodeLead.Agents.Agent, name: "Style Editor")
+  copywriter = Repo.get_by!(FrontSeat.Agents.Agent, name: "Copywriter")
+  style = Repo.get_by!(FrontSeat.Agents.Agent, name: "Style Editor")
 
-  :ok = CodeLead.Agents.set_default_reviewers(marketing.id, :content, [style.id])
+  :ok = FrontSeat.Agents.set_default_reviewers(marketing.id, :content, [style.id])
 
   fabricate = fn attrs, extra ->
     {:ok, task} = Tasks.create_task(marketing.id, attrs)

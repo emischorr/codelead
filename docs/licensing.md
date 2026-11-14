@@ -1,9 +1,9 @@
 # Licensing (last updated: 2026-08-15)
 
-CodeLead is [Elastic License 2.0](../LICENSE.txt). ELv2 grants broad use with
-two limitations that matter here: you may not offer CodeLead to third parties
+FrontSeat is [Elastic License 2.0](../LICENSE.txt). ELv2 grants broad use with
+two limitations that matter here: you may not offer FrontSeat to third parties
 as a hosted or managed service, and you may not circumvent the license key
-functionality. This note describes that key functionality — `CodeLead.License`.
+functionality. This note describes that key functionality — `FrontSeat.License`.
 
 **Almost everything is free.** A community instance — one with no `LICENSE_KEY`
 at all — runs the board, the runtime, the agents, the reviews and the whole
@@ -22,14 +22,14 @@ through the app.
 
 | Module | Role |
 |---|---|
-| `CodeLead.License` | The seam: `@gated_features`, tier baselines, the policy, the boot loader |
-| `CodeLead.License.Entitlements` | The resolved grant — tier, org, features, limits, expiry |
-| `CodeLead.License.Source` | Behaviour: license material in, entitlements out |
-| `CodeLead.License.Source.SignedKey` | The one implementation — offline Ed25519 |
+| `FrontSeat.License` | The seam: `@gated_features`, tier baselines, the policy, the boot loader |
+| `FrontSeat.License.Entitlements` | The resolved grant — tier, org, features, limits, expiry |
+| `FrontSeat.License.Source` | Behaviour: license material in, entitlements out |
+| `FrontSeat.License.Source.SignedKey` | The one implementation — offline Ed25519 |
 
 Entitlements are **instance-scoped**, matching the singleton `organization`:
 one deployment is one org, so a grant governs the whole instance. They are
-resolved once at boot in `CodeLead.Application.start/2` and cached in
+resolved once at boot in `FrontSeat.Application.start/2` and cached in
 `:persistent_term`, so reads are a term lookup with no GenServer in the path.
 
 ## The key
@@ -60,7 +60,7 @@ depend on key order and whitespace.
 
 ## Tiers are a baseline plus per-key extras
 
-A grant is not community-versus-everything. `CodeLead.License.tier_baseline/1`
+A grant is not community-versus-everything. `FrontSeat.License.tier_baseline/1`
 maps a tier to what it grants, and the resolved entitlement is that baseline
 **overlaid with the key's own explicit grants**:
 
@@ -113,9 +113,9 @@ the reason is visible rather than mysterious.
 
 ## How to add a gated feature
 
-1. **Declare it.** Add the atom to `@gated_features` in `lib/code_lead/license.ex`.
+1. **Declare it.** Add the atom to `@gated_features` in `lib/front_seat/license.ex`.
    Until it appears there it is free, and its atom does not exist.
-2. **Check it where it matters.** Call `CodeLead.License.feature_enabled?/1` at
+2. **Check it where it matters.** Call `FrontSeat.License.feature_enabled?/1` at
    the call site **and** in the authoritative server-side action. Hiding a link
    is cosmetic; the `handle_event` / controller check is what actually gates,
    and it is what gives ELv2's key clause something to protect.
@@ -127,13 +127,13 @@ Call sites do not change when a feature later moves between tiers — only
 
 ```elixir
 # cosmetic
-<.link :if={CodeLead.License.feature_enabled?(:cost_dashboard)} navigate={~p"/costs"}>
+<.link :if={FrontSeat.License.feature_enabled?(:cost_dashboard)} navigate={~p"/costs"}>
   Cost dashboard
 </.link>
 
 # authoritative
 def handle_event("open_cost_dashboard", _params, socket) do
-  if CodeLead.License.feature_enabled?(:cost_dashboard) do
+  if FrontSeat.License.feature_enabled?(:cost_dashboard) do
     {:noreply, push_navigate(socket, to: ~p"/costs")}
   else
     {:noreply, put_flash(socket, :error, "Requires a commercial license")}
@@ -147,13 +147,13 @@ end
 it is worth reading as the pattern for the next one. It is checked in three
 places, in descending order of authority:
 
-1. **The start guard.** `CodeLead.Tasks`'s private `check_execution_env/1` is a
+1. **The start guard.** `FrontSeat.Tasks`'s private `check_execution_env/1` is a
    single chokepoint already reached by both `startable/2` (which the board and
    task page use to enable the Start button) and `check_stage_entry(task,
    :execute)` (which every transition into an execute stage passes through). One
    clause therefore covers Planning→Running *and* the Review→Running re-run
    edge. Unlicensed, it returns `{:error, :unlicensed_execution_env}`, which
-   `CodeLeadWeb.FlashMessages.transition_error/1` renders both as the flash and
+   `FrontSeatWeb.FlashMessages.transition_error/1` renders both as the flash and
    as the disabled Start button's hint.
 2. **The changeset.** `Tasks.create_task/2` and the Planning branch of
    `Tasks.update_task/2` refuse to *store* `execution_env: :container`, which
@@ -177,32 +177,32 @@ has — visible, editable, refusing to start with a message that says why.
 
 ## Limits
 
-`CodeLead.License.limit/2` takes the caller's own default, so an ungated call
+`FrontSeat.License.limit/2` takes the caller's own default, so an ungated call
 site keeps its current behaviour with no coupling to this module.
 
-The worked example, **not built**: `CodeLead.Scheduler.Gates.CapacityGate`
-reads `Application.fetch_env!(:code_lead, :max_concurrent_runs)`. Were a tier
+The worked example, **not built**: `FrontSeat.Scheduler.Gates.CapacityGate`
+reads `Application.fetch_env!(:front_seat, :max_concurrent_runs)`. Were a tier
 to raise that cap, the change is one line —
-`CodeLead.License.limit(:max_concurrent_runs, org_default)` — with no scheduler
+`FrontSeat.License.limit(:max_concurrent_runs, org_default)` — with no scheduler
 logic touched. The concurrency cap is not a licensed feature today.
 
 ## Minting (vendor side)
 
-`mix code_lead.license.mint` signs a payload with the private half of the
+`mix front_seat.license.mint` signs a payload with the private half of the
 instance signing pair, supplied base64-encoded in `LICENSE_SIGNING_KEY`. The
 private key is not in this repo and must not enter it or CI.
 
 ```bash
-LICENSE_SIGNING_KEY=… mix code_lead.license.mint \
+LICENSE_SIGNING_KEY=… mix front_seat.license.mint \
   --org "Some Corp" --tier business --expires 2027-08-13
 
-LICENSE_SIGNING_KEY=… mix code_lead.license.mint \
+LICENSE_SIGNING_KEY=… mix front_seat.license.mint \
   --org "Custom Deal" --tier pro \
   --features container_execution_env --limits max_concurrent_runs=50
 
 # The maintainer's own instance — no --features needed, the baseline
 # carries the whole gated set and keeps carrying it as it grows.
-LICENSE_SIGNING_KEY=… mix code_lead.license.mint \
+LICENSE_SIGNING_KEY=… mix front_seat.license.mint \
   --org "Enrico Mischorr" --tier owner
 ```
 
@@ -234,7 +234,7 @@ code path.
 
 Because there is no config switch, the suite grants itself entitlements the same
 way production does — by writing them. `test/test_helper.exs` installs an
-`:owner` grant once, via `CodeLead.LicenseHelpers.grant_owner!/0`, so that the
+`:owner` grant once, via `FrontSeat.LicenseHelpers.grant_owner!/0`, so that the
 ordinary container tests exercise the real path rather than being refused
 everywhere. A test that asserts the *gate* calls `grant_community!/0` in its own
 `setup` and restores the owner grant on exit; because `:persistent_term` is
@@ -250,11 +250,11 @@ weakened the policy would be a bypass rather than a feature. Mint yourself an
 `owner` key and put it in `.envrc`:
 
 ```bash
-export LICENSE_KEY=$(LICENSE_SIGNING_KEY=… mix code_lead.license.mint \
+export LICENSE_KEY=$(LICENSE_SIGNING_KEY=… mix front_seat.license.mint \
   --org "Your Name" --tier owner)
 ```
 
 Boot then logs `License: owner (Your Name)`.
 
-`test/code_lead/license_test.exs` is `async: false` because `:persistent_term`
+`test/front_seat/license_test.exs` is `async: false` because `:persistent_term`
 is VM-global.

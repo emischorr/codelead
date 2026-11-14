@@ -1,4 +1,4 @@
-defmodule CodeLead.MailHelpers do
+defmodule FrontSeat.MailHelpers do
   @moduledoc """
   Flips the instance-wide mail switch for tests.
 
@@ -17,9 +17,9 @@ defmodule CodeLead.MailHelpers do
   """
   @spec disable_mail!() :: :ok
   def disable_mail! do
-    previous = Application.get_env(:code_lead, :mail_enabled)
-    Application.put_env(:code_lead, :mail_enabled, false)
-    ExUnit.Callbacks.on_exit(fn -> Application.put_env(:code_lead, :mail_enabled, previous) end)
+    previous = Application.get_env(:front_seat, :mail_enabled)
+    Application.put_env(:front_seat, :mail_enabled, false)
+    ExUnit.Callbacks.on_exit(fn -> Application.put_env(:front_seat, :mail_enabled, previous) end)
     :ok
   end
 end

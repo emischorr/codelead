@@ -4,7 +4,7 @@
 @import "tailwindcss" source(none);
 @source "../css";
 @source "../js";
-@source "../../lib/code_lead_web";
+@source "../../lib/front_seat_web";
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
@@ -165,7 +165,7 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-/* Markdown prose (CodeLeadWeb.Markdown output). Preflight strips list and
+/* Markdown prose (FrontSeatWeb.Markdown output). Preflight strips list and
    heading styles and `--color-*: initial` wipes the palette the typography
    plugin builds on, so the elements are restored by hand on the tokens.
    Sizing is relative (em) so the container decides the base size. */

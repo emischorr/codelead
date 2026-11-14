@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateOrganizations do
+defmodule FrontSeat.Repo.Migrations.CreateOrganizations do
   use Ecto.Migration
 
   def change do

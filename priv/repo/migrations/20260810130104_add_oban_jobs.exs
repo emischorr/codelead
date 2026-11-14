@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddObanJobs do
+defmodule FrontSeat.Repo.Migrations.AddObanJobs do
   use Ecto.Migration
 
   def up, do: Oban.Migration.up(version: 14)

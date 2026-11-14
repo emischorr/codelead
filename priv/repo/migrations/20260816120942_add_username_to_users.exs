@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddUsernameToUsers do
+defmodule FrontSeat.Repo.Migrations.AddUsernameToUsers do
   use Ecto.Migration
 
   # A window-function de-dup only guards collisions *within* one candidate

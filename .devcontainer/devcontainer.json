@@ -1,6 +1,6 @@
-// CodeLead's own development environment — used two ways:
+// FrontSeat's own development environment — used two ways:
 //  * a human: VS Code "Reopen in Container" (or any devcontainer client)
-//  * CodeLead itself: point an instance at this repo, enable Devcontainer
+//  * FrontSeat itself: point an instance at this repo, enable Devcontainer
 //    execution, and tasks run in here (preview: any free port, e.g. 4001,
 //    command `PORT="$PREVIEW_PORT" mix phx.server`).
 // Running the full app *inside* this container with container execution
@@ -11,14 +11,14 @@
 // `mix phx.server` need nothing extra — docker-dependent tests are
 // excluded by default.
 {
-  "name": "CodeLead",
+  "name": "FrontSeat",
   "dockerComposeFile": "compose.yml",
   "service": "app",
   "workspaceFolder": "/workspace",
   "remoteUser": "dev",
   "forwardPorts": [4000],
   "portsAttributes": {
-    "4000": { "label": "CodeLead (mix phx.server)" }
+    "4000": { "label": "FrontSeat (mix phx.server)" }
   },
   // deps + create/migrate/seed the dev DB + tailwind/esbuild standalone
   // binaries (no Node). Seeds the admin login, so a preview is usable

@@ -1,6 +1,6 @@
 # Cost, token & duration tracking (last updated: 2026-08-12)
 
-Implemented in `CodeLead.Costs`.
+Implemented in `FrontSeat.Costs`.
 
 - Every run (executor **and** each reviewer) is recorded in
   `agent_runs` via `record_run/1` — the token split, cost_cents,
@@ -69,7 +69,7 @@ ACP is the primary source and reports both halves of the picture:
   still lands and only the token split is missing.
 - **Money** arrives mid-run on `sessionUpdate: "usage_update"`
   notifications, as `cost.amount` in `cost.currency` — the harness's own
-  cumulative total for the session. One CodeLead run is one prompt turn
+  cumulative total for the session. One FrontSeat run is one prompt turn
   in a freshly spawned subprocess, so that cumulative figure is the
   run's cost. The same notification carries `used`/`size`, which are
   context-window occupancy, **not** tokens billed.
@@ -89,7 +89,7 @@ its money should be read: `:anthropic_subscription` → `:estimated` (the
 harness reports an API-equivalent figure, but the seat is what's
 actually billed), `:ollama` → `:free`, everything else → `:exact`. It
 accepts a list for work spanning providers, where an estimate anywhere
-makes the whole figure an estimate. `CodeLeadWeb.Format.cost/2` renders
+makes the whole figure an estimate. `FrontSeatWeb.Format.cost/2` renders
 the three modes as `$0.42`, `~$0.42 est`, and `—`.
 
 **Runs that never finish.** A cancel, a harness crash, or a protocol

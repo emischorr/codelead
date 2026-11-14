@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddDefaultProjectBudgetsToOrganizations do
+defmodule FrontSeat.Repo.Migrations.AddDefaultProjectBudgetsToOrganizations do
   use Ecto.Migration
 
   # Copied onto each new project at creation; nil = no limit. Changing the

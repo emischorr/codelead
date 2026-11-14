@@ -1,12 +1,12 @@
-defmodule CodeLead.ProjectsFixtures do
+defmodule FrontSeat.ProjectsFixtures do
   @moduledoc """
   Test fixtures for the Projects context.
   """
 
-  import CodeLead.AccountsFixtures
+  import FrontSeat.AccountsFixtures
 
-  alias CodeLead.Projects
-  alias CodeLead.Projects.Project
+  alias FrontSeat.Projects
+  alias FrontSeat.Projects.Project
 
   @doc """
   Inserts a project directly — no creator, no membership rows, no default
@@ -20,7 +20,7 @@ defmodule CodeLead.ProjectsFixtures do
 
     %Project{org_id: organization.id}
     |> Project.changeset(attrs)
-    |> CodeLead.Repo.insert!()
+    |> FrontSeat.Repo.insert!()
   end
 
   @doc """
@@ -28,7 +28,7 @@ defmodule CodeLead.ProjectsFixtures do
   scheduler/cost tests don't care about.
   """
   def set_project_budget!(project, attrs) do
-    project |> Ecto.Changeset.change(attrs) |> CodeLead.Repo.update!()
+    project |> Ecto.Changeset.change(attrs) |> FrontSeat.Repo.update!()
   end
 
   def repository_fixture(project_id, attrs \\ %{}) do

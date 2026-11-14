@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddPrUrlToTasks do
+defmodule FrontSeat.Repo.Migrations.AddPrUrlToTasks do
   use Ecto.Migration
 
   def change do

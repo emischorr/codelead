@@ -1,7 +1,7 @@
 # Planning surface (last updated: 2026-08-31, surveys registered as live runs)
 
-Implemented in `CodeLead.Planning`, rendered by the Task tab's Planning
-agent card (`CodeLeadWeb.TaskLive.TaskTab`). A one-shot agent
+Implemented in `FrontSeat.Planning`, rendered by the Task tab's Planning
+agent card (`FrontSeatWeb.TaskLive.TaskTab`). A one-shot agent
 refinement helps the human sharpen a task's description and spec before
 anything runs. Nothing here moves the card and nothing here edits the
 task — the output crystallizes only when the human writes it into the
@@ -41,7 +41,7 @@ keyed on `:execute`, so having only a planner does not let a task start.
 
 A reviewer reads the *diff* and critiques the *output*. A surveyor reads
 the *existing codebase* and critiques the *spec*. Same
-`CodeLead.AdvisoryRun`, same read-only posture, same advisory status —
+`FrontSeat.AdvisoryRun`, same read-only posture, same advisory status —
 see [`reviews.md`](reviews.md). Only two things differ:
 
 - **When it runs.** A human pulls it from the Planning workbench. It is
@@ -85,13 +85,13 @@ Invariants, each structural rather than conventional:
 - **The execution session is untouched** — the run is handed
   `%{task | acp_session_id: nil}`, because `AgentDriver.Acp` resumes
   `task.acp_session_id` via `session/load` when it is set.
-- `<root>/surveys/` is dropped by `mix code_lead.workspace.clean`
+- `<root>/surveys/` is dropped by `mix front_seat.workspace.clean`
   (wired into `mix ecto.reset`), like `worktrees/` and `tasks/`.
 
 ## One survey per task, and who knows about it
 
 The spawned run's **first act** — before any worktree work — is to claim
-the task's `{task_id, :plan}` slot in `CodeLead.Runtime.LiveRuns` (see
+the task's `{task_id, :plan}` slot in `FrontSeat.Runtime.LiveRuns` (see
 [`architecture.md`](architecture.md)); the key's uniqueness *is* the
 one-planner rule, and `start_refinement/3` answers a second click with
 an honest `{:error, :already_running}` (the child reports its claim back
@@ -114,7 +114,7 @@ and the registry honestly shows nothing running.
 While the planner is live the card is **frozen**: Planning → Running
 (start and schedule) and delete refuse with
 `{:error, :planning_agent_running}` — the guard lives in
-`CodeLead.Runtime` (`advance/3` for edges leaving a `:plan` stage,
+`FrontSeat.Runtime` (`advance/3` for edges leaving a `:plan` stage,
 `Runtime.delete_task/2` for delete), because knowing about live
 processes is the runtime layer's job. The survey's output must land on
 the task the human asked about; nothing forbids the move technically.
@@ -123,14 +123,14 @@ the task the human asked about; nothing forbids the move technically.
 
 A survey report is more than prose: its output contract is a markdown
 narrative followed by exactly one fenced ```json block, which
-`CodeLead.Findings.Report` parses into **findings** — persisted,
-severity-labelled rows (`findings` table, `CodeLead.Findings` context),
+`FrontSeat.Findings.Report` parses into **findings** — persisted,
+severity-labelled rows (`findings` table, `FrontSeat.Findings` context),
 one per item, keyed to the task and the producing `:plan` step. The raw
 turn stays on `planning_messages` exactly as before; findings are parsed
 *from* it, not instead of it.
 
 Parsing is deliberately lenient, because the contract is a text
-convention rather than a provider feature — CodeLead speaks ACP to
+convention rather than a provider feature — FrontSeat speaks ACP to
 harnesses whose structured-output support differs, so the parser, not
 the protocol, absorbs formatting drift. Extraction runs three tiers and
 gives up only when none yields a report-shaped object:
@@ -230,7 +230,7 @@ counter is derived from the refinement `:plan` steps, never stored; a
 step's stored summary stays the technical `repo survey: <status>` /
 `task refinement: <status>` (they are that counter's match keys) and is
 rendered as "Refinement completed/failed" by
-`CodeLeadWeb.Format.step_summary/1`.
+`FrontSeatWeb.Format.step_summary/1`.
 
 ## Messages
 
@@ -254,7 +254,7 @@ type, no new machinery.
 
 **Known gap.** An advisory run's escalation surfaces but is not
 answerable. The *lookup* half is closed: advisory runs now register in
-`CodeLead.Runtime.Registry` under run-kind keys, so the process is
+`FrontSeat.Runtime.Registry` under run-kind keys, so the process is
 findable. What remains is the *routing* half — the Allow/Deny buttons
 still go through `Runtime.answer_permission/4` →
 `TaskRunner.answer_permission/3`, which addresses the executor's

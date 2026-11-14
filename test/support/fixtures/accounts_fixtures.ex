@@ -1,18 +1,18 @@
-defmodule CodeLead.AccountsFixtures do
+defmodule FrontSeat.AccountsFixtures do
   @moduledoc """
   Test fixtures for the Accounts context.
   """
 
   import Ecto.Query
 
-  alias CodeLead.Accounts
-  alias CodeLead.Accounts.Scope
+  alias FrontSeat.Accounts
+  alias FrontSeat.Accounts.Scope
 
   @doc """
   Ensures the organization singleton exists and returns it.
 
   Defaults to a *set up* instance so tests reach the app instead of being
-  redirected to the setup wizard by `CodeLeadWeb.SetupGate`.
+  redirected to the setup wizard by `FrontSeatWeb.SetupGate`.
   """
   def organization_fixture(attrs \\ %{}) do
     {:ok, organization} =
@@ -55,7 +55,7 @@ defmodule CodeLead.AccountsFixtures do
     {:ok, {user, _expired_tokens}} =
       Accounts.login_user_by_magic_link(token)
 
-    if role, do: CodeLead.Repo.update!(Ecto.Changeset.change(user, role: role)), else: user
+    if role, do: FrontSeat.Repo.update!(Ecto.Changeset.change(user, role: role)), else: user
   end
 
   def admin_fixture(attrs \\ %{}), do: user_fixture(Map.put(Map.new(attrs), :role, :admin))
@@ -75,7 +75,7 @@ defmodule CodeLead.AccountsFixtures do
   existing scope does not see new rows.
   """
   def membership_fixture(project, user, role \\ :maintainer) do
-    CodeLead.Repo.insert!(%CodeLead.Accounts.ProjectMembership{
+    FrontSeat.Repo.insert!(%FrontSeat.Accounts.ProjectMembership{
       project_id: project.id,
       user_id: user.id,
       role: role
@@ -96,7 +96,7 @@ defmodule CodeLead.AccountsFixtures do
   end
 
   def override_token_authenticated_at(token, authenticated_at) when is_binary(token) do
-    CodeLead.Repo.update_all(
+    FrontSeat.Repo.update_all(
       from(t in Accounts.UserToken,
         where: t.token == ^token
       ),
@@ -106,20 +106,20 @@ defmodule CodeLead.AccountsFixtures do
 
   def generate_user_magic_link_token(user) do
     {encoded_token, user_token} = Accounts.UserToken.build_email_token(user, "login")
-    CodeLead.Repo.insert!(user_token)
+    FrontSeat.Repo.insert!(user_token)
     {encoded_token, user_token.token}
   end
 
   def generate_user_invite_token(user) do
     {encoded_token, user_token} = Accounts.UserToken.build_email_token(user, "invite")
-    CodeLead.Repo.insert!(user_token)
+    FrontSeat.Repo.insert!(user_token)
     {encoded_token, user_token.token}
   end
 
   def offset_user_token(token, amount_to_add, unit) do
     dt = DateTime.add(DateTime.utc_now(:second), amount_to_add, unit)
 
-    CodeLead.Repo.update_all(
+    FrontSeat.Repo.update_all(
       from(ut in Accounts.UserToken, where: ut.token == ^token),
       set: [inserted_at: dt, authenticated_at: dt]
     )

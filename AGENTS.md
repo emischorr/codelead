@@ -4,7 +4,7 @@ This is a web application written using the Phoenix web framework.
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
-- In a CodeLead container task the devcontainer has already provisioned itself — deps are prewarmed into the image at `$MIX_DEPS_PATH` (`/opt/deps`, not `./deps`), `_build` is `$MIX_BUILD_ROOT` (`/opt/build`), and the lifecycle hooks have run `mix setup` and `mix ecto.migrate`. Don't start a task with `mix setup` or `mix deps.get`; run them only after changing `mix.exs`/`mix.lock`
+- In a FrontSeat container task the devcontainer has already provisioned itself — deps are prewarmed into the image at `$MIX_DEPS_PATH` (`/opt/deps`, not `./deps`), `_build` is `$MIX_BUILD_ROOT` (`/opt/build`), and the lifecycle hooks have run `mix setup` and `mix ecto.migrate`. Don't start a task with `mix setup` or `mix deps.get`; run them only after changing `mix.exs`/`mix.lock`
 
 ### Phoenix v1.8 guidelines
 
@@ -71,7 +71,7 @@ LiveViews that require login should **always be placed inside the __existing__ `
       pipe_through [:browser, :require_authenticated_user]
 
       live_session :require_authenticated_user,
-        on_mount: [{CodeLeadWeb.UserAuth, :require_authenticated}] do
+        on_mount: [{FrontSeatWeb.UserAuth, :require_authenticated}] do
         # phx.gen.auth generated routes
         live "/users/settings", UserLive.Settings, :edit
         live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
@@ -96,7 +96,7 @@ LiveViews that can work with or without authentication, **always use the __exist
       pipe_through [:browser]
 
       live_session :current_user,
-        on_mount: [{CodeLeadWeb.UserAuth, :mount_current_scope}] do
+        on_mount: [{FrontSeatWeb.UserAuth, :mount_current_scope}] do
         # our own routes that work with or without authentication
         live "/", PublicLive
       end

@@ -1,9 +1,9 @@
-defmodule CodeLead.MixProject do
+defmodule FrontSeat.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :code_lead,
+      app: :front_seat,
       version: "0.1.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -21,7 +21,7 @@ defmodule CodeLead.MixProject do
   # Type `mix help compile.app` for more information.
   def application do
     [
-      mod: {CodeLead.Application, []},
+      mod: {FrontSeat.Application, []},
       extra_applications: [:logger, :runtime_tools]
     ]
   end
@@ -91,13 +91,13 @@ defmodule CodeLead.MixProject do
     [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
-      "ecto.reset": ["code_lead.workspace.clean", "ecto.drop", "ecto.setup"],
+      "ecto.reset": ["front_seat.workspace.clean", "ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind code_lead", "esbuild code_lead"],
+      "assets.build": ["compile", "tailwind front_seat", "esbuild front_seat"],
       "assets.deploy": [
-        "tailwind code_lead --minify",
-        "esbuild code_lead --minify",
+        "tailwind front_seat --minify",
+        "esbuild front_seat --minify",
         "phx.digest"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

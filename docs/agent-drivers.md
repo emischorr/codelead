@@ -1,6 +1,6 @@
 # Agent drivers (last updated: 2026-08-15, preflight/2)
 
-`CodeLead.AgentDriver` is the behaviour every way of running an agent
+`FrontSeat.AgentDriver` is the behaviour every way of running an agent
 implements. Callbacks: `start_run(task, agent, context, prompt)`,
 `send_message(handle, msg)`, `cancel(handle)`.
 
@@ -24,7 +24,7 @@ multi-selects and free-text inputs, so no consumer parses JSON Schema.
 `completion_tokens`, `cached_read_tokens`, `cached_write_tokens`,
 `reasoning_tokens`, `total_tokens` — plus `cost_cents`, which is `nil`
 unless the backend reported money. ACP harnesses generally do, and
-their figure wins: `CodeLead.Costs.with_cost/2` only prices what the
+their figure wins: `FrontSeat.Costs.with_cost/2` only prices what the
 backend left unpriced, and its rate table has no cache rates.
 
 `{:usage, %{cost_cents:, context_used:, context_size:}}` is advisory
@@ -56,7 +56,7 @@ output — needs its own payload budget) and `agent_thought_chunk`
 
 - **`LlmApi`** — one completion call via Req to the agent's provider
   (Anthropic `/v1/messages`, OpenAI chat completions, Ollama
-  `/api/chat`). Runs under `CodeLead.TaskSupervisor`; the whole
+  `/api/chat`). Runs under `FrontSeat.TaskSupervisor`; the whole
   completion arrives as one chunk + result. `send_message/2` is
   unsupported. `complete/4` is exposed for synchronous multi-turn use
   (planning chat). Tests stub the network with `Req.Test` via the
@@ -100,7 +100,7 @@ output — needs its own payload budget) and `agent_thought_chunk`
     Claude Code's adapter puts `AskUserQuestion` in `disallowedTools`
     unless the capability is present, which is why an agent without it
     can only write the question as prose and end its turn. An incoming
-    `elicitation/create` is normalized by `CodeLead.Acp.Elicitation`
+    `elicitation/create` is normalized by `FrontSeat.Acp.Elicitation`
     and surfaced as `{:question, ...}`; the request is left unanswered,
     which holds the prompt turn open with **no timeout** — waiting for
     the human is the point, and cancelling the run is the escape.
@@ -121,7 +121,7 @@ output — needs its own payload budget) and `agent_thought_chunk`
     than author order.
   - **Client capabilities served:** `fs/read_text_file`,
     `fs/write_text_file` (sandbox-checked), `terminal/*` (command runs
-    to completion under `CodeLead.TaskSupervisor`; output is returned
+    to completion under `FrontSeat.TaskSupervisor`; output is returned
     once finished), `elicitation/create` (form mode only — a `url`-mode
     request is declined, as is one whose schema yields no fields).
   - Harness launch commands come from the `:harnesses` config map
@@ -130,8 +130,8 @@ output — needs its own payload budget) and `agent_thought_chunk`
     are injected as env vars (`Agents.provider_env/1`). The Docker image
     bundles the Claude harness — see `docs/configuration.md`.
   - Local subprocesses (harness ports and `terminal/*` commands alike)
-    inherit the server's environment, so `CodeLead.Executor.EnvScrub`
-    strips CodeLead-internal vars (`WORKSPACE_ROOT`, `DATABASE_URL`,
+    inherit the server's environment, so `FrontSeat.Executor.EnvScrub`
+    strips FrontSeat-internal vars (`WORKSPACE_ROOT`, `DATABASE_URL`,
     secrets, container/harness config) before spawning; explicit
     project/provider env always passes through and wins over the scrub
     on a name collision. Container execution is unaffected — sibling
@@ -143,7 +143,7 @@ output — needs its own payload budget) and `agent_thought_chunk`
     client advertised the capability — so the read-only suppression is
     covered without a real harness.
 
-`CodeLead.AgentDriver.impl/1` resolves the module from
+`FrontSeat.AgentDriver.impl/1` resolves the module from
 `agent.driver`.
 
 ## Preflight
@@ -173,5 +173,5 @@ without first cloning a repository.
 `TaskRunner.dispatch_error/1` turns these (and provisioning failures)
 into the sentence the operator reads in the task timeline. For the git
 half it delegates to `Git.remote_failure/4`, which
-`CodeLeadWeb.FlashMessages.finalize_error/1` also uses — so a credential
+`FrontSeatWeb.FlashMessages.finalize_error/1` also uses — so a credential
 refused at clone time and one refused at push time read the same way.

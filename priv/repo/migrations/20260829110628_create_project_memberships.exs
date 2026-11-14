@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.CreateProjectMemberships do
+defmodule FrontSeat.Repo.Migrations.CreateProjectMemberships do
   use Ecto.Migration
 
   # Project-level roles: reporter < member < maintainer. One row per

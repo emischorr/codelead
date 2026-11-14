@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.RemoveReadyFlagFromTasks do
+defmodule FrontSeat.Repo.Migrations.RemoveReadyFlagFromTasks do
   use Ecto.Migration
 
   def change do

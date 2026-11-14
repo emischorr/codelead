@@ -6,7 +6,7 @@
 # means an inherited WORKSPACE_ROOT/TEST_WORKSPACE_ROOT points at a live
 # workspace (this has happened: an agent's `mix test` inside a task
 # worktree wiped a deployed instance's workspace volume).
-workspace_root = Path.expand(Application.fetch_env!(:code_lead, :workspace_root))
+workspace_root = Path.expand(Application.fetch_env!(:front_seat, :workspace_root))
 project_dir = File.cwd!()
 
 unless String.starts_with?(workspace_root, project_dir <> "/") do
@@ -27,11 +27,11 @@ File.rm_rf!(workspace_root)
 # The suite runs as a licensed (:owner) instance, so gated features —
 # container execution today — are exercised by the ordinary tests instead
 # of being refused everywhere. Tests that assert the gate itself install a
-# community grant in their own setup; see `CodeLead.LicenseHelpers`.
-CodeLead.LicenseHelpers.grant_owner!()
+# community grant in their own setup; see `FrontSeat.LicenseHelpers`.
+FrontSeat.LicenseHelpers.grant_owner!()
 
 # :docker tests need a real Docker daemon (`mix test --only docker`);
 # :devcontainer tests additionally need the devcontainer CLI
 # (`mix test --only devcontainer`).
 ExUnit.start(exclude: [:docker, :devcontainer])
-Ecto.Adapters.SQL.Sandbox.mode(CodeLead.Repo, :manual)
+Ecto.Adapters.SQL.Sandbox.mode(FrontSeat.Repo, :manual)

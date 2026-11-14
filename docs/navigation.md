@@ -38,7 +38,7 @@ rule; it is now org-wide (see below) and shown on every page.
 
 ## `@nav`, the single contract
 
-`CodeLeadWeb.NavContext` is an `on_mount` hook on
+`FrontSeatWeb.NavContext` is an `on_mount` hook on
 `live_session :require_authenticated_user` (after `UserAuth`, so
 `@current_scope` exists). It assigns one map that the layout renders
 from — LiveViews never assemble navigation themselves:
@@ -80,7 +80,7 @@ reaches a member's sidebar.
   `{:board_changed, ...}` handler below refreshes them on every write
   anywhere in the organization, alongside `project_stats`. `agent_blocked?`
   is true when at least one task has an agent stuck on a human decision —
-  see `CodeLead.Tasks.Attention.blocks_agent?/1`, the single place that
+  see `FrontSeat.Tasks.Attention.blocks_agent?/1`, the single place that
   rule is defined; it gates the pill's hand icon without splitting the
   count itself.
 - `spend` starts empty. The two pages that own a live project spend push
@@ -109,7 +109,7 @@ reaches a member's sidebar.
   window, not the same number rendered twice.
 - `rate_limit` is **not** project-scoped, so unlike `spend` it is read
   directly by `NavContext.on_mount/4` from
-  `CodeLead.Agents.SubscriptionUsageCache.current/1` rather than pushed in
+  `FrontSeat.Agents.SubscriptionUsageCache.current/1` rather than pushed in
   by a page — it renders identically on every page, including
   `DashboardLive`. The cache polls every configured `:anthropic_subscription`
   provider's rate-limit windows every 3 minutes by reading the
@@ -119,12 +119,12 @@ reaches a member's sidebar.
   Anthropic can change or remove these headers without notice, so a
   failed or missing reading is indistinguishable from "no subscription
   provider configured": `rate_limit` is `nil` and the tile does not
-  render. See `CodeLead.Agents.SubscriptionUsage` and
-  `CodeLead.Agents.SubscriptionUsageCache`. `current/1` answers purely
+  render. See `FrontSeat.Agents.SubscriptionUsage` and
+  `FrontSeat.Agents.SubscriptionUsageCache`. `current/1` answers purely
   from the cache's state — the provider list is resolved during a poll,
   never on the `on_mount` path — so a page mount costs no query and the
   app-wide cache process never touches the repo from a caller's context. Each window's row also shows
-  when it resets, via `CodeLeadWeb.Format.reset_in/1` against
+  when it resets, via `FrontSeatWeb.Format.reset_in/1` against
   `window.resets_at`: a countdown (`"2h 31m"`) inside 24h, a weekday and
   clock time (`"Tue 22:10"`) beyond that — computed at render time from
   the same best-effort reading, so it is only as fresh as the last poll
@@ -303,7 +303,7 @@ and confirmation pages.
 ## Adding a nav item
 
 1. Add it to `sidebar_content/1` in
-   `lib/code_lead_web/components/layouts.ex` — once; all three renderings
+   `lib/front_seat_web/components/layouts.ex` — once; all three renderings
    share it.
 2. Give it a `nav_id(@closable, "nav-<thing>")` id, an icon, and a label in
    its own `<span class="collapsed:hidden">`. The row needs an `aria-label`

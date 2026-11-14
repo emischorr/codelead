@@ -1,4 +1,4 @@
-defmodule CodeLead.Repo.Migrations.AddColorToProjects do
+defmodule FrontSeat.Repo.Migrations.AddColorToProjects do
   use Ecto.Migration
 
   def change do
